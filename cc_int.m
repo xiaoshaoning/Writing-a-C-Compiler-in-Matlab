@@ -30,9 +30,33 @@ fclose(fid);
 
 if ~isempty(return_value) 
     fid_output = fopen(destination_file, 'w+');
-    fprintf(fid_output, '__main:\nmov $%d, ', str2num(return_value));
+    fprintf(fid_output, '\t.file\t\"return_2.c\"\n');
+    fprintf(fid_output, '\t.text\n');
+    fprintf(fid_output, '\t.globl\tmain\n');
+    fprintf(fid_output, '\t.type\tmain, @function\n');
+    fprintf(fid_output, 'main:\n');
+    fprintf(fid_output, '.LFB0:\n');
+    fprintf(fid_output, '\t.cfi_startproc\n');
+    fprintf(fid_output, '\tpushq\t');
+    fprintf(fid_output, '%%rbp');
+    fprintf(fid_output, '\n');
+    fprintf(fid_output, '\t.cfi_def_cfa_offset 16\n');
+    fprintf(fid_output, '\t.cfi_offset 6, -16\n');
+    fprintf(fid_output, '\tmovq\t');
+    fprintf(fid_output, '%%rsp, ');
+    fprintf(fid_output, '%%rbp');
+    fprintf(fid_output, '\n');
+    fprintf(fid_output, '\t.cfi_def_cfa_register 6\n');
+    fprintf(fid_output, '\tmovl\t$%d, ', str2num(return_value));
     fprintf(fid_output, '%s\n', '%eax');
-    fprintf(fid_output, 'ret');
+    fprintf(fid_output, '\tpopq\t');
+    fprintf(fid_output, '%%rbp');
+    fprintf(fid_output, '\n');
+    fprintf(fid_output, '\t.cfi_def_cfa 7, 8\n');
+    fprintf(fid_output, '\tret\n');
+    fprintf(fid_output, '\t.cfi_endproc\n');
+    fprintf(fid_output, '.LFE0:\n');
+    fprintf(fid_output, '\t.size\tmain, .-main\n');
     fclose(fid_output);
 end    
 
