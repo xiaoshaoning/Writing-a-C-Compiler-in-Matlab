@@ -1,7 +1,7 @@
 function cc_int(varargin)
 
 if nargin ~= 2
-   error('USAGE: cc_int return_2.c return_2.asm');  
+   error('USAGE: cc_int return_2.c return_2.s');  
 end
 
 source_file = varargin{1};
