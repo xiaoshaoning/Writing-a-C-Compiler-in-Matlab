@@ -16,6 +16,7 @@ global text ti pc bp sp ax cycle            % VM + text segment
 global symbols symbol_names current_id idmain  % symbol table
 global mem data data_top hp stack_base      % memory segments
 global expr_type basetype index_of_bp       % parser state
+global fidv                                 % syscall fd registry
 global poolsize assembly debug              % configuration
 
 % ---- configuration defaults (xc.c: poolsize = 256 * 1024) ----
@@ -54,6 +55,7 @@ old_text  = 0;      % 0-based slot of the last -s-dumped instruction
 expr_type    = 1;   % INT
 basetype     = 1;
 index_of_bp  = 0;
+fidv         = [];  % OPEN/READ/CLOS registry (double vector; cell appends lose values)
 
 % ---- hidden self-test entries (Phases 1-2): must be checked before the
 % option parser ('--...' starts with '-'). Return nonzero on any failed case. ----
@@ -115,6 +117,8 @@ end
 if idmain == 0 || symbols(idmain, 6) == 0
     fail('main() not defined');
 end
+
+hp = data;   % MALC bump pointer starts after the compiled data
 
 % ---- main-return sentinel (adapts xc.c's stack trick to the two-space
 % model): main's LEV restores pc from frame slot 1; point it at an
@@ -325,8 +329,28 @@ while true
         fprintf('exit(%d)', double(word_load(sp)));
         exit_code = word_load(sp);
         return;
-    elseif op >= 30 && op <= 36   % syscalls — Phase 6
-        fail(sprintf('syscall %d not implemented yet (Phase 6)', op));
+    elseif op >= 30 && op <= 36   % syscalls (OPEN..MCMP); EXIT handled above
+        % The ADJ <n> the parser emits after the opcode doubles as the arg
+        % count (xc.c:1271): pc points at the ADJ; its operand is text(pc+1).
+        % Args were pushed in source order, so sp is at the last arg and
+        % tmp = sp + 8*n is one word past; tmp[-k] = the k-th pushed arg.
+        nargs = text(pc + 1);
+        tmp = sp + 8*nargs;
+        if op == 30        % OPEN: open(path, flags)
+            ax = sys_open(word_load(sp + 8), word_load(sp));
+        elseif op == 31    % READ: read(fd, buf, count)
+            ax = sys_read(word_load(sp + 16), word_load(sp + 8), word_load(sp));
+        elseif op == 32    % CLOS
+            ax = sys_close(word_load(sp));
+        elseif op == 33    % PRTF
+            ax = sys_prtf(tmp, nargs);
+        elseif op == 34    % MALC
+            ax = sys_malc(word_load(sp));
+        elseif op == 35    % MSET: memset(dest, val, count)
+            ax = sys_mset(word_load(sp + 16), word_load(sp + 8), word_load(sp));
+        elseif op == 36    % MCMP: memcmp(s1, s2, count)
+            ax = sys_mcmp(word_load(sp + 16), word_load(sp + 8), word_load(sp));
+        end
     else
         fail(sprintf('unknown instruction:%d', op));
     end
@@ -1604,4 +1628,155 @@ next();
 while token > 0
     global_declaration();
 end
+end
+
+% ---------------------------------------------------------------------------
+% Phase 6: syscalls (port of xc.c eval's OPEN/READ/CLOS/PRTF/MALC/MSET/MCMP)
+% ---------------------------------------------------------------------------
+
+function s = mem_str(addr)
+% mem_str — read a NUL-terminated byte string from mem at 0-based addr.
+global mem
+s = '';
+k = 0;
+while true
+    if addr + k + 1 > numel(mem)
+        fail(sprintf('mem_str: unterminated string at %d', addr));
+    end
+    b = mem(addr + k + 1);
+    if b == 0
+        break;
+    end
+    s = [s, char(b)];
+    k = k + 1;
+end
+end
+
+function ax = sys_open(paddr, flags)
+% OPEN — fopen the NUL-terminated path at paddr. flags: 0=O_RDONLY,
+% 1=O_WRONLY, 2=O_RDWR. Returns a small int fd into the global registry
+% (the C runtime returns a real fd; only our own READ/CLOS consume it).
+global fidv
+path = mem_str(paddr);
+if flags == 1
+    mode = 'w';
+elseif flags == 2
+    mode = 'r+';
+else
+    mode = 'r';
+end
+fid = fopen(path, mode);
+if fid < 0
+    ax = -1;
+else
+    % cell appends lose the value on this runtime (BUG-17) — use a vector
+    fidv = [fidv, fid];
+    ax = numel(fidv) - 1;   % 0-based fd
+end
+end
+
+function ax = sys_read(fd, baddr, cnt)
+% READ — read up to cnt bytes from fd into mem at baddr; returns bytes read.
+% fread with a finite count over-reads past EOF on this runtime (BUG-18,
+% zero-pads the shortfall), so read with inf and trim to cnt.
+global fidv mem
+if fd < 0 || fd >= numel(fidv)
+    ax = -1;
+    return;
+end
+fid = fidv(fd + 1);
+raw = fread(fid, inf, 'uint8');
+n = numel(raw);
+if n > cnt
+    n = cnt;
+end
+if n > 0
+    mem(baddr + 1 : baddr + n) = uint8(raw(1:n));
+end
+ax = n;
+end
+
+function ax = sys_close(fd)
+% CLOS — fclose by registry fd.
+global fidv
+if fd < 0 || fd >= numel(fidv)
+    ax = -1;
+    return;
+end
+fclose(fidv(fd + 1));
+ax = 0;
+end
+
+function ax = sys_prtf(tmp, nargs)
+% PRTF — read the NUL-terminated format string from mem, convert %lld/%llu
+% -> %d/%u (the only format rewrite in the port), pull up to 5 value args
+% from the frame (tmp[-2]..tmp[-6]), sprintf + fprintf. Returns the number
+% of characters printed (printf semantics).
+global mem
+fmt_addr = word_load(tmp - 8);
+fmt = mem_str(fmt_addr);
+fmt2 = strrep(fmt, '%lld', '%d');
+fmt2 = strrep(fmt2, '%llu', '%u');
+nvals = nargs - 1;
+if nvals < 0
+    fail('PRTF: bad frame');
+end
+args = zeros(1, nvals);
+for k = 1:nvals
+    args(k) = double(word_load(tmp - 8*(k+1)));
+end
+% NOTE: sprintf(fmt, array) — broadcasting the value args as one array —
+% crashes this runtime natively; pass each argument separately.
+if nvals == 0
+    out = sprintf(fmt2);
+elseif nvals == 1
+    out = sprintf(fmt2, args(1));
+elseif nvals == 2
+    out = sprintf(fmt2, args(1), args(2));
+elseif nvals == 3
+    out = sprintf(fmt2, args(1), args(2), args(3));
+elseif nvals == 4
+    out = sprintf(fmt2, args(1), args(2), args(3), args(4));
+elseif nvals == 5
+    out = sprintf(fmt2, args(1), args(2), args(3), args(4), args(5));
+else
+    fail('PRTF: too many arguments (max 5)');
+end
+fprintf('%s', out);
+ax = numel(out);
+end
+
+function ax = sys_malc(n)
+% MALC — bump allocator: return the old heap pointer, advance by n bytes.
+% The heap lives in [data_top, 2*poolsize); hp starts at data after compile.
+global hp poolsize
+if n < 0 || hp + n > 2*poolsize
+    fail(sprintf('MALC: out of heap (hp=%d n=%d)', hp, n));
+end
+ax = hp;
+hp = hp + n;
+end
+
+function ax = sys_mset(daddr, val, cnt)
+% MSET — memset(dest, val, count): fill count bytes with val's low byte.
+global mem
+if daddr + cnt > numel(mem)
+    fail('MSET: out of range');
+end
+mem(daddr+1 : daddr+cnt) = uint8(mod(int64(val), int64(256)));
+ax = daddr;
+end
+
+function ax = sys_mcmp(s1, s2, cnt)
+% MCMP — memcmp(s1, s2, count) -> -1/0/1 on the first differing byte.
+global mem
+for k = 0:cnt-1
+    b1 = mem(s1 + k + 1);
+    b2 = mem(s2 + k + 1);
+    if b1 ~= b2
+        ax = sign(double(b1) - double(b2));
+        return;
+    end
+end
+ax = 0;
 end

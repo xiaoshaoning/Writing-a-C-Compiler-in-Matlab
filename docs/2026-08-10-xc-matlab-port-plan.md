@@ -1,8 +1,8 @@
 # xc.m — C Interpreter in MATLAB: Implementation Plan
 
-> **Status:** Phase 5 complete 2026-08-10 (pointers, arrays, casts, bitwise —
-> 12 programs cross-checked against the reference build; suite green 85/85).
-> Phase 6 (syscalls) pending.
+> **Status:** Phase 6 complete 2026-08-10 (all eight syscalls; hello.c
+> acceptance byte-exact vs the reference build; suite green 94/94).
+> **All phases 0-6 complete — full feature parity reached.**
 > **For agentic workers:** phases use checkbox (`- [ ]`) syntax for tracking. This
 > project is a git repository — commit after each verified phase; verify via the
 > stated test commands instead.
@@ -355,16 +355,38 @@ which grow up). `int**` = Type 1+2+2 = 5; each deref subtracts PTR (2).
 
 ### Phase 6: Syscalls + full parity
 
-- [ ] PRTF (format read + `%lld→%d` conversion + arg frame), OPEN/READ/CLOS,
-  MALC (bump), MSET/MCMP, EXIT.
-- [ ] `-s` and `-d` smoke tests (dump shapes sane).
-- [ ] Acceptance: `tests/programs/hello.c` — exact stdout diff vs reference:
-  `fibonacci( 0) = 1` … `fibonacci(10) = 89`.
-- [ ] Verify: run `tests/run_tests.m` → all PASS (full suite).
+- [x] PRTF (format read + `%lld→%d` conversion + arg frame), OPEN/READ/CLOS,
+  MALC (bump), MSET/MCMP, EXIT — all eight syscalls implemented; the ADJ
+  operand doubles as the arg count (`tmp = sp + 8*n`, `tmp[-k]` = args).
+- [x] `-s` and `-d` smoke tests (dump shapes sane) — `-s` verified
+  byte-identical to the reference (modulo absolute jump addresses) in Phase
+  3; `-d` trace lines asserted in the suite.
+- [x] Acceptance: `tests/programs/hello.c` — exact stdout diff vs reference:
+  `fibonacci( 0) = 1` … `fibonacci(10) = 89` — byte-identical (incl. the
+  `exit(0)` suffix with no trailing newline). hello.c is in the suite with
+  its full expected output.
+- [x] Verify: run `tests/run_tests.m` → all PASS (94/94, full suite).
+
+Phase 6 notes (2026-08-10): PRTF pulls up to 5 value args from the frame and
+passes them to `sprintf` individually — `sprintf(fmt, array)` crashes this
+runtime natively (BUG-16), and `sprintf` doesn't process `\n` escapes
+(DIV-10; the lexer stores real newlines, so PRTF is unaffected). OPEN/READ/
+CLOS use a small fd registry; MALC is a bump allocator from `data` (the
+compiled-data end) capped at 2·poolsize. hello.c's original `/* */` header
+comment was replaced with `//` comments — the dialect (and the reference
+build) only supports `//`.
 
 ### Phase 7: Cleanup
 
-- [ ] Remove probe temp files; final README pass; full suite re-run.
+- [x] Remove probe temp files; final README pass; full suite re-run (95/95).
+- [x] Append any newly found runtime bugs to the bug report (BUG-16/17/18,
+  DIV-10 from Phase 6).
+
+Phase 7 notes (2026-08-10): README updated to reflect the completed
+interpreter (no more "planned"; dialect notes added); all scratch files
+removed; the acceptance and every corpus program verified against the
+reference C build. The port is feature-complete — remaining work is the GPL2
+adoption noted under Attribution.
 
 ## Verification
 

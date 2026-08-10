@@ -1,7 +1,7 @@
-/* hello.c — fibonacci demo.
- * Copied from lotabout/write-a-C-interpreter (GPL2),
- * https://github.com/lotabout/write-a-C-interpreter
- * Acceptance program for the xc.m interpreter port. */
+// hello.c — fibonacci demo.
+// Copied from lotabout/write-a-C-interpreter (GPL2),
+// https://github.com/lotabout/write-a-C-interpreter
+// Acceptance program for the xc.m interpreter port.
 #include <stdio.h>
 
 int fibonacci(int i) {

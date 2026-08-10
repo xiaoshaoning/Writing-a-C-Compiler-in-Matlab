@@ -158,6 +158,47 @@ for k = 1:size(xtests, 1)
     end
 end
 
+% --- group 8: Phase 6 syscalls (stdout + exit, verified vs reference) ---
+stests = {
+    'hello.c',       0, ['fibonacci( 0) = 1' char(10) 'fibonacci( 1) = 1' char(10) ...
+                         'fibonacci( 2) = 2' char(10) 'fibonacci( 3) = 3' char(10) ...
+                         'fibonacci( 4) = 5' char(10) 'fibonacci( 5) = 8' char(10) ...
+                         'fibonacci( 6) = 13' char(10) 'fibonacci( 7) = 21' char(10) ...
+                         'fibonacci( 8) = 34' char(10) 'fibonacci( 9) = 55' char(10) ...
+                         'fibonacci(10) = 89' char(10) 'exit(0)'];
+    'p6_printf.c',  0, ['hello 42 7' char(10) 'exit(0)'];
+    'p6_printf2.c', 0, ['[ 5][300][300]' char(10) 'exit(0)'];
+    'p6_malloc.c', 42, 'exit(42)';
+    'p6_memset.c',  0, 'exit(0)';
+    'p6_memcmp.c', -1, 'exit(-1)';
+    'p6_exit.c',    3, 'exit(3)';
+    'p6_file.c',    0, 'exit(0)';
+};
+for k = 1:size(stests, 1)
+    try
+        out = evalc(sprintf('rc = xc(''tests/programs/%s'')', stests{k,1}));
+        [npass nfail] = addcheck(npass, nfail, rc == stests{k,2} && ...
+                                 strcmp(out, [stests{k,3}]), ...
+            sprintf('%s -> exit %d, stdout match', stests{k,1}, stests{k,2}));
+    catch e
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            sprintf('%s: %s', stests{k,1}, e.message));
+    end
+end
+
+% -d execution trace works end-to-end
+try
+    out = evalc('rc = xc(''-d'', ''tests/programs/return_2.c'')');
+    [npass nfail] = addcheck(npass, nfail, rc == 2, 'xc(-d) traces, exit 2');
+    [npass nfail] = addcheck(npass, nfail, ...
+                             ~isempty(strfind(out, '> ENT')) && ...
+                             ~isempty(strfind(out, '> EXIT')), ...
+                             'xc(-d) trace lines');
+catch e
+    [npass nfail] = addcheck(npass, nfail, false, ...
+                             sprintf('xc(-d): %s', e.message));
+end
+
 fprintf('run_tests: %d tests, %d passed, %d failed\n', npass + nfail, npass, nfail);
 if nfail > 0
     error(sprintf('run_tests: %d failures', nfail));
