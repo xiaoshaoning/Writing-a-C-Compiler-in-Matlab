@@ -131,6 +131,33 @@ for k = 1:size(ftests, 1)
     end
 end
 
+% --- group 7: Phase 5 pointers, arrays, casts, bitwise ---
+% Expected exits verified against the reference C build.
+xtests = {
+    'p5_swap.c',    73;
+    'p5_ptrslots.c', 10;
+    'p5_strwalk.c',  5;
+    'p5_strindex.c', 98;
+    'p5_ptrptr.c',  42;
+    'p5_pindex.c',  60;
+    'p5_cast.c',    65;
+    'p5_ptridx.c',   6;
+    'p5_preinc.c',   6;
+    'p5_ptrdiff.c',  1;
+    'p5_bitshift.c', 32;
+    'p5_postdec.c',  9;
+};
+for k = 1:size(xtests, 1)
+    try
+        out = evalc(sprintf('rc = xc(''tests/programs/%s'')', xtests{k,1}));
+        [npass nfail] = addcheck(npass, nfail, rc == xtests{k,2}, ...
+            sprintf('%s -> exit %d', xtests{k,1}, xtests{k,2}));
+    catch e
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            sprintf('%s: %s', xtests{k,1}, e.message));
+    end
+end
+
 fprintf('run_tests: %d tests, %d passed, %d failed\n', npass + nfail, npass, nfail);
 if nfail > 0
     error(sprintf('run_tests: %d failures', nfail));

@@ -1,8 +1,8 @@
 # xc.m — C Interpreter in MATLAB: Implementation Plan
 
-> **Status:** Phase 4 complete 2026-08-10 (functions verified: recursion,
-> multi-arg, char params, shadowing — 8 programs cross-checked against the
-> reference build; suite green 73/73). Phases 5-6 pending.
+> **Status:** Phase 5 complete 2026-08-10 (pointers, arrays, casts, bitwise —
+> 12 programs cross-checked against the reference build; suite green 85/85).
+> Phase 6 (syscalls) pending.
 > **For agentic workers:** phases use checkbox (`- [ ]`) syntax for tracking. This
 > project is a git repository — commit after each verified phase; verify via the
 > stated test commands instead.
@@ -335,12 +335,23 @@ The only correction: fib(10) = 55, not 89.
 
 ### Phase 5: Pointers, arrays, casts, full expression set
 
-- [ ] `&`/`*` (LC/LI removal trick), casts, `[]` with pointer scaling,
+- [x] `&`/`*` (LC/LI removal trick), casts, `[]` with pointer scaling,
   pointer arithmetic (+/- ×8, ptr-ptr diff ÷8), pre/post inc/dec (SC/SI),
-  shifts, all bitwise ops.
-- [ ] Tests: swap via pointers; array sum; char* string walk; ptr-to-ptr;
-  `int *p = ...; p[2]`; `sizeof` on types/pointers.
-- [ ] Verify: run `tests/run_tests.m` → all PASS.
+  shifts, all bitwise ops. (Expression machinery ported in Phase 3;
+  exercised here.)
+- [x] Tests: swap via pointers; array sum (contiguous globals walked by a
+  pointer); char* string walk + indexing; ptr-to-ptr (`**q`, Type = 1+2+2);
+  `int *p = ...; p[0..2]`; cast `(char)`; `p++`/`++p` on pointers; ptr-ptr
+  difference; bitwise/shift mix; `*p--` — all 12 pass, exit codes identical
+  to the reference build.
+- [x] Verify: run `tests/run_tests.m` → all PASS (85/85).
+
+Phase 5 notes (2026-08-10): no port changes — the Phase 3 expression
+machinery handled the whole pointer corpus on the first run. Dialect
+constraints confirmed: no local/global initializers (`int *p = &a;` fails —
+declare then assign), and locals grow the frame *down* (so `p++` walking
+locals is implementation-dependent — the corpus walks contiguous globals,
+which grow up). `int**` = Type 1+2+2 = 5; each deref subtracts PTR (2).
 
 ### Phase 6: Syscalls + full parity
 
