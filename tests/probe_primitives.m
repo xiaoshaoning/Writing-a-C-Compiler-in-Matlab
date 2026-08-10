@@ -53,6 +53,18 @@ s = mem(9:16);
 [npass nfail] = addcheck(npass, nfail, double(mod(int64(-1), int64(256))) == 255, ...
                          'mod negative int64');
 
+% --- int64 arithmetic shift right (BUG-11, fixed in v1.2.39) ---
+[npass nfail] = addcheck(npass, nfail, double(bitshift(int64(-16), -1)) == -8, ...
+                         'bitshift(i64,-1) arithmetic (BUG-11)');
+[npass nfail] = addcheck(npass, nfail, double(bitshift(int64(-16), -2)) == -4, ...
+                         'bitshift(i64,-2) arithmetic (BUG-11)');
+
+% --- stepped colon stop-on-wrong-side is empty (DIV-8, fixed v1.2.39) ---
+[npass nfail] = addcheck(npass, nfail, numel(1:2:0) == 0, ...
+                         '1:2:0 empty (DIV-8)');
+[npass nfail] = addcheck(npass, nfail, isequal(1:2:4, [1 3]), ...
+                         '1:2:4 unchanged (DIV-8)');
+
 % --- align8 formula (independent check of xc's helper math) ---
 a8 = [0 1 7 8 9 16];
 e8 = [0 8 8 8 16 16];

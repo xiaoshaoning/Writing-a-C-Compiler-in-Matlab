@@ -1,7 +1,7 @@
 # xc.m — C Interpreter in MATLAB: Implementation Plan
 
-> **Status:** Phase 0 complete 2026-08-10 (scaffold, probe gate, harness — suite
-> green 28/28). Phases 1-6 pending.
+> **Status:** Phase 2 complete 2026-08-10 (lexer `next` + seeding, 8-case
+> selftest — suite green 35/35 on v1.2.39). Phases 3-6 pending.
 > **For agentic workers:** phases use checkbox (`- [ ]`) syntax for tracking. This
 > project is a git repository — commit after each verified phase; verify via the
 > stated test commands instead.
@@ -33,7 +33,7 @@ stores. No self-interpretation (user decision).
 
 | Path | Responsibility |
 |---|---|
-| `xc.m` (create) | The interpreter: `main` + local functions `next`, `match`, `expression`, `statement`, `enum_declaration`, `function_parameter`, `function_body`, `function_declaration`, `global_declaration`, `program`, `eval` + helpers `emit`, `word_load`, `word_store`, `align8`, `fail`, `opname` |
+| `xc.m` (create) | The interpreter: `main` + local functions `next`, `match`, `expression`, `statement`, `enum_declaration`, `function_parameter`, `function_body`, `function_declaration`, `global_declaration`, `program`, `vm_eval` (renamed from xc.c's `eval`) + helpers `emit`, `word_load`, `word_store`, `align8`, `fail`, `opname`, `cdivmod`, `vm_selftest`, `run_case` |
 | `tests/run_tests.m` (create) | Test harness: table of {name, source, expected stdout, expected exit}; runs `xc` in-process, captures output via `evalc` (verified working), diffs |
 | `tests/programs/*.c` | Test corpus: `return_2.c`, `hello.c` (copied, GPL2 attribution), plus per-phase programs |
 | `tests/probe_primitives.m` (create, Phase 0) | Runtime feature gate — re-verifies the primitives the port depends on before any other test |
@@ -104,21 +104,32 @@ identifier, linear scan by hash + `strcmp` against `symbol_names`.
 
 ## Byte↔Word Scaling Table (every pointer-arithmetic op ×8)
 
+pc is a **1-based text index**; slot 0 is unused (mirrors xc.c's `text[0]`),
+so the first emitted instruction sits at text(2) and the parser's function
+Values are 1-based indices. Jump/call operands stay **0-based slot targets**
+(what the parser backpatches): a taken jump sets `pc = target + 1`.
+
 | xc.c | Byte model |
 |---|---|
+| `op = *pc++` | `op = text(pc); pc = pc + 1` |
 | `*++text = op` | `ti = ti+1; text(ti+1) = op` |
 | `*++text = val` (operand) | `ti = ti+1; text(ti+1) = val` |
 | `PUSH` (`*--sp = ax`) | `sp = sp-8; word_store(sp, ax)` |
 | `LI` | `ax = word_load(ax)` |
 | `LC` | `ax = double(mem(ax+1))` |
 | `SI` | `word_store(*sp, ax); sp = sp+8` (address popped from stack) |
-| `SC` | `mem(sp_addr+1) = uint8(ax); sp = sp+8` |
+| `SC` | `mem(sp_addr+1) = uint8(mod(ax,256)); sp = sp+8` (low byte) |
 | `LEA off` | `ax = bp + 8*off` |
 | `ENT n` | `sp = sp-8; word_store(sp, bp); bp = sp; sp = sp - 8*n` |
 | `ADJ n` | `sp = sp + 8*n` |
 | `LEV` | `sp = bp; bp = word_load(sp); sp = sp+8; pc = word_load(sp); sp = sp+8` |
-| `CALL target` | `sp = sp-8; word_store(sp, pc+1); pc = target` |
-| `JMP/JZ/JNZ target` | `pc = target` (target = 0-based text index) |
+| `CALL target` | `sp = sp-8; word_store(sp, pc+1); pc = target + 1` (return = 1-based) |
+| `JMP/JZ/JNZ target` | taken: `pc = target + 1`; not taken: `pc = pc + 1` (skip operand) |
+
+`DIV`/`MOD` use `cdivmod` (C truncating division via exact double math —
+integer division of typed operands isn't portable across MATLAB versions).
+`SHR` is a plain `bitshift(lhs, -ax)` — the runtime's negative-count garbage
+for negative lhs (BUG-11) was fixed in v1.2.39.
 
 Helpers (both verified in the Phase 0 probe):
 
@@ -179,9 +190,14 @@ all other syscalls are direct memory/array ops.
 
 - `xc(varargin)` — CLI: `-s`, `-d`, file(s); load source via `fopen`+`fread`
   into `src` (char vector, NUL-terminated), `si = 0`; seed keywords + syscalls
-  into symbol table exactly like xc.c main; `program()`; run `eval()` from
+  into symbol table exactly like xc.c main; `program()`; run `vm_eval()` from
   `idmain`; return exit code. Stack init: push `EXIT` sentinel, `PUSH tmp`,
   argc, argv-pointer, tmp (same trick — needed for `exit()` and `main` return).
+  Hidden entry `xc('--vm-selftest')` runs the Phase 1 VM test battery.
+- `vm_eval()` — the 38-opcode stack VM (port of xc.c `eval`; renamed to avoid
+  shadowing the builtin `eval`). See the Byte↔Word Scaling Table.
+- `vm_selftest()` / `run_case()` — Phase 1 hand-assembled VM tests (write
+  `text`/`mem`/`sp` directly, run `vm_eval`, compare the EXIT value).
 - `next()` — full lexer port: whitespace, `#` skip, idents (hash lookup),
   dec/hex/oct numbers, `//` comments, strings (`\n` escape only) into mem,
   char literals → Num, all multi-char operators, `-s` line dump hook.
@@ -215,27 +231,47 @@ any interpreter test runs.
 
 ### Phase 1: VM (`eval`) — all 38 opcodes
 
-- [ ] Port `eval()` with the scaling table; all arithmetic/comparison/shift
-  ops on int64; `EXIT` returns `*sp`.
-- [ ] Hand-assembled tests (write `text`/`mem`/`sp` directly, run `eval`,
-  check `ax`/exit):
+- [x] Port `eval()` with the scaling table; all arithmetic/comparison/shift
+  ops on int64; `EXIT` returns `*sp`. (Implemented as `vm_eval`.)
+- [x] Hand-assembled tests (write `text`/`mem`/`sp` directly, run `eval`,
+  check `ax`/exit) — all 25 cases pass:
   - `IMM 1, PUSH, IMM 2, PUSH, IMM 3, MUL, ADD` → `ax == 7`
   - `IMM 7, PUSH, IMM 2, DIV` → 3; `MOD` → 1; `SUB`, shifts, bitwise, comparisons
   - `JZ`/`JNZ` loop: count 1..5, `JMP` back → exit 5
   - frame round-trip: `ENT 2, LEA 0, PUSH, IMM 42, SI, LEA 0, LI, LEV` → 42
   - `LC`/`SC` on mem bytes; `SI`/`SC` address-pop semantics
   - `CALL`/`ADJ`: callee `ENT/LEV`, caller `CALL, ADJ 1` → value round-trip
-- [ ] Verify: run `tests/run_tests.m` → all PASS.
+- [x] Verify: run `tests/run_tests.m` → all PASS (29/29).
+
+Phase 1 notes (2026-08-10): pc is 1-based (`op = text(pc)`); jump operands
+stay 0-based slot targets, so taken jumps set `pc = target + 1` — the scaling
+table above records the corrected convention. `DIV`/`MOD` use `cdivmod`
+(typed integer division isn't portable). SHR and the varargin option-scan
+were originally written around two runtime quirks (BUG-11, DIV-8) that
+v1.2.39 fixed; both now use the natural forms, and `probe_primitives` gates
+the fixed behavior.
 
 ### Phase 2: Lexer (`next`)
 
-- [ ] Port `next()`: idents + symbol-table insert/linear-search (hash `h*147+c`,
+- [x] Port `next()`: idents + symbol-table insert/linear-search (hash `h*147+c`,
   `strcmp` vs `symbol_names`), numbers dec/hex/oct, `//` and `#` skip, string
   literals → mem + align, char literals → Num, every operator token.
-- [ ] `-s` dump hook (old_src/old_text equivalents).
-- [ ] Tests: token-stream expectations for a sample source covering every token
+- [x] `-s` dump hook (old_src/old_text equivalents).
+- [x] Tests: token-stream expectations for a sample source covering every token
   kind; string storage in mem verified via `-s`-style inspection.
-- [ ] Verify: run `tests/run_tests.m` → all PASS.
+- [x] Verify: run `tests/run_tests.m` → all PASS (35/35).
+
+Phase 2 notes (2026-08-10): `next()` is a direct port — token/char codes as
+doubles, `token_val` int64 for numbers (C wrap semantics), strings stored
+byte-wise at `data` (no align yet — `align8` fires in `expression()`, Phase 3),
+char literals leave the escaped value in `token_val`. `seed_symbols()` ports
+main's keyword/syscall seeding (keywords Token=Char..While; syscalls
+Class=Sys/Type=INT/Value=opcode; void→Char; idmain=main) and runs in the main
+path before the Phase 3 parser lands. The `-s` dump prints `%d: <line>` per
+newline plus new text slots since the last line; format cross-checked against
+the reference build at Phase 6. Selftest: `xc('--lex-selftest')` (8 cases:
+keywords, all operators, inc/dec/not/ternary, dec/hex/oct values, string bytes
++ char escapes, comment/# skip + line counting, identifier lookup, -s dump).
 
 ### Phase 3: Parser core + variables + statements
 

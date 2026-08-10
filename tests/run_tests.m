@@ -61,6 +61,29 @@ catch e
                              'xc(-s) flag parse + source load');
 end
 
+% --- group 3: Phase 1 VM selftest (38-opcode eval) ---
+try
+    rc = xc('--vm-selftest');
+    [npass nfail] = addcheck(npass, nfail, rc == 0, ...
+                             'xc --vm-selftest (38-op VM)');
+catch e
+    [npass nfail] = addcheck(npass, nfail, false, ...
+                             sprintf('xc --vm-selftest: %s', e.message));
+end
+
+% --- group 4: Phase 2 lexer selftest + -s dump format ---
+try
+    out = evalc('rc = xc(''--lex-selftest'')');
+    fprintf('%s', out);   % keep per-case PASS/FAIL + dump lines visible
+    [npass nfail] = addcheck(npass, nfail, rc == 0, 'xc --lex-selftest (lexer)');
+    [npass nfail] = addcheck(npass, nfail, ...
+                             ~isempty(strfind(out, '1: int x;')), ...
+                             'xc -s line dump format');
+catch e
+    [npass nfail] = addcheck(npass, nfail, false, ...
+                             sprintf('xc --lex-selftest: %s', e.message));
+end
+
 fprintf('run_tests: %d tests, %d passed, %d failed\n', npass + nfail, npass, nfail);
 if nfail > 0
     error(sprintf('run_tests: %d failures', nfail));
