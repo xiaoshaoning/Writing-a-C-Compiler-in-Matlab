@@ -199,6 +199,39 @@ catch e
                              sprintf('xc(-d): %s', e.message));
 end
 
+% --- group 9: post-parity features (beyond the reference dialect) ---
+ptests9 = {
+    'pp_comments.c',  5;
+    'pp_array.c',  4321;
+    'pp_array2.c',   24;
+    'pp_array3.c',    1;
+    'pp_array4.c',   25;
+    'pp_init.c',    104;
+    'pp_init2.c',    95;
+    'pp_void.c',      7;
+    'pp_mread.c',   406;
+};
+for k = 1:size(ptests9, 1)
+    try
+        out = evalc(sprintf('rc = xc(''tests/programs/%s'')', ptests9{k,1}));
+        [npass nfail] = addcheck(npass, nfail, rc == ptests9{k,2}, ...
+            sprintf('%s -> exit %d', ptests9{k,1}, ptests9{k,2}));
+    catch e
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            sprintf('%s: %s', ptests9{k,1}, e.message));
+    end
+end
+% %s in printf (width preserved) — stdout check
+try
+    out = evalc('rc = xc(''tests/programs/pp_s.c'')');
+    [npass nfail] = addcheck(npass, nfail, rc == 0 && ...
+        strcmp(out, ['[abc][x 42][   hi]' char(10) 'exit(0)']), ...
+        'pp_s.c %s with width');
+catch e
+    [npass nfail] = addcheck(npass, nfail, false, ...
+        sprintf('pp_s.c: %s', e.message));
+end
+
 fprintf('run_tests: %d tests, %d passed, %d failed\n', npass + nfail, npass, nfail);
 if nfail > 0
     error(sprintf('run_tests: %d failures', nfail));

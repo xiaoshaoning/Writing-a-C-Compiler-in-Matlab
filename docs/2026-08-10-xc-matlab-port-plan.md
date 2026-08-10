@@ -1,8 +1,9 @@
 # xc.m — C Interpreter in MATLAB: Implementation Plan
 
-> **Status:** Phase 6 complete 2026-08-10 (all eight syscalls; hello.c
-> acceptance byte-exact vs the reference build; suite green 94/94).
-> **All phases 0-6 complete — full feature parity reached.**
+> **Status:** All phases 0-7 complete — full feature parity reached
+> (hello.c byte-exact vs the reference, suite green 95/95), plus post-parity
+> additions (block comments, %s, arrays, initializers, void, multi-read —
+> suite 105/105).
 > **For agentic workers:** phases use checkbox (`- [ ]`) syntax for tracking. This
 > project is a git repository — commit after each verified phase; verify via the
 > stated test commands instead.
@@ -367,14 +368,14 @@ which grow up). `int**` = Type 1+2+2 = 5; each deref subtracts PTR (2).
   its full expected output.
 - [x] Verify: run `tests/run_tests.m` → all PASS (94/94, full suite).
 
-Phase 6 notes (2026-08-10): PRTF pulls up to 5 value args from the frame and
-passes them to `sprintf` individually — `sprintf(fmt, array)` crashes this
-runtime natively (BUG-16), and `sprintf` doesn't process `\n` escapes
-(DIV-10; the lexer stores real newlines, so PRTF is unaffected). OPEN/READ/
-CLOS use a small fd registry; MALC is a bump allocator from `data` (the
-compiled-data end) capped at 2·poolsize. hello.c's original `/* */` header
-comment was replaced with `//` comments — the dialect (and the reference
-build) only supports `//`.
+Phase 6 notes (2026-08-10): PRTF pulls up to 8 resolved args from the frame
+and passes them to `sprintf` individually (mixed `%s` strings and numerics).
+OPEN/READ/CLOS use a small fd registry; `sys_read` reads directly with
+`fread(fid, cnt)` (EOF-correct since the runtime fix — no content cache).
+MALC is a bump allocator from `data` (the compiled-data end) capped at
+2·poolsize. hello.c's original `/* */` header comment was replaced with `//`
+comments — the reference dialect only supports `//` (the port itself now
+supports both).
 
 ### Phase 7: Cleanup
 
@@ -411,3 +412,20 @@ README) — `gcc` is available at `C:\msys64\ucrt64\bin\gcc.exe`.
 `xc.m` is a derivative port of `xc.c` (lotabout/write-a-C-interpreter, GPL2,
 itself derived from c4). `tests/programs/hello.c` copied from the same repo with
 attribution. The project should adopt GPL2 before publishing.
+
+## Post-parity (2026-08-10)
+
+Features beyond the reference dialect, added after full parity, all covered
+by the suite (105/105):
+
+| Feature | Design |
+|---|---|
+| `/* */` comments | lexer skip to `*/`; newlines inside reuse the `-s` dump/line handler (`nl_line`); unterminated → error |
+| `%s` in PRTF | format scan resolves each `%...s` arg (an address) to its mem string; specs are kept, so width/precision/truncation work; mixed args passed individually via a preallocated cell |
+| Array declarations | `int a[N];` global (N·8 bytes at data) and local (ceil(N·elem/8) frame slots); `Type += ARRAY_FLAG (0x1000)`; the Id unit emits the address without a load (decay to pointer); `&a` becomes a no-op; `a[i]`, `*p`, `f(a)` all work |
+| Initializers | `const_expr()`: Num, ±Num, char literal, string address, enum constant. Globals: stored at data before the 8-byte stride. Locals: buffered `[slot, value, is_char]` and emitted after ENT (LEA/PUSH/IMM/SI|SC) |
+| `void` functions | new Void token (165) for the seed; `void f() { return; }` parses (bare `return;` already worked); `void` variables rejected |
+| Multi-read READ | `sys_read` uses `fread(fid, cnt)` directly — the runtime stops at EOF and advances the file position, so repeated reads work |
+
+Still unsupported (documented): array initializers, array/void parameters,
+multi-dimension arrays, non-constant initializers.

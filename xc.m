@@ -55,7 +55,7 @@ old_text  = 0;      % 0-based slot of the last -s-dumped instruction
 expr_type    = 1;   % INT
 basetype     = 1;
 index_of_bp  = 0;
-fidv         = [];  % OPEN/READ/CLOS registry (double vector; cell appends lose values)
+fidv         = [];  % OPEN/READ/CLOS registry (double vector)
 
 % ---- hidden self-test entries (Phases 1-2): must be checked before the
 % option parser ('--...' starts with '-'). Return nonzero on any failed case. ----
@@ -529,30 +529,7 @@ while true
     si = si + 1;
 
     if token == 10                       % '\n'
-        if assembly
-            % -s dump: source line + instructions emitted since last line.
-            % The runtime's fprintf ignores %8.4s width/precision, so the
-            % mnemonic column is padded manually to match the reference.
-            fprintf('%d: %s', line, src(old_src+1 : si));
-            old_src = si;
-            while old_text < ti
-                old_text = old_text + 1;
-                % %8.4s-equivalent: all mnemonics are 3 or 4 chars
-                mn = opname(text(old_text+1));
-                if numel(mn) == 3
-                    fprintf('    %s ', mn);
-                else
-                    fprintf('    %s', mn);
-                end
-                if text(old_text+1) <= 7   % ADJ: ops with an operand slot
-                    old_text = old_text + 1;
-                    fprintf(' %d\n', text(old_text+1));
-                else
-                    fprintf('\n');
-                end
-            end
-        end
-        line = line + 1;
+        nl_line();
     elseif token == 35                   % '#': skip the macro line
         while si < numel(src)
             c = double(src(si+1));
@@ -638,6 +615,25 @@ while true
                     break;
                 end
                 si = si + 1;
+            end
+        elseif si < numel(src) && double(src(si+1)) == 42
+            % '/*' block comment: skip to '*/', counting newlines inside
+            % (post-parity addition; the reference dialect lacks this)
+            si = si + 1;   % consume '*'
+            while true
+                if si >= numel(src) - 1
+                    fail('unterminated block comment');
+                end
+                c = double(src(si+1));
+                if c == 42 && double(src(si+2)) == 47
+                    si = si + 2;         % consume '*/'
+                    break;
+                elseif c == 10
+                    si = si + 1;
+                    nl_line();
+                else
+                    si = si + 1;
+                end
             end
         else
             token = 160;   % Div
@@ -794,8 +790,8 @@ while i <= 37                           % EXIT
     symbols(current_id, 6) = int64(i);   % Value = opcode
     i = i + 1;
 end
-next();                                  % 'void' -> Token = Char
-symbols(current_id, 1) = int64(134);
+next();                                  % 'void' -> Token = Void (post-parity)
+symbols(current_id, 1) = int64(165);
 next();                                  % 'main'
 idmain = current_id;
 end
@@ -850,7 +846,12 @@ nfail = nfail + lex_case('foo foo bar', [Id Id Id], 'identifier lookup');
 nfail = nfail + lex_case(['int x;' char(10) 'int y;'], [Int Id 59 Int Id 59], ...
     '-s line dump', 'seeded', 1, 'assembly', 1);
 
-fprintf('lex_selftest: %d cases, %d failed\n', 8, nfail);
+% 9) block comments (post-parity), spanning lines
+nfail = nfail + lex_case(['int a; /* comment' char(10) 'more */ int b;'], ...
+    [Int Id 59 Int Id 59], 'block comments + line count', ...
+    'seeded', 1, 'line', 2);
+
+fprintf('lex_selftest: %d cases, %d failed\n', 9, nfail);
 end
 
 function nf = lex_case(srcstr, expected, name, varargin)
@@ -957,6 +958,37 @@ a = ti + 1;
 ti = ti + 1;
 end
 
+function v = const_expr()
+% const_expr — evaluate a compile-time constant initializer (post-parity):
+% a number literal (optionally sign-flipped), a char literal (lexed as Num),
+% a string literal's data address, or an enum constant. Advances the lexer.
+global token token_val current_id symbols
+Num=128; Id=133; Sub=158; Add=157;
+if token == Sub || token == Add
+    neg = (token == Sub);
+    match(token);
+    if token ~= Num
+        fail('bad constant initializer');
+    end
+    v = token_val;
+    if neg
+        v = -v;
+    end
+    next();
+elseif token == Num
+    v = token_val;
+    next();
+elseif token == 34          % '"': string literal -> its data address
+    v = token_val;
+    next();
+elseif token == Id && symbols(current_id,5) == 128   % enum constant
+    v = symbols(current_id,6);
+    next();
+else
+    fail(sprintf('bad constant initializer (token %d)', token));
+end
+end
+
 function match(tk)
 % match — consume the current token if it equals tk, else fail (xc.c match()).
 global token line
@@ -965,6 +997,37 @@ if token == tk
 else
     fail(sprintf('%d: expected token: %d', line, tk));
 end
+end
+
+function nl_line()
+% nl_line — process a consumed '\n' during lexing: -s source-line dump +
+% line counter. Shared by the outer lexer loop and multi-line block
+% comments.
+global assembly line old_src old_text src si text ti
+if assembly
+    % -s dump: source line + instructions emitted since the last line.
+    % The runtime's fprintf ignores %8.4s width/precision, so the mnemonic
+    % column is padded manually to match the reference.
+    fprintf('%d: %s', line, src(old_src+1 : si));
+    old_src = si;
+    while old_text < ti
+        old_text = old_text + 1;
+        % %8.4s-equivalent: all mnemonics are 3 or 4 chars
+        mn = opname(text(old_text+1));
+        if numel(mn) == 3
+            fprintf('    %s ', mn);
+        else
+            fprintf('    %s', mn);
+        end
+        if text(old_text+1) <= 7   % ADJ: ops with an operand slot
+            old_text = old_text + 1;
+            fprintf(' %d\n', text(old_text+1));
+        else
+            fprintf('\n');
+        end
+    end
+end
+line = line + 1;
 end
 
 function expression(level)
@@ -1059,18 +1122,32 @@ elseif token == Id
         emit(symbols(id,6));
         expr_type = INT;
     else
-        % variable
-        if symbols(id,5) == Loc
-            emit(LEA);
-            emit(index_of_bp - symbols(id,6));
-        elseif symbols(id,5) == Glo
-            emit(IMM);
-            emit(symbols(id,6));
+        % variable (or array name — post-parity)
+        idtype = symbols(id,4);
+        if idtype >= 4096            % ARRAY_FLAG: decays to a pointer
+            if symbols(id,5) == Loc
+                emit(LEA);
+                emit(index_of_bp - symbols(id,6));
+            elseif symbols(id,5) == Glo
+                emit(IMM);
+                emit(symbols(id,6));
+            else
+                fail(sprintf('%d: undefined variable', line));
+            end
+            expr_type = double(idtype - 4096) + PTR;   % pointer to element
         else
-            fail(sprintf('%d: undefined variable', line));
+            if symbols(id,5) == Loc
+                emit(LEA);
+                emit(index_of_bp - symbols(id,6));
+            elseif symbols(id,5) == Glo
+                emit(IMM);
+                emit(symbols(id,6));
+            else
+                fail(sprintf('%d: undefined variable', line));
+            end
+            expr_type = double(idtype);
+            emit(pick(expr_type == CHAR, LC, LI));
         end
-        expr_type = symbols(id,4);
-        emit(pick(expr_type == CHAR, LC, LI));
     end
 elseif token == 40                  % '(': cast or parenthesis
     match(40);
@@ -1102,10 +1179,9 @@ elseif token == And                 % address-of
     expression(Inc);
     if text(ti+1) == LC || text(ti+1) == LI
         ti = ti - 1;                % drop the load; ax holds the address
-    else
-        fail(sprintf('%d: bad address of', line));
+        expr_type = expr_type + PTR;
     end
-    expr_type = expr_type + PTR;
+    % else: already an address (array name) — & is a no-op (post-parity)
 elseif token == 33                  % '!': not
     match(33);
     expression(Inc);
@@ -1480,12 +1556,13 @@ function function_body()
 global token line current_id symbols index_of_bp text ti
 
 % tokens
-Int=138; Char=134; Mul=159; Id=133;
+Int=138; Char=134; Mul=159; Id=133; Num=128;
 CHAR=0; INT=1; PTR=2;
 Loc=132;
 ENT=6; LEV=8;
 
 pos_local = index_of_bp;
+inits = zeros(0, 3);   % [slot, value, is_char] — emitted after ENT
 while token == Int || token == Char
     if token == Int
         basetype = INT;
@@ -1507,13 +1584,35 @@ while token == Int || token == Char
             fail(sprintf('%d: duplicate local declaration', line));
         end
         match(Id);
+        if token == 164             % '[': local array (post-parity)
+            match(164);
+            if token ~= Num
+                fail(sprintf('%d: bad array size', line));
+            end
+            n = double(token_val);
+            match(Num);
+            match(93);              % ']'
+            if n < 0
+                fail('bad array size');
+            end
+            elem = pick(type == 0, 1, 8);
+            slots = ceil(n * elem / 8);
+            isarr = 1;
+        else
+            slots = 1;
+            isarr = 0;
+        end
         symbols(current_id,8) = symbols(current_id,5);   % BClass
         symbols(current_id,5) = int64(Loc);
         symbols(current_id,7) = symbols(current_id,4);   % BType
-        symbols(current_id,4) = int64(type);
+        symbols(current_id,4) = int64(pick(isarr, type + 4096, type));
         symbols(current_id,9) = symbols(current_id,6);   % BValue
-        pos_local = pos_local + 1;
+        pos_local = pos_local + slots;
         symbols(current_id,6) = int64(pos_local);
+        if token == 142             % '=': initializer (post-parity)
+            match(142);
+            inits = [inits; pos_local, double(const_expr()), (type == 0)];
+        end
         if token == 44              % ','
             match(44);
         end
@@ -1523,6 +1622,16 @@ end
 
 emit(ENT);
 emit(pos_local - index_of_bp);
+
+% local initializers: the frame must exist first (post-parity)
+for k = 1:size(inits, 1)
+    emit(0);                       % LEA
+    emit(index_of_bp - inits(k,1));
+    emit(13);                      % PUSH
+    emit(1);                       % IMM
+    emit(inits(k,2));
+    emit(pick(inits(k,3) ~= 0, 12, 11));   % SC for char, SI otherwise
+end
 
 while token ~= 125                  % '}'
     statement();
@@ -1563,11 +1672,12 @@ function global_declaration()
 global token line current_id symbols data ti
 
 % tokens
-Enum=136; Int=138; Char=134; Mul=159; Id=133;
+Enum=136; Int=138; Char=134; Mul=159; Id=133; Num=128;
 Fun=129; Glo=131;
 CHAR=0; INT=1; PTR=2;
 
 basetype = INT;
+isvoid = 0;
 
 % enum is treated alone
 if token == Enum
@@ -1589,6 +1699,10 @@ if token == Int
 elseif token == Char
     match(Char);
     basetype = CHAR;
+elseif token == 165                 % Void (post-parity)
+    match(165);
+    basetype = INT;                 % function return type; calls discard it
+    isvoid = 1;
 end
 
 while token ~= 59 && token ~= 125   % ';' '}'
@@ -1605,13 +1719,36 @@ while token ~= 59 && token ~= 125   % ';' '}'
     end
     match(Id);
     symbols(current_id,4) = int64(type);
+    if isvoid && token ~= 40
+        fail(sprintf('%d: void variable not supported', line));
+    end
     if token == 40                  % '(': function
         symbols(current_id,5) = int64(Fun);
         symbols(current_id,6) = int64(ti + 1);   % 0-based slot of the body
         function_declaration();
+    elseif token == 164             % '[': array (post-parity)
+        match(164);
+        if token ~= Num
+            fail(sprintf('%d: bad array size', line));
+        end
+        n = double(token_val);
+        match(Num);
+        match(93);                  % ']'
+        if n < 0
+            fail('bad array size');
+        end
+        elem = pick(type == 0, 1, 8);           % CHAR -> 1 byte, else 8
+        symbols(current_id,4) = int64(type + 4096);  % ARRAY_FLAG marker
+        symbols(current_id,5) = int64(Glo);
+        symbols(current_id,6) = int64(data);     % byte address
+        data = data + n * elem;
     else
         symbols(current_id,5) = int64(Glo);
         symbols(current_id,6) = int64(data);     % byte address
+        if token == 142             % '=': initializer (post-parity)
+            match(142);
+            word_store(data, const_expr());
+        end
         data = data + 8;
     end
     if token == 44                  % ','
@@ -1653,9 +1790,8 @@ end
 end
 
 function ax = sys_open(paddr, flags)
-% OPEN — fopen the NUL-terminated path at paddr. flags: 0=O_RDONLY,
-% 1=O_WRONLY, 2=O_RDWR. Returns a small int fd into the global registry
-% (the C runtime returns a real fd; only our own READ/CLOS consume it).
+% OPEN — fopen the NUL-terminated path at paddr; flags: 0=O_RDONLY,
+% 1=O_WRONLY, 2=O_RDWR. Returns a small int fd into the registry.
 global fidv
 path = mem_str(paddr);
 if flags == 1
@@ -1669,7 +1805,9 @@ fid = fopen(path, mode);
 if fid < 0
     ax = -1;
 else
-    % cell appends lose the value on this runtime (BUG-17) — use a vector
+    if numel(fidv) >= 16
+        fail('OPEN: too many open files (max 16)');
+    end
     fidv = [fidv, fid];
     ax = numel(fidv) - 1;   % 0-based fd
 end
@@ -1677,21 +1815,17 @@ end
 
 function ax = sys_read(fd, baddr, cnt)
 % READ — read up to cnt bytes from fd into mem at baddr; returns bytes read.
-% fread with a finite count over-reads past EOF on this runtime (BUG-18,
-% zero-pads the shortfall), so read with inf and trim to cnt.
+% fread(fid, n) stops at EOF and advances the file position (BUG-18 fixed
+% in v1.2.50), so multi-read works directly — no content cache needed.
 global fidv mem
 if fd < 0 || fd >= numel(fidv)
     ax = -1;
     return;
 end
-fid = fidv(fd + 1);
-raw = fread(fid, inf, 'uint8');
+raw = fread(fidv(fd + 1), cnt, 'uint8');
 n = numel(raw);
-if n > cnt
-    n = cnt;
-end
 if n > 0
-    mem(baddr + 1 : baddr + n) = uint8(raw(1:n));
+    mem(baddr + 1 : baddr + n) = uint8(raw);
 end
 ax = n;
 end
@@ -1709,9 +1843,9 @@ end
 
 function ax = sys_prtf(tmp, nargs)
 % PRTF — read the NUL-terminated format string from mem, convert %lld/%llu
-% -> %d/%u (the only format rewrite in the port), pull up to 5 value args
-% from the frame (tmp[-2]..tmp[-6]), sprintf + fprintf. Returns the number
-% of characters printed (printf semantics).
+% -> %d/%u, resolve each conversion's arg (%s args are addresses of mem
+% strings; others are numeric), sprintf + fprintf with the resolved args
+% passed individually. Returns the number of characters printed.
 global mem
 fmt_addr = word_load(tmp - 8);
 fmt = mem_str(fmt_addr);
@@ -1725,22 +1859,71 @@ args = zeros(1, nvals);
 for k = 1:nvals
     args(k) = double(word_load(tmp - 8*(k+1)));
 end
-% NOTE: sprintf(fmt, array) — broadcasting the value args as one array —
-% crashes this runtime natively; pass each argument separately.
-if nvals == 0
+% Scan the format for conversion specs. Preallocated-cell index assignment
+% works (BUG-17 only breaks appends); sprintf with an array of value args
+% crashes this runtime (BUG-16), so the resolved args are passed
+% individually.
+car = cell(1, 8);
+nres = 0;
+ai = 1;
+i = 1;
+nf = numel(fmt2);
+while i <= nf
+    if fmt2(i) ~= 37          % '%'
+        i = i + 1;
+        continue;
+    end
+    j = i + 1;
+    if j <= nf && fmt2(j) == 37
+        i = j + 1;            % literal percent: no arg
+        continue;
+    end
+    while j <= nf             % skip flags, width, precision (non-alpha)
+        c = double(fmt2(j));
+        if ~((c >= 65 && c <= 90) || (c >= 97 && c <= 122))
+            j = j + 1;
+        else
+            break;
+        end
+    end
+    if j > nf
+        fail('PRTF: malformed format spec');
+    end
+    if ai > nvals
+        fail('PRTF: more format specs than args');
+    end
+    nres = nres + 1;
+    if nres > 8
+        fail('PRTF: too many arguments (max 8)');
+    end
+    if fmt2(j) == 115          % 's': the arg addresses a mem string
+        car{nres} = mem_str(args(ai));
+    else
+        car{nres} = args(ai);
+    end
+    ai = ai + 1;
+    i = j + 1;
+end
+if nres == 0
     out = sprintf(fmt2);
-elseif nvals == 1
-    out = sprintf(fmt2, args(1));
-elseif nvals == 2
-    out = sprintf(fmt2, args(1), args(2));
-elseif nvals == 3
-    out = sprintf(fmt2, args(1), args(2), args(3));
-elseif nvals == 4
-    out = sprintf(fmt2, args(1), args(2), args(3), args(4));
-elseif nvals == 5
-    out = sprintf(fmt2, args(1), args(2), args(3), args(4), args(5));
+elseif nres == 1
+    out = sprintf(fmt2, car{1});
+elseif nres == 2
+    out = sprintf(fmt2, car{1}, car{2});
+elseif nres == 3
+    out = sprintf(fmt2, car{1}, car{2}, car{3});
+elseif nres == 4
+    out = sprintf(fmt2, car{1}, car{2}, car{3}, car{4});
+elseif nres == 5
+    out = sprintf(fmt2, car{1}, car{2}, car{3}, car{4}, car{5});
+elseif nres == 6
+    out = sprintf(fmt2, car{1}, car{2}, car{3}, car{4}, car{5}, car{6});
+elseif nres == 7
+    out = sprintf(fmt2, car{1}, car{2}, car{3}, car{4}, car{5}, car{6}, car{7});
+elseif nres == 8
+    out = sprintf(fmt2, car{1}, car{2}, car{3}, car{4}, car{5}, car{6}, car{7}, car{8});
 else
-    fail('PRTF: too many arguments (max 5)');
+    fail('PRTF: too many arguments');
 end
 fprintf('%s', out);
 ax = numel(out);

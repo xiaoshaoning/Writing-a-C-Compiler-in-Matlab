@@ -32,7 +32,7 @@ docs/
 MATLAB code runs on the custom MATLAB clone:
 
 ```
-D:\Projects\codes\MATLAB_in_c\release\v1.2.47\matlab.bat
+D:\Projects\codes\MATLAB_in_c\release\v1.2.50\matlab.bat
 ```
 
 ### Assembly track (cc_int.m)
@@ -65,10 +65,18 @@ matlab.bat -batch "xc('-d', 'tests/programs/hello.c')"   # execution trace
 ```
 
 `hello.c` prints the fibonacci table 0..10 and exits 0; the output is
-byte-identical to the reference C build (verified in the test suite). The
-dialect supports `//` comments (not `/* */`), no initializers
-(`int x = 5;` — declare then assign), and `void` functions are not
-distinguishable from `char`.
+byte-identical to the reference C build (verified in the test suite).
+
+Post-parity additions beyond the reference dialect (all in the suite):
+`/* */` block comments (multi-line, line-counted), `%s` in printf (width/
+precision preserved), array declarations (`int a[10];` — global and local,
+indexed via `[]`, decays to a pointer when passed), constant initializers
+(`int x = 5;`, `char c = 'A';`, `char *s = "abc";` — local initializers
+compile to post-ENT stores), `void` functions (`void f() { return; }`;
+`void` variables are rejected), and multi-read file semantics (each `read`
+advances a per-fd position). Still unsupported: array initializers
+(`int a[3] = {1,2,3};`), array/`void` parameters, multi-dimension arrays,
+and non-constant initializers.
 
 Tests (94 checks — probe gate, VM selftest, lexer selftest, and the program
 corpus whose exit codes/outputs are cross-verified against the reference
@@ -83,8 +91,8 @@ matlab.bat tests/run_tests.m
 - `xc.m` is a derivative port of `xc.c` (GPL2, lotabout/write-a-C-interpreter,
   itself derived from c4). `hello.c` is copied from the same repo. The project
   should adopt GPL2 before publishing.
-- Known bugs in the MATLAB clone (v1.2.37, fixed across v1.2.38-v1.2.47) are
+- Known bugs in the MATLAB clone (v1.2.37, fixed across v1.2.38-v1.2.50) are
   tracked in
   [docs/2026-08-10-matlab-clone-bug-report.md](docs/2026-08-10-matlab-clone-bug-report.md);
-  the port targets v1.2.47, follows real MATLAB semantics, and avoids the
+  the port targets v1.2.50, follows real MATLAB semantics, and avoids the
   remaining quirks defensively.
