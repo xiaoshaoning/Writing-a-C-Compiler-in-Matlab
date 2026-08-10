@@ -46,10 +46,11 @@ s = mem(9:16);
                          double(typecast(s, 'int64')) == 2^53 - 1, ...
                          'direct slice typecast (BUG-7)');
 
-% --- mod on int64; returns double on the clone (DIV-7) but exact for
-%     |x| < 2^53, which is all word_store needs ---
-[npass nfail] = addcheck(npass, nfail, double(mod(int64(300), int64(256))) == 44, ...
-                         'mod(int64, int64)');
+% --- mod on int64 keeps the integer class (DIV-7, fixed v1.2.46); exact
+%     for |x| < 2^53, which is all word_store needs ---
+[npass nfail] = addcheck(npass, nfail, isa(mod(int64(300), int64(256)), 'int64') && ...
+                         double(mod(int64(300), int64(256))) == 44, ...
+                         'mod(int64,int64) keeps int64 (DIV-7)');
 [npass nfail] = addcheck(npass, nfail, double(mod(int64(-1), int64(256))) == 255, ...
                          'mod negative int64');
 
@@ -141,7 +142,9 @@ fclose(fid);
                          ~isempty(strfind(s, 'abc123')) && ...
                          ~isempty(strfind(s, 'second line')), ...
                          'fread+char source loading');
-% note: delete() silently no-ops on the clone — the temp file is left behind
+delete(tf);
+[npass nfail] = addcheck(npass, nfail, exist(tf, 'file') ~= 2, ...
+                         'delete removes file');
 
 % --- evalc captures fprintf (harness requirement) ---
 try

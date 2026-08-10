@@ -1,9 +1,8 @@
 # xc.m — C Interpreter in MATLAB: Implementation Plan
 
-> **Status:** Phase 3 complete 2026-08-10 (parser core: program,
-> global_declaration, enum, expression, statement, function machinery —
-> 20 end-to-end programs verified byte-for-byte against the reference C
-> build; suite green 60/60). Phases 4-6 pending.
+> **Status:** Phase 4 complete 2026-08-10 (functions verified: recursion,
+> multi-arg, char params, shadowing — 8 programs cross-checked against the
+> reference build; suite green 73/73). Phases 5-6 pending.
 > **For agentic workers:** phases use checkbox (`- [ ]`) syntax for tracking. This
 > project is a git repository — commit after each verified phase; verify via the
 > stated test commands instead.
@@ -58,7 +57,8 @@ Safe primitives (use these):
 - `zeros(1, N, 'uint8')` / `zeros(1, N, 'int64')` typed arrays + element/slice
   assignment, incl. converted arrays (`uint8([...])`), `(end+1)` appends
 - `typecast(mem(a+1:a+8), 'int64')` — word LOAD (slices keep their uint8 type)
-- `mod(int64, int64)`, int64 scalar arithmetic — exact for |x| < 2^53
+- `mod(int64, int64)` keeps the int64 class, exact for |x| < 2^53; int64
+  scalar arithmetic — exact for |x| < 2^53
 - `uint8` `bitand`/`bitor` for small values, `find`, logical indexing, `[a b]` concat
 - `global` keyword; `evalc` (captures disp AND fprintf); `error`/`try-catch`;
   `sprintf`; `fopen`/`fgetl`; `fread(fid, inf, 'uint8')` (plain `fread` reads
@@ -70,7 +70,7 @@ Watch out for:
   half-away-from-zero rounding (7/2 = 4, not C's 3); the port never divides
   int64 directly — `cdivmod` (VM DIV/MOD) and `word_store`'s byte
   decomposition use exact double math, preserving C truncation semantics
-- `delete(file)` — do not rely on test-time file cleanup
+- `delete(file)` removes files (test cleanup works)
 - Shared state must live in `global` variables (see State Sharing)
 
 ## State Sharing (replaces xc.c globals)
@@ -313,16 +313,25 @@ to the text segment, with main's frame return slot pointing at it. VM bitwise
 ops initially went through a byte-wise `bitop64` workaround (the runtime
 corrupted the sign bit); the runtime fix landed, so the VM uses native
 `bitor`/`bitxor`/`bitand` and the probe gates the behavior. `fprintf`'s
-`%8.4s` width/precision is ignored by the runtime, so the `-s` mnemonic
-column is padded manually.
+`%8.4s` width is honored but string precision `%.Ms` does not pad, so the
+`-s` mnemonic column is padded manually.
 
 ### Phase 4: Functions
 
-- [ ] `function_parameter`, `function_body` (local decls + ENT), `function_declaration`,
+- [x] `function_parameter`, `function_body` (local decls + ENT), `function_declaration`,
   call emission (`CALL`/`ADJ`), symbol unwind (B* fields), recursion.
-- [ ] Tests: factorial(5)=120; fib(10)=89; multi-arg + char params; nested
-  calls; local shadowing of globals.
-- [ ] Verify: run `tests/run_tests.m` → all PASS.
+  (Ported in Phase 3 — `main()` needs the machinery; verified here.)
+- [x] Tests: factorial(5)=120; fib(10)=**55** (the plan's "89" was wrong —
+  89 is fib(11); cross-checked against the reference); multi-arg + char
+  params; nested calls; local shadowing of globals — all 8 pass, exit codes
+  identical to the reference build. Includes a local shadowing a Sys symbol
+  (`printf`) to exercise the B-field unwind with non-Loc entries.
+- [x] Verify: run `tests/run_tests.m` → all PASS (73/73).
+
+Phase 4 notes (2026-08-10): no port changes were needed — the Phase 3
+machinery handled recursion (factorial/fib), 4-arg calls, char params
+(LC/SC path), nested calls, and both shadowing cases on the first run.
+The only correction: fib(10) = 55, not 89.
 
 ### Phase 5: Pointers, arrays, casts, full expression set
 

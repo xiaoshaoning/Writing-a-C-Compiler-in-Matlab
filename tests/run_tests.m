@@ -108,6 +108,29 @@ for k = 1:size(ptests, 1)
     end
 end
 
+% --- group 6: Phase 4 functions (recursion, args, shadowing) ---
+% Expected exits verified against the reference C build.
+ftests = {
+    'p4_factorial.c', 120;
+    'p4_fib.c',       55;
+    'p4_multiarg.c',  10;
+    'p4_charparam.c', 67;
+    'p4_nested.c',    25;
+    'p4_shadow.c',    10;
+    'p4_shadowsys.c',  5;
+    'p4_charlocal.c', 80;
+};
+for k = 1:size(ftests, 1)
+    try
+        out = evalc(sprintf('rc = xc(''tests/programs/%s'')', ftests{k,1}));
+        [npass nfail] = addcheck(npass, nfail, rc == ftests{k,2}, ...
+            sprintf('%s -> exit %d', ftests{k,1}, ftests{k,2}));
+    catch e
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            sprintf('%s: %s', ftests{k,1}, e.message));
+    end
+end
+
 fprintf('run_tests: %d tests, %d passed, %d failed\n', npass + nfail, npass, nfail);
 if nfail > 0
     error(sprintf('run_tests: %d failures', nfail));

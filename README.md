@@ -30,7 +30,7 @@ docs/
 MATLAB code runs on the custom MATLAB clone:
 
 ```
-D:\Projects\codes\MATLAB_in_c\release\v1.2.45\matlab.bat
+D:\Projects\codes\MATLAB_in_c\release\v1.2.47\matlab.bat
 ```
 
 ### Assembly track (cc_int.m)
@@ -73,8 +73,8 @@ matlab.bat tests/run_tests.m
 - `xc.m` is a derivative port of `xc.c` (GPL2, lotabout/write-a-C-interpreter,
   itself derived from c4). `hello.c` is copied from the same repo. The project
   should adopt GPL2 before publishing.
-- Known bugs in the MATLAB clone (v1.2.37, fixed across v1.2.38-v1.2.45) are
+- Known bugs in the MATLAB clone (v1.2.37, fixed across v1.2.38-v1.2.47) are
   tracked in
   [docs/2026-08-10-matlab-clone-bug-report.md](docs/2026-08-10-matlab-clone-bug-report.md);
-  the port targets v1.2.45, follows real MATLAB semantics, and avoids the
+  the port targets v1.2.47, follows real MATLAB semantics, and avoids the
   remaining quirks defensively.
