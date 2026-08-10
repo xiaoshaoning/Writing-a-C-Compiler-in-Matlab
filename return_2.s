@@ -1,7 +1,7 @@
 	.file	"return_2.c"
 	.text
 	.globl	main
-	.type	main, @function
+	.def	main;	.scl	2;	.type	32;	.endef
 main:
 .LFB0:
 	.cfi_startproc
@@ -16,4 +16,3 @@ main:
 	ret
 	.cfi_endproc
 .LFE0:
-	.size	main, .-main

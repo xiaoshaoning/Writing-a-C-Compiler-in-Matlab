@@ -19,9 +19,12 @@ while 1
       break;
   end
   
-  result = regexp(current_line, 'return.+', 'match');
-  if size(result) > 0
-      return_value = result{1}(8:end-1);
+  % A literal search + manual slice is used instead of 'return.+' (which
+  % relies on regexp quantifiers); both are equivalent for "return <const>;"
+  % lines, and this form is portable across MATLAB implementations.
+  result = regexp(current_line, 'return');
+  if ~isempty(result)
+      return_value = current_line(result(1)+7:end-1);
       break;
   end
 end
@@ -33,7 +36,10 @@ if ~isempty(return_value)
     fprintf(fid_output, '\t.file\t\"return_2.c\"\n');
     fprintf(fid_output, '\t.text\n');
     fprintf(fid_output, '\t.globl\tmain\n');
-    fprintf(fid_output, '\t.type\tmain, @function\n');
+    % Windows/MSYS2 binutils: ELF-style ".type main, @function" (the
+    % Norasandler tutorial) is rejected — '@' starts a comment in COFF GAS.
+    % gcc emits ".def main; .scl 2; .type 32; .endef" on this target.
+    fprintf(fid_output, '\t.def\tmain;\t.scl\t2;\t.type\t32;\t.endef\n');
     fprintf(fid_output, 'main:\n');
     fprintf(fid_output, '.LFB0:\n');
     fprintf(fid_output, '\t.cfi_startproc\n');
@@ -56,7 +62,6 @@ if ~isempty(return_value)
     fprintf(fid_output, '\tret\n');
     fprintf(fid_output, '\t.cfi_endproc\n');
     fprintf(fid_output, '.LFE0:\n');
-    fprintf(fid_output, '\t.size\tmain, .-main\n');
     fclose(fid_output);
 end    
 
