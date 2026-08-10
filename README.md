@@ -24,6 +24,7 @@ tests/
     hello.c           fibonacci demo — xc.m acceptance program
 docs/
   2026-08-10-xc-matlab-port-plan.md        implementation plan
+  PROJECT_STATUS.md                        current project status
   2026-08-10-matlab-clone-bug-report.md    bugs found in the MATLAB clone
 ```
 
