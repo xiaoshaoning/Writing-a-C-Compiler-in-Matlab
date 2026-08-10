@@ -1,10 +1,18 @@
 # xc.m — C Interpreter in MATLAB: Implementation Plan
 
 > **Status:** Phase 2 complete 2026-08-10 (lexer `next` + seeding, 8-case
-> selftest — suite green 35/35 on v1.2.39). Phases 3-6 pending.
+> selftest — suite green 37/37). Phases 3-6 pending.
 > **For agentic workers:** phases use checkbox (`- [ ]`) syntax for tracking. This
 > project is a git repository — commit after each verified phase; verify via the
 > stated test commands instead.
+
+**Semantics contract:** the port follows real MATLAB behavior (R2024b-class
+semantics): int64 arithmetic saturates at INT64_MAX/MIN and integer division
+keeps the integer class with half-away-from-zero rounding. The interpreter's
+*language* semantics stay C: VM DIV/MOD truncate toward zero via `cdivmod`
+(exact double math), and pointer/word arithmetic is exact because every value
+is < 2^53 (`word_store` asserts). The two contracts never collide — the test
+corpus never overflows.
 
 **Goal:** Single-file MATLAB port of `D:\Projects\github\write-a-C-interpreter\xc.c`
 (a self-hosting C interpreter derived from c4) with full feature parity,
@@ -56,9 +64,10 @@ Safe primitives (use these):
   nested in call argument lists
 
 Watch out for:
-- Integer `/` on typed operands — behavior differs across MATLAB versions
-  (error vs double result); the port's byte decomposition stays exact because
-  every value is < 2^53 (see `word_store`)
+- Integer `/` on typed operands — keeps the integer class with R2024b
+  half-away-from-zero rounding (7/2 = 4, not C's 3); the port never divides
+  int64 directly — `cdivmod` (VM DIV/MOD) and `word_store`'s byte
+  decomposition use exact double math, preserving C truncation semantics
 - `delete(file)` — do not rely on test-time file cleanup
 - Shared state must live in `global` variables (see State Sharing)
 
@@ -263,7 +272,8 @@ the fixed behavior.
 - [x] Verify: run `tests/run_tests.m` → all PASS (35/35).
 
 Phase 2 notes (2026-08-10): `next()` is a direct port — token/char codes as
-doubles, `token_val` int64 for numbers (C wrap semantics), strings stored
+doubles, `token_val` int64 for numbers (saturating like real MATLAB; corpus
+literals fit int64 exactly), strings stored
 byte-wise at `data` (no align yet — `align8` fires in `expression()`, Phase 3),
 char literals leave the escaped value in `token_val`. `seed_symbols()` ports
 main's keyword/syscall seeding (keywords Token=Char..While; syscalls
@@ -332,7 +342,7 @@ README) — `gcc` is available at `C:\msys64\ucrt64\bin\gcc.exe`.
 |---|---|
 | Primitive behavior gaps | Probe gate in Phase 0 re-verifies every primitive the port depends on before each test run |
 | Shared state across functions | Port uses `global` variables (verified working) |
-| int64 overflow semantics | C wraps where MATLAB saturates; `word_store`'s \|v\| < 2^53 guard and the small test corpus keep the divergence unreachable |
+| int64 overflow semantics | Decision: follow real MATLAB — int64 arithmetic saturates at INT64_MAX/MIN, it never wraps. Unreachable in practice: `word_store` guards \|v\| < 2^53 and the corpus is small. VM DIV/MOD keep C truncation (they implement the interpreted language), computed via exact double math (`cdivmod`) |
 | Precision ≥ 2^53 | `word_store` asserts; test values small |
 | Performance (interpreted eval) | Fine for hello.c-scale; fib(10) ≈ few thousand VM ops |
 | `evalc` misses `fprintf` | Phase 0 probe; fallback: subprocess per test |
