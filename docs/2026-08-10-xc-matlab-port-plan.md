@@ -127,7 +127,8 @@ Values are 1-based indices. Jump/call operands stay **0-based slot targets**
 | `JMP/JZ/JNZ target` | taken: `pc = target + 1`; not taken: `pc = pc + 1` (skip operand) |
 
 `DIV`/`MOD` use `cdivmod` (C truncating division via exact double math —
-integer division of typed operands isn't portable across MATLAB versions).
+MATLAB's typed `/` rounds half away from zero, which is NOT C truncation, so
+the VM still needs `cdivmod` for xc.c's `a / b` / `a % b` semantics).
 `SHR` is a plain `bitshift(lhs, -ax)` — the runtime's negative-count garbage
 for negative lhs (BUG-11) was fixed in v1.2.39.
 
