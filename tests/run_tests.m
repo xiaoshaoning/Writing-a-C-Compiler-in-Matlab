@@ -39,26 +39,16 @@ catch e
                              'xc() missing-file error');
 end
 
-% valid source: scaffold reports pipeline not yet implemented
+% -s compiles without executing (returns 0, prints source lines)
 try
-    xc('tests/programs/return_2.c');
-    [npass nfail] = addcheck(npass, nfail, false, ...
-                             'xc(source) hits pipeline-not-implemented');
-catch e
+    out = evalc('rc = xc(''-s'', ''tests/programs/return_2.c'')');
+    [npass nfail] = addcheck(npass, nfail, rc == 0, 'xc(-s) compiles, exit 0');
     [npass nfail] = addcheck(npass, nfail, ...
-                             ~isempty(strfind(e.message, 'not implemented')), ...
-                             'xc(source) scaffold error');
-end
-
-% -s flag parses and source still loads
-try
-    xc('-s', 'tests/programs/return_2.c');
-    [npass nfail] = addcheck(npass, nfail, false, ...
-                             'xc(-s, source) hits pipeline-not-implemented');
+                             ~isempty(strfind(out, '1: int main()')), ...
+                             'xc(-s) dumps source lines');
 catch e
-    [npass nfail] = addcheck(npass, nfail, ...
-                             ~isempty(strfind(e.message, 'not implemented')), ...
-                             'xc(-s) flag parse + source load');
+    [npass nfail] = addcheck(npass, nfail, false, ...
+                             sprintf('xc(-s): %s', e.message));
 end
 
 % --- group 3: Phase 1 VM selftest (38-opcode eval) ---
@@ -82,6 +72,40 @@ try
 catch e
     [npass nfail] = addcheck(npass, nfail, false, ...
                              sprintf('xc --lex-selftest: %s', e.message));
+end
+
+% --- group 5: Phase 3 end-to-end programs (compile + eval, exit codes) ---
+ptests = {
+    'return_2.c',      2;
+    'p3_precedence.c', 7;
+    'p3_divmod.c',    13;
+    'p3_assoc.c',      3;
+    'p3_globals.c',   65;
+    'p3_globals2.c', 100;
+    'p3_ifelse1.c',    1;
+    'p3_ifelse2.c',    2;
+    'p3_while.c',     45;
+    'p3_logic.c',      1;
+    'p3_ternary.c',    7;
+    'p3_enum.c',       2;
+    'p3_sizeof.c',     7;
+    'p3_locals.c',    13;
+    'p3_incdec.c',     7;
+    'p3_postdec.c',    6;
+    'p3_unary.c',      7;
+    'p3_not.c',       -1;
+    'p3_pointer.c',    7;
+    'p3_call.c',       5;
+};
+for k = 1:size(ptests, 1)
+    try
+        out = evalc(sprintf('rc = xc(''tests/programs/%s'')', ptests{k,1}));
+        [npass nfail] = addcheck(npass, nfail, rc == ptests{k,2}, ...
+            sprintf('%s -> exit %d', ptests{k,1}, ptests{k,2}));
+    catch e
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            sprintf('%s: %s', ptests{k,1}, e.message));
+    end
 end
 
 fprintf('run_tests: %d tests, %d passed, %d failed\n', npass + nfail, npass, nfail);

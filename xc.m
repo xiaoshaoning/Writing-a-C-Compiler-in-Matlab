@@ -15,6 +15,7 @@ global old_src old_text                     % -s dump state
 global text ti pc bp sp ax cycle            % VM + text segment
 global symbols symbol_names current_id idmain  % symbol table
 global mem data data_top hp stack_base      % memory segments
+global expr_type basetype index_of_bp       % parser state
 global poolsize assembly debug              % configuration
 
 % ---- configuration defaults (xc.c: poolsize = 256 * 1024) ----
@@ -49,6 +50,11 @@ si        = 0;
 old_src   = 0;      % 0-based index of the current source line start
 old_text  = 0;      % 0-based slot of the last -s-dumped instruction
 
+% ---- parser state ----
+expr_type    = 1;   % INT
+basetype     = 1;
+index_of_bp  = 0;
+
 % ---- hidden self-test entries (Phases 1-2): must be checked before the
 % option parser ('--...' starts with '-'). Return nonzero on any failed case. ----
 if nargin >= 1 && ischar(varargin{1})
@@ -79,6 +85,11 @@ if isempty(args)
 end
 source_file = args{1};  % xc.c only reads the first file
 
+% ---- seed keywords + syscalls into the symbol table (xc.c main) ----
+% Must run BEFORE loading the source file: seed_symbols() lexes the keyword
+% string through src/si, which the file load then overwrites.
+seed_symbols();
+
 % ---- load source (fread + char; must read bytes, not doubles) ----
 % Plain fread(fid, inf) reads 8-byte double units — a 21-byte file yields 2
 % elements. '*char' precision is also broken on the runtime, so read 'uint8'.
@@ -92,15 +103,38 @@ src = [src, char(0), char(0)];   % NUL-terminate (two NULs: the string-literal
                                  % branch over-reads one past an unterminated literal)
 si = 0;
 
-% ---- seed keywords + syscalls into the symbol table (xc.c main) ----
-seed_symbols();
-old_src = 0;
-old_text = 0;
+% ---- compile (Phases 3-6) ----
+program();
 
-% ---- Phase 3: parser lands in Phases 3-6 ----
-fail('parser pipeline not implemented yet (Phases 3-6)');
+if assembly
+    % -s: source + instruction dump only, no execution
+    exit_code = 0;
+    return;
+end
 
-exit_code = 0;   % unreachable until eval() lands
+if idmain == 0 || symbols(idmain, 6) == 0
+    fail('main() not defined');
+end
+
+% ---- main-return sentinel (adapts xc.c's stack trick to the two-space
+% model): main's LEV restores pc from frame slot 1; point it at an
+% appended PUSH/EXIT pair in the text segment so the return value is
+% pushed and handed to EXIT. ----
+emit(13);                   % PUSH opcode
+T_sentinel = ti + 1;        % 1-based pc of the PUSH slot
+emit(37);                   % EXIT opcode
+
+% ---- stack setup (xc.c main): frame slots bp[1] = return pc,
+% bp[2] = argv, bp[3] = argc; entry sp = sp0, frame grows below. ----
+sp0 = stack_base - 32;
+word_store(sp0, T_sentinel);
+word_store(sp0+8, 0);       % argv (no argv strings in the port)
+word_store(sp0+16, 1);      % argc
+sp = sp0;
+bp = sp0;
+
+pc = symbols(idmain, 6) + 1;   % Fun Value is a 0-based slot; pc is 1-based
+exit_code = vm_eval();
 end
 
 % ---------------------------------------------------------------------------
@@ -118,12 +152,15 @@ end
 
 function emit(op)
 % emit — append one instruction word to the text segment.
+% Slot s (0-based) lives at text(s+1); slot 0 is unused, so the first
+% emitted instruction is at slot 1 -> text(2). pc values elsewhere are
+% 1-based (vm_eval fetches text(pc)), so a slot's 1-based index is s+1.
 global text ti
 if ti + 1 > numel(text)
     fail('text segment overflow');
 end
 ti = ti + 1;
-text(ti) = int64(op);
+text(ti+1) = int64(op);
 end
 
 function v = word_load(a)
@@ -469,12 +506,20 @@ while true
 
     if token == 10                       % '\n'
         if assembly
-            % -s dump: source line + instructions emitted since last line
+            % -s dump: source line + instructions emitted since last line.
+            % The runtime's fprintf ignores %8.4s width/precision, so the
+            % mnemonic column is padded manually to match the reference.
             fprintf('%d: %s', line, src(old_src+1 : si));
             old_src = si;
             while old_text < ti
                 old_text = old_text + 1;
-                fprintf('%8.4s', opname(text(old_text+1)));
+                % %8.4s-equivalent: all mnemonics are 3 or 4 chars
+                mn = opname(text(old_text+1));
+                if numel(mn) == 3
+                    fprintf('    %s ', mn);
+                else
+                    fprintf('    %s', mn);
+                end
                 if text(old_text+1) <= 7   % ADJ: ops with an operand slot
                     old_text = old_text + 1;
                     fprintf(' %d\n', text(old_text+1));
@@ -862,5 +907,701 @@ elseif ~isempty(mc) && ~isequal(double(mem(mc{1}+1 : mc{1}+numel(mc{2}))), mc{2}
     nf = 1;
 else
     fprintf('PASS  %s\n', name);
+end
+end
+
+% ---------------------------------------------------------------------------
+% Phase 3: the parser (port of xc.c match/expression/statement/declarations)
+% ---------------------------------------------------------------------------
+
+function v = pick(cond, a, b)
+% pick — inline ternary replacement (MATLAB has no ?: operator).
+if cond
+    v = a;
+else
+    v = b;
+end
+end
+
+function a = slot_after()
+% slot_after — reserve the next text slot for a backpatch (C's `b = ++text`
+% after emitting a jump: the operand slot is skipped by the increment, so
+% the next emit lands past it). Returns the reserved slot (0-based) and
+% advances ti so the following emit writes at a+1, not at a.
+global ti
+a = ti + 1;
+ti = ti + 1;
+end
+
+function match(tk)
+% match — consume the current token if it equals tk, else fail (xc.c match()).
+global token line
+if token == tk
+    next();
+else
+    fail(sprintf('%d: expected token: %d', line, tk));
+end
+end
+
+function expression(level)
+% expression — recursive-descent expression parser (port of xc.c expression()).
+% Parses a unit (literal, id, call, cast, unary), then binary/postfix
+% operators while token >= level (token enum values are the precedence
+% levels). Emits VM instructions; expr_type tracks the C type (0=char,
+% 1=int, 2+=pointer).
+global token token_val line current_id symbols expr_type index_of_bp ...
+       text ti data
+
+% tokens (xc.c enum)
+Num=128; Id=133; Int=138; Sizeof=140;
+Assign=142; Cond=143; Lor=144; Lan=145; Or=146; Xor=147; And=148;
+Eq=149; Ne=150; Lt=151; Gt=152; Le=153; Ge=154; Shl=155; Shr=156;
+Add=157; Sub=158; Mul=159; Div=160; Mod=161; Inc=162; Dec=163; Brak=164;
+% opcodes (xc.c enum)
+LEA=0; IMM=1; JMP=2; CALL=3; JZ=4; JNZ=5; ENT=6; ADJ=7; LEV=8; LI=9; LC=10;
+SI=11; SC=12; PUSH=13; OR=14; XOR=15; AND=16; EQ=17; NE=18; LT=19; GT=20;
+LE=21; GE=22; SHL=23; SHR=24; ADD=25; SUB=26; MUL=27; DIV=28; MOD=29;
+% types and classes
+CHAR=0; INT=1; PTR=2;
+Sys=130; Fun=129; Glo=131; Loc=132;
+
+if token == 0
+    fail(sprintf('%d: unexpected token EOF of expression', line));
+end
+
+% ---- unit / unary ----
+if token == Num
+    match(Num);
+    emit(IMM);
+    emit(token_val);
+    expr_type = INT;
+elseif token == 34                  % '"'
+    emit(IMM);
+    emit(token_val);
+    match(34);
+    while token == 34               % consecutive string literals
+        match(34);
+    end
+    data = align8(data);
+    expr_type = PTR;
+elseif token == Sizeof
+    match(Sizeof);
+    match(40);                      % '('
+    expr_type = INT;
+    if token == Int
+        match(Int);
+    elseif token == 134             % Char
+        match(134);
+        expr_type = CHAR;
+    end
+    while token == Mul
+        match(Mul);
+        expr_type = expr_type + PTR;
+    end
+    match(41);                      % ')'
+    emit(IMM);
+    emit(pick(expr_type == CHAR, 1, 8));   % sizeof(char)=1, sizeof(int)=8
+    expr_type = INT;
+elseif token == Id
+    match(Id);
+    id = current_id;
+    if token == 40                  % '(': function call
+        match(40);
+        tmp = 0;                    % argument count
+        while token ~= 41           % ')'
+            expression(Assign);
+            emit(PUSH);
+            tmp = tmp + 1;
+            if token == 44          % ','
+                match(44);
+            end
+        end
+        match(41);
+        if symbols(id,5) == Sys
+            emit(symbols(id,6));    % syscall opcode
+        elseif symbols(id,5) == Fun
+            emit(CALL);
+            emit(symbols(id,6));
+        else
+            fail(sprintf('%d: bad function call', line));
+        end
+        if tmp > 0
+            emit(ADJ);
+            emit(tmp);
+        end
+        expr_type = symbols(id,4);
+    elseif symbols(id,5) == Num     % enum constant
+        emit(IMM);
+        emit(symbols(id,6));
+        expr_type = INT;
+    else
+        % variable
+        if symbols(id,5) == Loc
+            emit(LEA);
+            emit(index_of_bp - symbols(id,6));
+        elseif symbols(id,5) == Glo
+            emit(IMM);
+            emit(symbols(id,6));
+        else
+            fail(sprintf('%d: undefined variable', line));
+        end
+        expr_type = symbols(id,4);
+        emit(pick(expr_type == CHAR, LC, LI));
+    end
+elseif token == 40                  % '(': cast or parenthesis
+    match(40);
+    if token == Int || token == 134 % Char
+        tmp = pick(token == 134, CHAR, INT);
+        match(token);
+        while token == Mul
+            match(Mul);
+            tmp = tmp + PTR;
+        end
+        match(41);                  % ')'
+        expression(Inc);
+        expr_type = tmp;
+    else
+        expression(Assign);
+        match(41);                  % ')'
+    end
+elseif token == Mul                 % dereference *addr
+    match(Mul);
+    expression(Inc);
+    if expr_type >= PTR
+        expr_type = expr_type - PTR;
+    else
+        fail(sprintf('%d: bad dereference', line));
+    end
+    emit(pick(expr_type == CHAR, LC, LI));
+elseif token == And                 % address-of
+    match(And);
+    expression(Inc);
+    if text(ti+1) == LC || text(ti+1) == LI
+        ti = ti - 1;                % drop the load; ax holds the address
+    else
+        fail(sprintf('%d: bad address of', line));
+    end
+    expr_type = expr_type + PTR;
+elseif token == 33                  % '!': not
+    match(33);
+    expression(Inc);
+    emit(PUSH);
+    emit(IMM);
+    emit(0);
+    emit(EQ);
+    expr_type = INT;
+elseif token == 126                 % '~': bitwise not
+    match(126);
+    expression(Inc);
+    emit(PUSH);
+    emit(IMM);
+    emit(-1);
+    emit(XOR);
+    expr_type = INT;
+elseif token == Add                 % unary +
+    match(Add);
+    expression(Inc);
+    expr_type = INT;
+elseif token == Sub                 % unary -
+    match(Sub);
+    if token == Num
+        emit(IMM);
+        emit(-token_val);
+        match(Num);
+    else
+        emit(IMM);
+        emit(-1);
+        emit(PUSH);
+        expression(Inc);
+        emit(MUL);
+    end
+    expr_type = INT;
+elseif token == Inc || token == Dec % pre-increment/decrement
+    tmp = token;
+    match(token);
+    expression(Inc);
+    if text(ti+1) == LC
+        text(ti+1) = PUSH;          % duplicate the address
+        emit(LC);
+    elseif text(ti+1) == LI
+        text(ti+1) = PUSH;
+        emit(LI);
+    else
+        fail(sprintf('%d: bad lvalue of pre-increment', line));
+    end
+    emit(PUSH);
+    emit(IMM);
+    emit(pick(expr_type > PTR, 8, 1));
+    emit(pick(tmp == Inc, ADD, SUB));
+    emit(pick(expr_type == CHAR, SC, SI));
+else
+    fail(sprintf('%d: bad expression', line));
+end
+
+% ---- binary / postfix operators ----
+while token >= level
+    tmp = expr_type;
+    if token == Assign
+        match(Assign);
+        if text(ti+1) == LC || text(ti+1) == LI
+            text(ti+1) = PUSH;      % save the lvalue address
+        else
+            fail(sprintf('%d: bad lvalue in assignment', line));
+        end
+        expression(Assign);
+        expr_type = tmp;
+        emit(pick(expr_type == CHAR, SC, SI));
+    elseif token == Cond
+        match(Cond);
+        emit(JZ);
+        addr = slot_after();
+        expression(Assign);
+        if token == 58              % ':'
+            match(58);
+        else
+            fail(sprintf('%d: missing colon in conditional', line));
+        end
+        text(addr+1) = ti + 3;      % jump past the JMP below
+        emit(JMP);
+        addr = slot_after();
+        expression(Cond);
+        text(addr+1) = ti + 1;      % jump past the true branch
+    elseif token == Lor
+        match(Lor);
+        emit(JNZ);
+        addr = slot_after();
+        expression(Lan);
+        text(addr+1) = ti + 1;
+        expr_type = INT;
+    elseif token == Lan
+        match(Lan);
+        emit(JZ);
+        addr = slot_after();
+        expression(Or);
+        text(addr+1) = ti + 1;
+        expr_type = INT;
+    elseif token == Or
+        match(Or);
+        emit(PUSH); expression(Xor); emit(OR);
+        expr_type = INT;
+    elseif token == Xor
+        match(Xor);
+        emit(PUSH); expression(And); emit(XOR);
+        expr_type = INT;
+    elseif token == And
+        match(And);
+        emit(PUSH); expression(Eq); emit(AND);
+        expr_type = INT;
+    elseif token == Eq
+        match(Eq);
+        emit(PUSH); expression(Ne); emit(EQ);
+        expr_type = INT;
+    elseif token == Ne
+        match(Ne);
+        emit(PUSH); expression(Lt); emit(NE);
+        expr_type = INT;
+    elseif token == Lt
+        match(Lt);
+        emit(PUSH); expression(Shl); emit(LT);
+        expr_type = INT;
+    elseif token == Gt
+        match(Gt);
+        emit(PUSH); expression(Shl); emit(GT);
+        expr_type = INT;
+    elseif token == Le
+        match(Le);
+        emit(PUSH); expression(Shl); emit(LE);
+        expr_type = INT;
+    elseif token == Ge
+        match(Ge);
+        emit(PUSH); expression(Shl); emit(GE);
+        expr_type = INT;
+    elseif token == Shl
+        match(Shl);
+        emit(PUSH); expression(Add); emit(SHL);
+        expr_type = INT;
+    elseif token == Shr
+        match(Shr);
+        emit(PUSH); expression(Add); emit(SHR);
+        expr_type = INT;
+    elseif token == Add
+        match(Add);
+        emit(PUSH);
+        expression(Mul);
+        expr_type = tmp;
+        if expr_type > PTR          % pointer: scale by sizeof(int)
+            emit(PUSH);
+            emit(IMM);
+            emit(8);
+            emit(MUL);
+        end
+        emit(ADD);
+    elseif token == Sub
+        match(Sub);
+        emit(PUSH);
+        expression(Mul);
+        if tmp > PTR && tmp == expr_type
+            % pointer - pointer: difference in elements
+            emit(SUB);
+            emit(PUSH);
+            emit(IMM);
+            emit(8);
+            emit(DIV);
+            expr_type = INT;
+        elseif tmp > PTR
+            % pointer - int: scale the int
+            emit(PUSH);
+            emit(IMM);
+            emit(8);
+            emit(MUL);
+            emit(SUB);
+            expr_type = tmp;
+        else
+            emit(SUB);
+            expr_type = tmp;
+        end
+    elseif token == Mul
+        match(Mul);
+        emit(PUSH); expression(Inc); emit(MUL);
+        expr_type = tmp;
+    elseif token == Div
+        match(Div);
+        emit(PUSH); expression(Inc); emit(DIV);
+        expr_type = tmp;
+    elseif token == Mod
+        match(Mod);
+        emit(PUSH); expression(Inc); emit(MOD);
+        expr_type = tmp;
+    elseif token == Inc || token == Dec   % postfix
+        if text(ti+1) == LI
+            text(ti+1) = PUSH;
+            emit(LI);
+        elseif text(ti+1) == LC
+            text(ti+1) = PUSH;
+            emit(LC);
+        else
+            fail(sprintf('%d: bad value in increment', line));
+        end
+        emit(PUSH);
+        emit(IMM);
+        emit(pick(expr_type > PTR, 8, 1));
+        emit(pick(token == Inc, ADD, SUB));
+        emit(pick(expr_type == CHAR, SC, SI));
+        emit(PUSH);                 % restore the old value into ax
+        emit(IMM);
+        emit(pick(expr_type > PTR, 8, 1));
+        emit(pick(token == Inc, SUB, ADD));
+        match(token);
+    elseif token == Brak
+        match(Brak);
+        emit(PUSH);
+        expression(Assign);
+        match(93);                  % ']'
+        if tmp > PTR
+            emit(PUSH);
+            emit(IMM);
+            emit(8);
+            emit(MUL);
+        elseif tmp < PTR
+            fail(sprintf('%d: pointer type expected', line));
+        end
+        expr_type = tmp - PTR;
+        emit(ADD);
+        emit(pick(expr_type == CHAR, LC, LI));
+    else
+        fail(sprintf('%d: compiler error, token = %d', line, token));
+    end
+end
+end
+
+function statement()
+% statement — port of xc.c statement(): if/else, while, block, return, ';',
+% or an expression statement.
+global token text ti line
+
+% tokens
+If=137; Else=135; While=141; Return=139; Assign=142;
+% opcodes
+JZ=4; JMP=2; LEV=8;
+
+if token == If
+    match(If);
+    match(40);                      % '('
+    expression(Assign);
+    match(41);                      % ')'
+    emit(JZ);
+    b = slot_after();
+    statement();
+    if token == Else
+        match(Else);
+        text(b+1) = ti + 3;         % JZ lands past the JMP below
+        emit(JMP);
+        b = slot_after();
+        statement();
+    end
+    text(b+1) = ti + 1;
+elseif token == While
+    match(While);
+    a = ti + 1;                     % loop head
+    match(40);
+    expression(Assign);
+    match(41);
+    emit(JZ);
+    b = slot_after();
+    statement();
+    emit(JMP);
+    emit(a);
+    text(b+1) = ti + 1;
+elseif token == 123                 % '{'
+    match(123);
+    while token ~= 125              % '}'
+        statement();
+    end
+    match(125);
+elseif token == Return
+    match(Return);
+    if token ~= 59                  % ';'
+        expression(Assign);
+    end
+    match(59);
+    emit(LEV);
+elseif token == 59                  % ';'
+    match(59);
+else
+    expression(Assign);
+    match(59);
+end
+end
+
+function enum_declaration()
+% enum_declaration — port of xc.c: parse { a = 1, b = 3, ... } and mark each
+% identifier as an enum constant (Class=Num, Value = the value).
+global token token_val line current_id symbols
+
+% tokens
+Num=128; Id=133; Assign=142;
+INT=1;
+
+i = 0;
+while token ~= 125                  % '}'
+    if token ~= Id
+        fail(sprintf('%d: bad enum identifier %d', line, token));
+    end
+    next();
+    if token == Assign
+        next();
+        if token ~= Num
+            fail(sprintf('%d: bad enum initializer', line));
+        end
+        i = token_val;
+        next();
+    end
+    symbols(current_id,5) = int64(Num);    % Class = Num
+    symbols(current_id,4) = int64(INT);    % Type = INT
+    symbols(current_id,6) = int64(i);
+    i = i + 1;
+    if token == 44                  % ','
+        next();
+    end
+end
+end
+
+function function_parameter()
+% function_parameter — port of xc.c: parse (int a, char *b, ...) and store
+% each parameter as a Loc with Value = its frame slot index.
+global token line current_id symbols index_of_bp
+
+% tokens
+Int=138; Char=134; Mul=159; Id=133;
+CHAR=0; INT=1; PTR=2;
+Loc=132;
+
+params = 0;
+while token ~= 41                   % ')'
+    type = INT;
+    if token == Int
+        match(Int);
+    elseif token == Char
+        type = CHAR;
+        match(Char);
+    end
+    while token == Mul
+        match(Mul);
+        type = type + PTR;
+    end
+    if token ~= Id
+        fail(sprintf('%d: bad parameter declaration', line));
+    end
+    if symbols(current_id,5) == Loc
+        fail(sprintf('%d: duplicate parameter declaration', line));
+    end
+    match(Id);
+    symbols(current_id,8) = symbols(current_id,5);   % BClass
+    symbols(current_id,5) = int64(Loc);              % Class = Loc
+    symbols(current_id,7) = symbols(current_id,4);   % BType
+    symbols(current_id,4) = int64(type);
+    symbols(current_id,9) = symbols(current_id,6);   % BValue
+    symbols(current_id,6) = int64(params);           % Value = param index
+    params = params + 1;
+    if token == 44                  % ','
+        match(44);
+    end
+end
+index_of_bp = params + 1;
+end
+
+function function_body()
+% function_body — port of xc.c: local declarations, ENT for the frame,
+% statements, trailing LEV.
+global token line current_id symbols index_of_bp text ti
+
+% tokens
+Int=138; Char=134; Mul=159; Id=133;
+CHAR=0; INT=1; PTR=2;
+Loc=132;
+ENT=6; LEV=8;
+
+pos_local = index_of_bp;
+while token == Int || token == Char
+    if token == Int
+        basetype = INT;
+        match(Int);
+    else
+        basetype = CHAR;
+        match(Char);
+    end
+    while token ~= 59               % ';'
+        type = basetype;
+        while token == Mul
+            match(Mul);
+            type = type + PTR;
+        end
+        if token ~= Id
+            fail(sprintf('%d: bad local declaration', line));
+        end
+        if symbols(current_id,5) == Loc
+            fail(sprintf('%d: duplicate local declaration', line));
+        end
+        match(Id);
+        symbols(current_id,8) = symbols(current_id,5);   % BClass
+        symbols(current_id,5) = int64(Loc);
+        symbols(current_id,7) = symbols(current_id,4);   % BType
+        symbols(current_id,4) = int64(type);
+        symbols(current_id,9) = symbols(current_id,6);   % BValue
+        pos_local = pos_local + 1;
+        symbols(current_id,6) = int64(pos_local);
+        if token == 44              % ','
+            match(44);
+        end
+    end
+    match(59);                      % ';'
+end
+
+emit(ENT);
+emit(pos_local - index_of_bp);
+
+while token ~= 125                  % '}'
+    statement();
+end
+
+emit(LEV);
+end
+
+function function_declaration()
+% function_declaration — port of xc.c: (params) { body }, then unwind the
+% local symbol entries (restore B fields).
+global token current_id symbols
+
+% tokens
+Loc=132;
+
+match(40);                          % '('
+function_parameter();
+match(41);                          % ')'
+match(123);                         % '{'
+function_body();
+
+% unwind local variable declarations
+k = 1;
+while k <= size(symbols,1) && symbols(k,1) ~= 0
+    if symbols(k,5) == Loc
+        symbols(k,5) = symbols(k,8);   % Class  = BClass
+        symbols(k,4) = symbols(k,7);   % Type   = BType
+        symbols(k,6) = symbols(k,9);   % Value  = BValue
+    end
+    k = k + 1;
+end
+end
+
+function global_declaration()
+% global_declaration — port of xc.c: enum / type / comma-separated global
+% variables or function declarations.
+global token line current_id symbols data ti
+
+% tokens
+Enum=136; Int=138; Char=134; Mul=159; Id=133;
+Fun=129; Glo=131;
+CHAR=0; INT=1; PTR=2;
+
+basetype = INT;
+
+% enum is treated alone
+if token == Enum
+    match(Enum);
+    if token ~= 123                 % '{'
+        match(Id);                  % skip the enum tag
+    end
+    if token == 123
+        match(123);
+        enum_declaration();
+        match(125);                 % '}'
+    end
+    match(59);                      % ';'
+    return;
+end
+
+if token == Int
+    match(Int);
+elseif token == Char
+    match(Char);
+    basetype = CHAR;
+end
+
+while token ~= 59 && token ~= 125   % ';' '}'
+    type = basetype;
+    while token == Mul
+        match(Mul);
+        type = type + PTR;
+    end
+    if token ~= Id
+        fail(sprintf('%d: bad global declaration', line));
+    end
+    if symbols(current_id,5) ~= 0
+        fail(sprintf('%d: duplicate global declaration', line));
+    end
+    match(Id);
+    symbols(current_id,4) = int64(type);
+    if token == 40                  % '(': function
+        symbols(current_id,5) = int64(Fun);
+        symbols(current_id,6) = int64(ti + 1);   % 0-based slot of the body
+        function_declaration();
+    else
+        symbols(current_id,5) = int64(Glo);
+        symbols(current_id,6) = int64(data);     % byte address
+        data = data + 8;
+    end
+    if token == 44                  % ','
+        match(44);
+    end
+end
+next();
+end
+
+function program()
+% program — port of xc.c: lex the first token, parse declarations to EOF.
+global token
+next();
+while token > 0
+    global_declaration();
 end
 end

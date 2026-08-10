@@ -1,7 +1,9 @@
 # xc.m — C Interpreter in MATLAB: Implementation Plan
 
-> **Status:** Phase 2 complete 2026-08-10 (lexer `next` + seeding, 8-case
-> selftest — suite green 37/37). Phases 3-6 pending.
+> **Status:** Phase 3 complete 2026-08-10 (parser core: program,
+> global_declaration, enum, expression, statement, function machinery —
+> 20 end-to-end programs verified byte-for-byte against the reference C
+> build; suite green 60/60). Phases 4-6 pending.
 > **For agentic workers:** phases use checkbox (`- [ ]`) syntax for tracking. This
 > project is a git repository — commit after each verified phase; verify via the
 > stated test commands instead.
@@ -286,18 +288,33 @@ keywords, all operators, inc/dec/not/ternary, dec/hex/oct values, string bytes
 
 ### Phase 3: Parser core + variables + statements
 
-- [ ] `program`, `global_declaration` (enum/fun/var), `enum_declaration`,
+- [x] `program`, `global_declaration` (enum/fun/var), `enum_declaration`,
   `expression(level)` (units: Num, string, sizeof, Id/call, cast, `*`, `&`,
   `!`, `~`, unary ±, pre-inc/dec; binary: full precedence chain, ternary,
   assignment, `[]`), `statement` (if/else, while, `{}`, return, `;`, expr).
-- [ ] Tests (end-to-end `xc` runs, exit codes):
+  The function machinery (parameter/body/declaration) was ported here too —
+  the Phase 3 test list needs `main()` to run anything end-to-end.
+- [x] Tests (end-to-end `xc` runs, exit codes) — all 20 pass, exit codes
+  identical to the reference C build (built with gcc 15.2.0; `-s` dumps
+  byte-identical modulo absolute-address jump targets):
   - `return_2.c` → exit 2 (cross-check `cc_int.m`: `movl $2, %eax` — same constant)
   - `return 1+2*3;` → 7; `return 7/2;` → 3; precedence/associativity cases
   - global `int`/`char` vars, assignments, expressions
   - if/else, while, `&&`/`||` short-circuit, ternary
   - enum declaration + use; `sizeof(int/char/ptr)`
-- [ ] Verify: run `tests/run_tests.m` → all PASS; `cc_int.m` path still
-  green (see Reorg verification).
+- [x] Verify: run `tests/run_tests.m` → all PASS (60/60); `cc_int.m` path still
+  green.
+
+Phase 3 notes (2026-08-10): two porting gotchas fixed during the gate —
+the C idiom `b = ++text` *reserves* a slot for jump-operand backpatching
+(`slot_after()`), and `')'` is ASCII 41 (not 40). The main-return sentinel
+adapts xc.c's stack trick to the two-space model: a `PUSH/EXIT` pair appended
+to the text segment, with main's frame return slot pointing at it. VM bitwise
+ops initially went through a byte-wise `bitop64` workaround (the runtime
+corrupted the sign bit); the runtime fix landed, so the VM uses native
+`bitor`/`bitxor`/`bitand` and the probe gates the behavior. `fprintf`'s
+`%8.4s` width/precision is ignored by the runtime, so the `-s` mnemonic
+column is padded manually.
 
 ### Phase 4: Functions
 
