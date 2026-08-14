@@ -236,6 +236,12 @@ ptests9 = {
     'pp_mdim5.c',     82;
     'pp_mdim6.c',      3;
     'pp_mdim7.c',     23;
+    'pp_nestedinit.c',  61;
+    'pp_nestedinit2.c', 230;
+    'pp_nestedinit3.c',  81;
+    'pp_globinit.c',     5;
+    'pp_globinit2.c',   42;
+    'pp_badglobinit.c',  5;
 };
 for k = 1:size(ptests9, 1)
     try
@@ -269,15 +275,22 @@ catch e
         sprintf('pp_prtflen.c: %s', e.message));
 end
 
-% non-constant GLOBAL initializer errors (locals support it)
+% %n writes the running count; %p prints a hex pointer — stdout checks
 try
-    out = evalc('rc = xc(''tests/programs/pp_badglobinit.c'')');
-    [npass nfail] = addcheck(npass, nfail, false, ...
-        'pp_badglobinit.c should error');
+    out = evalc('rc = xc(''tests/programs/pp_npercent.c'')');
+    [npass nfail] = addcheck(npass, nfail, rc == 3 && ...
+        strcmp(out, ['abc' 'exit(3)']), 'pp_npercent.c %%n running count');
 catch e
-    [npass nfail] = addcheck(npass, nfail, ...
-        ~isempty(strfind(e.message, 'non-constant global initializer')), ...
-        'pp_badglobinit.c global non-const error');
+    [npass nfail] = addcheck(npass, nfail, false, ...
+        sprintf('pp_npercent.c: %s', e.message));
+end
+try
+    out = evalc('rc = xc(''tests/programs/pp_pptr.c'')');
+    [npass nfail] = addcheck(npass, nfail, rc == 0 && ...
+        ~isempty(strfind(out, 'ptr=0x')), 'pp_pptr.c %%p hex pointer');
+catch e
+    [npass nfail] = addcheck(npass, nfail, false, ...
+        sprintf('pp_pptr.c: %s', e.message));
 end
 
 % & on a non-lvalue errors (strict address-of)

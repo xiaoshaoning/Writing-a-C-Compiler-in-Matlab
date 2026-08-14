@@ -1,4 +1,4 @@
-// Negative: non-constant GLOBAL initializer is unsupported (locals support it).
-int g;
+// Non-constant global initializer reading another global (was the negative case).
+int g = 5;
 int h = g;
-int main() { return 0; }
+int main() { return h; }

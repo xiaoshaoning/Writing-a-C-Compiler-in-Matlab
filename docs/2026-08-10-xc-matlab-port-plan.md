@@ -1,9 +1,9 @@
 # xc.m — C Interpreter in MATLAB: Implementation Plan
 
 > **Status:** All phases 0-7 complete — full feature parity reached
-> (hello.c byte-exact vs the reference, suite green 135/135), plus post-parity
+> (hello.c byte-exact vs the reference, suite green 142/142), plus post-parity
 > additions (block comments, %s, arrays, initializers, void, multi-read —
-> suite 135/135).
+> suite 142/142).
 > **For agentic workers:** phases use checkbox (`- [ ]`) syntax for tracking. This
 > project is a git repository — commit after each verified phase; verify via the
 > stated test commands instead.
@@ -417,7 +417,7 @@ added 2026-08-15); `xc.m`/`cc_int.m` carry GPL notice headers.
 ## Post-parity (2026-08-10)
 
 Features beyond the reference dialect, added after full parity, all covered
-by the suite (135/135):
+by the suite (142/142):
 
 | Feature | Design |
 |---|---|
@@ -432,6 +432,9 @@ by the suite (135/135):
 | Non-const local inits | ENT emitted first with a placeholder frame size, backpatched after all locals are counted; initializers emit inline after ENT (any expression). Global inits stay compile-time constants (targeted error) |
 | printf length modifiers | PRTF normalizes the format: length modifiers (`h l j z t L`) stripped before the conversion char, so `%ls`/`%ld`/`%hd`/`%llu` become plain `%s`/`%d`/`%u`; string literals NUL-terminated in mem so consecutive literals don't bleed (the reference relied on zeroed pages) |
 | `sizeof` exprs | `sizeof(arr)` (column-10 total), `sizeof(int/char/ptr)`, `sizeof(<expr>)` parsed for its type and the emitted code discarded |
+| Nested-brace inits | `parse_braces(dims, lvl)` — recursive brace groups fill sub-arrays, scalars continue flat, groups cover the remainder of their subobject (C 6.7.9 brace elision); used by global and local array initializers |
+| Non-const global inits | balanced token-skip at declaration (no emission) records {addr, source pos, is_char}; after program() a startup prologue re-parses each expression (IMM addr/PUSH/expr/SI|SC) and ends with JMP main; entry pc starts at the prologue |
+| `%n` / `%p` | per-spec output build: numeric specs via single-spec sprintf (safe), `%s` width/precision applied manually (`fmt_str_spec` — sprintf with string args repeats the format, BUG-16), `%n` word_stores the running count, `%p` prints lowercase hex (`hex_addr`) |
 | Multi-read READ | `sys_read` uses `fread(fid, cnt)` directly — the runtime stops at EOF and advances the file position, so repeated reads work |
 
 Still unsupported (documented): array initializers, array/void parameters,

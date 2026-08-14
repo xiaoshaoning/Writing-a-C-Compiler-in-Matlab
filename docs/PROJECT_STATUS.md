@@ -25,7 +25,7 @@ x86-64 COFF assembly (Norasandler series), verified end-to-end through gcc.
 
 ## Verification
 
-- **Test suite**: `tests/run_tests.m` — **135/135** on the target runtime.
+- **Test suite**: `tests/run_tests.m` — **142/142** on the target runtime.
   Groups: runtime-primitive gate (probe), 26-case VM selftest, 9-case lexer
   selftest, program corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke.
 - **Reference cross-check**: the reference `xc.c` built with gcc 15.2.0
@@ -49,7 +49,11 @@ x86-64 COFF assembly (Norasandler series), verified end-to-end through gcc.
   initializers `{1,2,3,4,5,6}` work
 - Array initializers: `int a[3] = {1,2,3};` global and local (braces form);
   char arrays also via `char s[4] = "abc";` string form; shorter lists are
-  C zero-filled, too-long lists error
+  C zero-filled, too-long lists error; multi-dim nested braces
+  (`{{1,2,3},{4,5,6}}`) with C 6.7.9 brace elision
+- Non-constant global initializers: any expression (`int h = g + 2;`, `int h = f();`)
+  — the expression is balanced-skipped at declaration, re-parsed into a
+  startup prologue that runs before main (then jumps to main)
 - Non-constant local initializers: any expression (`int x = g + 1;`, `int x = f();`)
   — the frame is emitted first (ENT with a backpatched size), initializers
   inline after it
@@ -58,8 +62,9 @@ x86-64 COFF assembly (Norasandler series), verified end-to-end through gcc.
 - `sizeof` on array names (total bytes, stored in the symbol table) and on
   expressions (parsed and discarded)
 - printf length modifiers normalized away (`%ls`/`%ld`/`%hd`/`%llu` → plain
-  `%s`/`%d`/`%u`/`%d`); string literals NUL-terminated in mem (consecutive
-  literals no longer bleed)
+  `%s`/`%d`/`%u`/`%d`); `%n` writes the running count to its arg address,
+  `%p` prints a lowercase-hex pointer; string literals NUL-terminated in mem
+  (consecutive literals no longer bleed)
 - Constant initializers: `int x = 5;`, `char c = 'A';`, `char *s = "abc";`
 - `void` functions: `void f() { return; }` (void variables rejected)
 - Multi-read file semantics: repeated `read()` calls advance a per-fd
@@ -67,9 +72,8 @@ x86-64 COFF assembly (Norasandler series), verified end-to-end through gcc.
 
 ## Known limitations (documented dialect gaps)
 
-- Nested-brace multi-dim initializers (`int a[2][3] = {{..},{..}};` — the
-  flat form works); non-constant global initializers (locals support any
-  expression); exotic printf specs (`%n`, `%p`)
+- `%*` dynamic width; `sizeof` of a multi-dim row (element size is reported);
+  pointer-to-row types (`&a[i]` on a multi-dim array is a plain pointer)
 - The `-s` mnemonic column is padded manually to match the reference's
   `%8.4s` output (the runtime pads to width but not to string precision)
 
@@ -95,7 +99,7 @@ report.
 ## Running
 
 ```
-D:\...\matlab.bat tests/run_tests.m          # full suite (135 checks)
+D:\...\matlab.bat tests/run_tests.m          # full suite (142 checks)
 D:\...\matlab.bat -batch "xc('tests/programs/hello.c')"   # acceptance program
 D:\...\matlab.bat -batch "xc('-s', 'tests/programs/hello.c')"  # compile dump
 D:\...\matlab.bat -batch "xc('-d', 'tests/programs/hello.c')"  # trace

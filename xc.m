@@ -34,6 +34,7 @@ global token token_val src si line          % lexer
 global old_src old_text                     % -s dump state
 global text ti pc bp sp ax cycle            % VM + text segment
 global symbols symbol_names current_id idmain array_strides  % symbol table
+global ginit ginit_n                                % global runtime inits
 global mem data hp stack_base      % memory segments
 global expr_type basetype index_of_bp unit_was_array bstrides  % parser state
 global fidv                                 % syscall fd registry
@@ -51,6 +52,8 @@ ti           = 0;                             % next free text slot
 symbols      = zeros(3276, 10, 'int64');      % symbol table, IdSize = 10
 symbol_names = cell(3276, 1);                 % identifier strings
 array_strides = cell(3276, 1);   % per-level byte strides for array symbols
+ginit        = cell(1, 64);      % {addr, src pos, is_char} — global runtime inits
+ginit_n      = 0;
 current_id   = 0;
 idmain       = 0;
 data         = 0;                           % next free data byte (xc.c char *data)
@@ -159,7 +162,28 @@ word_store(sp0+16, 1);      % argc
 sp = sp0;
 bp = sp0;
 
-pc = symbols(idmain, 6) + 1;   % Fun Value is a 0-based slot; pc is 1-based
+if ginit_n > 0
+    % startup prologue: run the recorded global runtime initializers, then
+    % jump to main. (Re-parsed here from the recorded source positions, so
+    % the emitted code lands after the sentinel, before main runs.)
+    ginit_start = ti + 2;   % 1-based pc of the first prologue instruction
+                            % (slot ti+1 sits at text(ti+2))
+    for k = 1:ginit_n
+        g = ginit{k};
+        si = g{2};
+        next();
+        emit(1);                 % IMM
+        emit(g{1});              % global byte address
+        emit(13);                % PUSH
+        expression(142);         % expression(Assign)
+        emit(pick(g{3} ~= 0, 12, 11));   % SC for char, SI otherwise
+    end
+    emit(2);                     % JMP
+    emit(symbols(idmain,6));     % 0-based main slot (pc = target + 1)
+    pc = ginit_start;
+else
+    pc = symbols(idmain, 6) + 1;   % Fun Value is a 0-based slot; pc is 1-based
+end
 exit_code = vm_eval();
 end
 
@@ -1008,6 +1032,42 @@ for j = n:-1:1
 end
 end
 
+function vals = parse_braces(dims, lvl)
+% parse_braces — parse one brace-enclosed initializer list filling the
+% sub-array dims(lvl:end); returns the flat (row-major) values, zero-padded.
+% C 6.7.9 brace elision: a nested group covers the remainder of the current
+% subobject at its start position; scalars continue the flat sequence.
+global token line
+S = prod(dims(min(lvl, numel(dims)):end));
+vals = zeros(1, S);
+i = 0;
+while token ~= 125          % '}'
+    if token == 123         % '{': nested group
+        match(123);
+        if lvl < numel(dims)
+            s = prod(dims(lvl+1:end));   % subobject size at the next level
+            extent = s - mod(i, s);      % remainder of the current subobject
+        else
+            extent = S - i;              % scalar level: fills the rest
+        end
+        sub = parse_braces(dims, lvl + 1);
+        match(125);
+        vals(i+1 : i+extent) = sub(1:extent);
+        i = i + extent;
+    else
+        v = double(const_expr());
+        if i >= S
+            fail(sprintf('%d: too many array initializers', line));
+        end
+        vals(i+1) = v;
+        i = i + 1;
+    end
+    if token == 44          % ','
+        match(44);
+    end
+end
+end
+
 function a = slot_after()
 % slot_after — reserve the next text slot for a backpatch (C's `b = ++text`
 % after emitting a jump: the operand slot is skipped by the increment, so
@@ -1782,20 +1842,12 @@ while token == Int || token == Char
         end
         if token == 142             % '=': initializer (post-parity)
             if isarr
-                % array initializer: constant elements only (flat row-major)
+                % array initializer: constant elements only (nested-brace
+                % groups fill sub-arrays per C 6.7.9 brace elision)
                 match(142);
                 if token == 123     % '{': braces form
                     match(123);
-                    vals = [];
-                    while token ~= 125  % '}'
-                        vals = [vals, double(const_expr())];
-                        if numel(vals) > nelem
-                            fail(sprintf('%d: too many array initializers', line));
-                        end
-                        if token == 44  % ','
-                            match(44);
-                        end
-                    end
+                    vals = parse_braces(dims, 1);
                     match(125);
                 elseif token == 34 && type == CHAR  % '=' "str": copy bytes
                     saddr = token_val;
@@ -1891,7 +1943,7 @@ end
 function global_declaration()
 % global_declaration — port of xc.c: enum / type / comma-separated global
 % variables or function declarations.
-global token line current_id symbols data ti mem token_val array_strides
+global token line current_id symbols data ti mem token_val array_strides si ginit ginit_n
 
 % tokens
 Enum=136; Int=138; Char=134; Mul=159; Id=133; Num=128;
@@ -1976,25 +2028,17 @@ while token ~= 59 && token ~= 125   % ';' '}'
                                % the initializer lexes (strings advance data)
         if token == 142             % '=': array initializer (post-parity)
             match(142);
-            if token == 123         % '{': braces form
+            if token == 123         % '{': braces form (nested-brace ok)
                 match(123);
-                i = 0;
-                while token ~= 125  % '}'
-                    v = const_expr();
+                vals = parse_braces(dims, 1);
+                match(125);
+                for i = 1:numel(vals)
                     if type == CHAR
-                        mem(base + i + 1) = uint8(v);
+                        mem(base + i) = uint8(vals(i));   % byte base + (i-1)
                     else
-                        word_store(base + 8*i, v);
-                    end
-                    i = i + 1;
-                    if i > nelem
-                        fail(sprintf('%d: too many array initializers', line));
-                    end
-                    if token == 44  % ','
-                        match(44);
+                        word_store(base + 8*(i-1), vals(i));
                     end
                 end
-                match(125);
             elseif token == 34 && type == CHAR  % '=' "str": copy bytes
                 saddr = token_val;
                 next();
@@ -2011,16 +2055,35 @@ while token ~= 59 && token ~= 125   % ';' '}'
         symbols(current_id,5) = int64(Glo);
         symbols(current_id,6) = int64(data);     % byte address
         if token == 142             % '=': initializer (post-parity)
+            init_pos = si;          % right after '=', start of the initializer
             match(142);
-            % globals are initialized at compile time, so only constants
-            % can be used here (locals support runtime expressions)
             nonconst = (token == Id && symbols(current_id,5) ~= 128) || ...
                        token == 40 || token == 148 || token == 159 || ...
                        token == 33 || token == 126 || token == 162 || token == 163;
             if nonconst
-                fail(sprintf('%d: non-constant global initializer not supported', line));
+                % runtime expression: balanced-skip it (no emission) and
+                % record {address, source pos, is_char} for the startup
+                % prologue, which re-parses it before main runs
+                depth = 0;
+                while true
+                    if (token == 44 || token == 59) && depth == 0
+                        break;
+                    end
+                    if token == 40 || token == 91 || token == 123
+                        depth = depth + 1;
+                    elseif token == 41 || token == 93 || token == 125
+                        depth = depth - 1;
+                    end
+                    next();
+                end
+                ginit_n = ginit_n + 1;
+                if ginit_n > numel(ginit)
+                    fail('too many global initializers');
+                end
+                ginit{ginit_n} = {data, init_pos, pick(type == CHAR, 1, 0)};
+            else
+                word_store(data, const_expr());
             end
-            word_store(data, const_expr());
         end
         data = data + 8;
     end
@@ -2180,26 +2243,27 @@ args = zeros(1, nvals);
 for k = 1:nvals
     args(k) = double(word_load(tmp - 8*(k+1)));
 end
-% Scan the format for conversion specs. Preallocated-cell index assignment
-% works (BUG-17 only breaks appends); sprintf with an array of value args
-% crashes this runtime (BUG-16), so the resolved args are passed
-% individually.
-car = cell(1, 8);
-nres = 0;
+% Build the output spec by spec. Each numeric spec is formatted with a
+% single-spec sprintf (safe for numeric args; sprintf with string args
+% repeats the format — BUG-16 — so %s is formatted manually). %n writes
+% the running count to its arg address; %p prints hex.
+out = '';
 ai = 1;
 i = 1;
 nf = numel(fmt2);
 while i <= nf
     if fmt2(i) ~= 37          % '%'
+        out = [out, fmt2(i)];
         i = i + 1;
         continue;
     end
     j = i + 1;
     if j <= nf && fmt2(j) == 37
-        i = j + 1;            % literal percent: no arg
+        out = [out, '%'];     % literal percent: no arg
+        i = j + 1;
         continue;
     end
-    while j <= nf             % skip flags, width, precision (non-alpha)
+    while j <= nf             % flags, width, precision (non-alpha)
         c = double(fmt2(j));
         if ~((c >= 65 && c <= 90) || (c >= 97 && c <= 122))
             j = j + 1;
@@ -2213,41 +2277,72 @@ while i <= nf
     if ai > nvals
         fail('PRTF: more format specs than args');
     end
-    nres = nres + 1;
-    if nres > 8
-        fail('PRTF: too many arguments (max 8)');
-    end
-    if fmt2(j) == 115          % 's': the arg addresses a mem string
-        car{nres} = mem_str(args(ai));
+    conv = fmt2(j);
+    spec = fmt2(i:j);
+    if conv == 115            % 's': the arg addresses a mem string
+        out = [out, fmt_str_spec(spec, mem_str(args(ai)))];
+    elseif conv == 110        % 'n': write the running count to the arg
+        word_store(args(ai), numel(out));
+    elseif conv == 112        % 'p': pointer as lowercase hex
+        out = [out, hex_addr(args(ai))];
     else
-        car{nres} = args(ai);
+        out = [out, sprintf(spec, args(ai))];
     end
     ai = ai + 1;
     i = j + 1;
 end
-if nres == 0
-    out = sprintf(fmt2);
-elseif nres == 1
-    out = sprintf(fmt2, car{1});
-elseif nres == 2
-    out = sprintf(fmt2, car{1}, car{2});
-elseif nres == 3
-    out = sprintf(fmt2, car{1}, car{2}, car{3});
-elseif nres == 4
-    out = sprintf(fmt2, car{1}, car{2}, car{3}, car{4});
-elseif nres == 5
-    out = sprintf(fmt2, car{1}, car{2}, car{3}, car{4}, car{5});
-elseif nres == 6
-    out = sprintf(fmt2, car{1}, car{2}, car{3}, car{4}, car{5}, car{6});
-elseif nres == 7
-    out = sprintf(fmt2, car{1}, car{2}, car{3}, car{4}, car{5}, car{6}, car{7});
-elseif nres == 8
-    out = sprintf(fmt2, car{1}, car{2}, car{3}, car{4}, car{5}, car{6}, car{7}, car{8});
-else
-    fail('PRTF: too many arguments');
-end
 fprintf('%s', out);
 ax = numel(out);
+end
+
+function s = fmt_str_spec(spec, str)
+% fmt_str_spec — %s width/precision/flags applied manually (the clone's
+% sprintf repeats the format for string args — BUG-16 — so width/precision
+% are implemented here).
+rest = spec(2:end-1);   % between '%' and 's'
+left = 0;
+k = 1;
+while k <= numel(rest) && ...
+      (rest(k) == '-' || rest(k) == '+' || rest(k) == '0' || rest(k) == '#')
+    if rest(k) == '-'
+        left = 1;
+    end
+    k = k + 1;
+end
+w = 0;
+while k <= numel(rest) && rest(k) >= '0' && rest(k) <= '9'
+    w = w * 10 + (double(rest(k)) - 48);
+    k = k + 1;
+end
+prec = -1;
+if k <= numel(rest) && rest(k) == '.'
+    k = k + 1;
+    prec = 0;
+    while k <= numel(rest) && rest(k) >= '0' && rest(k) <= '9'
+        prec = prec * 10 + (double(rest(k)) - 48);
+        k = k + 1;
+    end
+end
+if prec >= 0 && numel(str) > prec
+    str = str(1:prec);
+end
+if numel(str) < w
+    % repmat(' ',1,n) returns a double on the runtime — build the pad as
+    % char(32*ones) so the concatenation stays char
+    pad = char(32 * ones(1, w - numel(str)));
+    if left
+        s = [str, pad];
+    else
+        s = [pad, str];
+    end
+else
+    s = str;
+end
+end
+
+function s = hex_addr(v)
+% hex_addr — %p formatting: lowercase hex with a 0x prefix.
+s = ['0x', lower(dec2hex(v))];
 end
 
 function ax = sys_malc(n)

@@ -17,7 +17,7 @@ Building compilers/interpreters in MATLAB, following two classic tutorials:
 cc_int.m              assembly compiler (return N; → x86-64 .s)
 xc.m                  C interpreter (lexer → parser → VM → syscalls)
 tests/
-  run_tests.m         test harness (135 checks: probe gate, VM, lexer,
+  run_tests.m         test harness (142 checks: probe gate, VM, lexer,
                       program corpus, syscall/acceptance)
   programs/           test C programs
     return_2.c        return 2; (part 1 of the Norasandler series)
@@ -74,21 +74,24 @@ precision preserved; length modifiers like `%ls`/`%ld`/`%hd` are normalized
 away), array declarations (`int a[10];` — global and local, indexed via
 `[]`, decays to a pointer when passed), multi-dimension arrays
 (`int a[2][3];` — global and local, row-major `a[i][j]`, rows decay to
-pointers, flat initializers `{1,2,3,4,5,6}` work), constant initializers
-(`int x = 5;`, `char c = 'A';`, `char *s = "abc";`), non-constant local
-initializers (any expression — `int x = g + 1;` or `int x = f();` — emitted
-inline after ENT), array initializers (`int a[3] = {1,2,3};` — global and
-local, braces form; char arrays also via `char s[4] = "abc";`; shorter lists
-are C zero-filled, too-long lists error), `void` functions and `(void)`
-parameter lists, array parameters (`int f(int a[3])` decays to a pointer),
-`sizeof` on array names and expressions, and multi-read file semantics (each
-`read` advances a per-fd position). String literals are NUL-terminated in
-memory (the reference relies on zeroed pages — consecutive literals would
-otherwise bleed into each other). Still unsupported: nested-brace multi-dim
-initializers (the flat form works), non-constant global initializers (locals
-support any expression), and exotic printf specs (`%n`, `%p`).
+pointers), constant initializers (`int x = 5;`, `char c = 'A';`,
+`char *s = "abc";`), non-constant local initializers (any expression —
+`int x = g + 1;` or `int x = f();` — emitted inline after ENT), array
+initializers (`int a[3] = {1,2,3};` — global and local; multi-dim nested
+braces `{{1,2,3},{4,5,6}}` with C 6.7.9 brace elision; char arrays also via
+`char s[4] = "abc";`; shorter lists are C zero-filled, too-long lists error),
+non-constant global initializers (`int h = g + 2;` — a startup prologue runs
+them before main), `void` functions and `(void)` parameter lists, array
+parameters (`int f(int a[3])` decays to a pointer), `sizeof` on array names
+and expressions, printf `%n` (writes the running count) and `%p` (hex
+pointer), and multi-read file semantics (each `read` advances a per-fd
+position). String literals are NUL-terminated in memory (the reference
+relies on zeroed pages — consecutive literals would otherwise bleed into
+each other). Still unsupported: `%*` dynamic width, `sizeof` of a multi-dim
+row (gives the element size), and pointer-to-row types (`&a[i]` on a
+multi-dim array is a plain pointer).
 
-Tests (135 checks — probe gate, VM selftest, lexer selftest, and the program
+Tests (142 checks — probe gate, VM selftest, lexer selftest, and the program
 corpus whose exit codes/outputs are cross-verified against the reference
 build):
 
