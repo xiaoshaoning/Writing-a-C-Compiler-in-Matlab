@@ -769,7 +769,7 @@ function seed_symbols()
 % seed_symbols — port of xc.c main's keyword/library seeding. Lexes the
 % keyword+syscall string so the identifiers land in the symbol table:
 % keywords get Token = Char..While, syscalls get Class=Sys/Type=INT/
-% Value=opcode, 'void' becomes Char, 'main' is recorded as idmain.
+% Value=opcode, 'void' becomes Void (165), 'main' is recorded as idmain.
 global src si current_id symbols symbol_names idmain
 
 src = ['char else enum if int return sizeof while ', ...

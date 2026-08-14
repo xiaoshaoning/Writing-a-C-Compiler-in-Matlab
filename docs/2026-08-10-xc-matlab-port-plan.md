@@ -1,7 +1,7 @@
 # xc.m — C Interpreter in MATLAB: Implementation Plan
 
 > **Status:** All phases 0-7 complete — full feature parity reached
-> (hello.c byte-exact vs the reference, suite green 95/95), plus post-parity
+> (hello.c byte-exact vs the reference, suite green 105/105), plus post-parity
 > additions (block comments, %s, arrays, initializers, void, multi-read —
 > suite 105/105).
 > **For agentic workers:** phases use checkbox (`- [ ]`) syntax for tracking. This

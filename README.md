@@ -17,7 +17,7 @@ Building compilers/interpreters in MATLAB, following two classic tutorials:
 cc_int.m              assembly compiler (return N; → x86-64 .s)
 xc.m                  C interpreter (lexer → parser → VM → syscalls)
 tests/
-  run_tests.m         test harness (94 checks: probe gate, VM, lexer,
+  run_tests.m         test harness (105 checks: probe gate, VM, lexer,
                       program corpus, syscall/acceptance)
   programs/           test C programs
     return_2.c        return 2; (part 1 of the Norasandler series)
@@ -25,7 +25,7 @@ tests/
 docs/
   2026-08-10-xc-matlab-port-plan.md        implementation plan
   PROJECT_STATUS.md                        current project status
-  2026-08-10-matlab-clone-bug-report.md    bugs found in the MATLAB clone
+  2026-08-10-matlab-clone-bug-report.md    bugs found in the MATLAB clone (internal)
 ```
 
 ## Running
@@ -33,7 +33,7 @@ docs/
 MATLAB code runs on the custom MATLAB clone:
 
 ```
-D:\Projects\codes\MATLAB_in_c\release\v1.2.50\matlab.bat
+D:\Projects\codes\MATLAB_in_c\release\v1.3.21\matlab.bat
 ```
 
 ### Assembly track (cc_int.m)
@@ -79,7 +79,7 @@ advances a per-fd position). Still unsupported: array initializers
 (`int a[3] = {1,2,3};`), array/`void` parameters, multi-dimension arrays,
 and non-constant initializers.
 
-Tests (94 checks — probe gate, VM selftest, lexer selftest, and the program
+Tests (105 checks — probe gate, VM selftest, lexer selftest, and the program
 corpus whose exit codes/outputs are cross-verified against the reference
 build):
 
@@ -92,8 +92,7 @@ matlab.bat tests/run_tests.m
 - `xc.m` is a derivative port of `xc.c` (GPL2, lotabout/write-a-C-interpreter,
   itself derived from c4). `hello.c` is copied from the same repo. The project
   should adopt GPL2 before publishing.
-- Known bugs in the MATLAB clone (v1.2.37, fixed across v1.2.38-v1.2.50) are
-  tracked in
-  [docs/2026-08-10-matlab-clone-bug-report.md](docs/2026-08-10-matlab-clone-bug-report.md);
-  the port targets v1.2.50, follows real MATLAB semantics, and avoids the
-  remaining quirks defensively.
+- Known bugs in the MATLAB clone (v1.2.37, fixed across v1.2.38-v1.3.21) are
+  tracked in an internal bug report (`docs/2026-08-10-matlab-clone-bug-report.md`,
+  gitignored — not shipped with the repo); the port targets v1.3.21, follows
+  real MATLAB semantics, and avoids the remaining quirks defensively.

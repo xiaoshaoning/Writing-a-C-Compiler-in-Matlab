@@ -26,7 +26,7 @@ x86-64 COFF assembly (Norasandler series), verified end-to-end through gcc.
 ## Verification
 
 - **Test suite**: `tests/run_tests.m` — **105/105** on the target runtime.
-  Groups: runtime-primitive gate (probe), 25-case VM selftest, 8-case lexer
+  Groups: runtime-primitive gate (probe), 25-case VM selftest, 9-case lexer
   selftest, program corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke.
 - **Reference cross-check**: the reference `xc.c` built with gcc 15.2.0
   (`C:\msys64\ucrt64\bin\gcc.exe`). Every corpus program's exit code is
