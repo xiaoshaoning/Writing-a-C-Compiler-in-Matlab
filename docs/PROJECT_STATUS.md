@@ -25,8 +25,8 @@ x86-64 COFF assembly (Norasandler series), verified end-to-end through gcc.
 
 ## Verification
 
-- **Test suite**: `tests/run_tests.m` — **105/105** on the target runtime.
-  Groups: runtime-primitive gate (probe), 25-case VM selftest, 9-case lexer
+- **Test suite**: `tests/run_tests.m` — **111/111** on the target runtime.
+  Groups: runtime-primitive gate (probe), 26-case VM selftest, 9-case lexer
   selftest, program corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke.
 - **Reference cross-check**: the reference `xc.c` built with gcc 15.2.0
   (`C:\msys64\ucrt64\bin\gcc.exe`). Every corpus program's exit code is
@@ -80,7 +80,7 @@ report.
 ## Running
 
 ```
-D:\...\matlab.bat tests/run_tests.m          # full suite (105 checks)
+D:\...\matlab.bat tests/run_tests.m          # full suite (111 checks)
 D:\...\matlab.bat -batch "xc('tests/programs/hello.c')"   # acceptance program
 D:\...\matlab.bat -batch "xc('-s', 'tests/programs/hello.c')"  # compile dump
 D:\...\matlab.bat -batch "xc('-d', 'tests/programs/hello.c')"  # trace

@@ -17,7 +17,7 @@ Building compilers/interpreters in MATLAB, following two classic tutorials:
 cc_int.m              assembly compiler (return N; → x86-64 .s)
 xc.m                  C interpreter (lexer → parser → VM → syscalls)
 tests/
-  run_tests.m         test harness (105 checks: probe gate, VM, lexer,
+  run_tests.m         test harness (111 checks: probe gate, VM, lexer,
                       program corpus, syscall/acceptance)
   programs/           test C programs
     return_2.c        return 2; (part 1 of the Norasandler series)
@@ -79,7 +79,7 @@ advances a per-fd position). Still unsupported: array initializers
 (`int a[3] = {1,2,3};`), array/`void` parameters, multi-dimension arrays,
 and non-constant initializers.
 
-Tests (105 checks — probe gate, VM selftest, lexer selftest, and the program
+Tests (111 checks — probe gate, VM selftest, lexer selftest, and the program
 corpus whose exit codes/outputs are cross-verified against the reference
 build):
 

@@ -14,8 +14,8 @@ global token token_val src si line          % lexer
 global old_src old_text                     % -s dump state
 global text ti pc bp sp ax cycle            % VM + text segment
 global symbols symbol_names current_id idmain  % symbol table
-global mem data data_top hp stack_base      % memory segments
-global expr_type basetype index_of_bp       % parser state
+global mem data hp stack_base      % memory segments
+global expr_type basetype index_of_bp unit_was_array  % parser state
 global fidv                                 % syscall fd registry
 global poolsize assembly debug              % configuration
 
@@ -33,7 +33,6 @@ symbol_names = cell(3276, 1);                 % identifier strings
 current_id   = 0;
 idmain       = 0;
 data         = 0;                           % next free data byte (xc.c char *data)
-data_top     = 0;
 hp           = 0;
 stack_base   = 3 * poolsize;
 sp           = stack_base;
@@ -55,6 +54,7 @@ old_text  = 0;      % 0-based slot of the last -s-dumped instruction
 expr_type    = 1;   % INT
 basetype     = 1;
 index_of_bp  = 0;
+unit_was_array = 0;
 fidv         = [];  % OPEN/READ/CLOS registry (double vector)
 
 % ---- hidden self-test entries (Phases 1-2): must be checked before the
@@ -359,10 +359,14 @@ end
 
 function [q, r] = cdivmod(a, b)
 % cdivmod — C truncating division/remainder for int64 operands, exact for
-% |a|,|b| < 2^53, b ~= 0. Quotient truncates toward zero; the remainder
-% takes the sign of the dividend (xc.c `a / b` / `a % b` semantics).
+% |a|,|b| < 2^53; b == 0 errors (a silent 0 would hide a C div-by-zero
+% crash). Quotient truncates toward zero; the remainder takes the sign
+% of the dividend (xc.c `a / b` / `a % b` semantics).
 % (Integer division of typed operands is not portable across MATLAB
 % versions, so the VM computes it from exact double math.)
+if b == 0
+    fail('division by zero');
+end
 a = double(a);
 b = double(b);
 r = mod(a, b);
@@ -450,7 +454,21 @@ call = [IMM 99 CALL 9 ADJ 1 PUSH EXIT ENT 0 IMM 7 LEV];
 nfail = nfail + run_case(call, 7, 'CALL/ADJ value round-trip -> 7', ...
                          'sp', SB-32);
 
-fprintf('vm_selftest: %d cases, %d failed\n', 25, nfail);
+% --- 7) DIV by zero errors (zero-divisor guard) ---
+try
+    run_case([IMM 1 PUSH IMM 0 DIV PUSH EXIT], 0, 'DIV by zero');
+    fprintf('FAIL  DIV by zero does not error\n');
+    nfail = nfail + 1;
+catch e
+    if ~isempty(strfind(e.message, 'division by zero'))
+        fprintf('PASS  DIV by zero errors\n');
+    else
+        fprintf('FAIL  DIV by zero (wrong message: %s)\n', e.message);
+        nfail = nfail + 1;
+    end
+end
+
+fprintf('vm_selftest: %d cases, %d failed\n', 26, nfail);
 end
 
 function nf = run_case(prog, expected, name, varargin)
@@ -1037,7 +1055,7 @@ function expression(level)
 % levels). Emits VM instructions; expr_type tracks the C type (0=char,
 % 1=int, 2+=pointer).
 global token token_val line current_id symbols expr_type index_of_bp ...
-       text ti data
+       text ti data unit_was_array
 
 % tokens (xc.c enum)
 Num=128; Id=133; Int=138; Sizeof=140;
@@ -1057,6 +1075,7 @@ if token == 0
 end
 
 % ---- unit / unary ----
+unit_was_array = 0;   % set only when the unit is a bare array name (C2)
 if token == Num
     match(Num);
     emit(IMM);
@@ -1135,6 +1154,7 @@ elseif token == Id
                 fail(sprintf('%d: undefined variable', line));
             end
             expr_type = double(idtype - 4096) + PTR;   % pointer to element
+            unit_was_array = 1;
         else
             if symbols(id,5) == Loc
                 emit(LEA);
@@ -1180,8 +1200,10 @@ elseif token == And                 % address-of
     if text(ti+1) == LC || text(ti+1) == LI
         ti = ti - 1;                % drop the load; ax holds the address
         expr_type = expr_type + PTR;
+    elseif ~unit_was_array
+        fail(sprintf('%d: bad address of', line));
     end
-    % else: already an address (array name) — & is a no-op (post-parity)
+    % array name: address already in ax — & is a no-op (post-parity)
 elseif token == 33                  % '!': not
     match(33);
     expression(Inc);
@@ -1240,6 +1262,7 @@ end
 
 % ---- binary / postfix operators ----
 while token >= level
+    unit_was_array = 0;   % any operator makes the expression non-array (C2)
     tmp = expr_type;
     if token == Assign
         match(Assign);
@@ -1610,6 +1633,9 @@ while token == Int || token == Char
         pos_local = pos_local + slots;
         symbols(current_id,6) = int64(pos_local);
         if token == 142             % '=': initializer (post-parity)
+            if isarr
+                fail(sprintf('%d: array initializers not supported', line));
+            end
             match(142);
             inits = [inits; pos_local, double(const_expr()), (type == 0)];
         end
@@ -1742,6 +1768,9 @@ while token ~= 59 && token ~= 125   % ';' '}'
         symbols(current_id,5) = int64(Glo);
         symbols(current_id,6) = int64(data);     % byte address
         data = data + n * elem;
+        if token == 142             % '=': array initializers unsupported
+            fail(sprintf('%d: array initializers not supported', line));
+        end
     else
         symbols(current_id,5) = int64(Glo);
         symbols(current_id,6) = int64(data);     % byte address
@@ -1805,11 +1834,17 @@ fid = fopen(path, mode);
 if fid < 0
     ax = -1;
 else
-    if numel(fidv) >= 16
-        fail('OPEN: too many open files (max 16)');
+    slot = find(fidv == -1, 1);   % reuse a freed fd slot (C3)
+    if ~isempty(slot)
+        fidv(slot) = fid;
+        ax = slot - 1;            % 0-based fd
+    else
+        if numel(fidv) >= 16
+            fail('OPEN: too many open files (max 16)');
+        end
+        fidv = [fidv, fid];
+        ax = numel(fidv) - 1;     % 0-based fd
     end
-    fidv = [fidv, fid];
-    ax = numel(fidv) - 1;   % 0-based fd
 end
 end
 
@@ -1818,7 +1853,7 @@ function ax = sys_read(fd, baddr, cnt)
 % fread(fid, n) stops at EOF and advances the file position (BUG-18 fixed
 % in v1.2.50), so multi-read works directly — no content cache needed.
 global fidv mem
-if fd < 0 || fd >= numel(fidv)
+if fd < 0 || fd >= numel(fidv) || fidv(fd + 1) < 0   % <0: freed slot (C3)
     ax = -1;
     return;
 end
@@ -1833,11 +1868,12 @@ end
 function ax = sys_close(fd)
 % CLOS — fclose by registry fd.
 global fidv
-if fd < 0 || fd >= numel(fidv)
+if fd < 0 || fd >= numel(fidv) || fidv(fd + 1) < 0   % <0: freed slot (C3)
     ax = -1;
     return;
 end
 fclose(fidv(fd + 1));
+fidv(fd + 1) = -1;   % mark the slot free for reuse
 ax = 0;
 end
 
@@ -1931,7 +1967,7 @@ end
 
 function ax = sys_malc(n)
 % MALC — bump allocator: return the old heap pointer, advance by n bytes.
-% The heap lives in [data_top, 2*poolsize); hp starts at data after compile.
+% The heap lives in [data, 2*poolsize); hp starts at data after compile.
 global hp poolsize
 if n < 0 || hp + n > 2*poolsize
     fail(sprintf('MALC: out of heap (hp=%d n=%d)', hp, n));

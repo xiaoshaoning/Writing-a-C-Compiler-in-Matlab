@@ -211,6 +211,10 @@ ptests9 = {
     'pp_init2.c',    95;
     'pp_void.c',      7;
     'pp_mread.c',   406;
+    'pp_addrof.c',   42;
+    'pp_addrof2.c',  78;
+    'pp_addrof3.c',  34;
+    'pp_fdreuse.c',   0;
 };
 for k = 1:size(ptests9, 1)
     try
@@ -231,6 +235,28 @@ try
 catch e
     [npass nfail] = addcheck(npass, nfail, false, ...
         sprintf('pp_s.c: %s', e.message));
+end
+
+% & on a non-lvalue errors (strict address-of)
+try
+    out = evalc('rc = xc(''tests/programs/pp_badaddrof.c'')');
+    [npass nfail] = addcheck(npass, nfail, false, ...
+        'pp_badaddrof.c should error');
+catch e
+    [npass nfail] = addcheck(npass, nfail, ...
+        ~isempty(strfind(e.message, 'bad address of')), ...
+        'pp_badaddrof.c & on non-lvalue errors');
+end
+
+% array initializers error clearly (not a cryptic parse failure)
+try
+    out = evalc('rc = xc(''tests/programs/pp_badarrinit.c'')');
+    [npass nfail] = addcheck(npass, nfail, false, ...
+        'pp_badarrinit.c should error');
+catch e
+    [npass nfail] = addcheck(npass, nfail, ...
+        ~isempty(strfind(e.message, 'array initializer')), ...
+        'pp_badarrinit.c array-initializer error');
 end
 
 fprintf('run_tests: %d tests, %d passed, %d failed\n', npass + nfail, npass, nfail);
