@@ -221,6 +221,21 @@ ptests9 = {
     'pp_arrinit4.c', 195;
     'pp_arrinit5.c', 294;
     'pp_arrinit6.c', 147;
+    'pp_voidparam.c',  7;
+    'pp_arrparam.c',   6;
+    'pp_arrparam2.c', 98;
+    'pp_nonconst.c',   6;
+    'pp_nonconst2.c', 42;
+    'pp_nonconst3.c', -5;
+    'pp_sizeof.c',     4;
+    'pp_sizeof2.c',    5;
+    'pp_mdim.c',      57;
+    'pp_mdim2.c',     93;
+    'pp_mdim3.c',     56;
+    'pp_mdim4.c',      6;
+    'pp_mdim5.c',     82;
+    'pp_mdim6.c',      3;
+    'pp_mdim7.c',     23;
 };
 for k = 1:size(ptests9, 1)
     try
@@ -241,6 +256,28 @@ try
 catch e
     [npass nfail] = addcheck(npass, nfail, false, ...
         sprintf('pp_s.c: %s', e.message));
+end
+
+% printf with length modifiers (%ls, %ld) — stdout check
+try
+    out = evalc('rc = xc(''tests/programs/pp_prtflen.c'')');
+    [npass nfail] = addcheck(npass, nfail, rc == 0 && ...
+        strcmp(out, ['hi 42' char(10) 'exit(0)']), ...
+        'pp_prtflen.c %ls/%ld normalization');
+catch e
+    [npass nfail] = addcheck(npass, nfail, false, ...
+        sprintf('pp_prtflen.c: %s', e.message));
+end
+
+% non-constant GLOBAL initializer errors (locals support it)
+try
+    out = evalc('rc = xc(''tests/programs/pp_badglobinit.c'')');
+    [npass nfail] = addcheck(npass, nfail, false, ...
+        'pp_badglobinit.c should error');
+catch e
+    [npass nfail] = addcheck(npass, nfail, ...
+        ~isempty(strfind(e.message, 'non-constant global initializer')), ...
+        'pp_badglobinit.c global non-const error');
 end
 
 % & on a non-lvalue errors (strict address-of)

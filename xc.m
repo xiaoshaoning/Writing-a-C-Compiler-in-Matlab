@@ -33,9 +33,9 @@ function exit_code = xc(varargin)
 global token token_val src si line          % lexer
 global old_src old_text                     % -s dump state
 global text ti pc bp sp ax cycle            % VM + text segment
-global symbols symbol_names current_id idmain  % symbol table
+global symbols symbol_names current_id idmain array_strides  % symbol table
 global mem data hp stack_base      % memory segments
-global expr_type basetype index_of_bp unit_was_array  % parser state
+global expr_type basetype index_of_bp unit_was_array bstrides  % parser state
 global fidv                                 % syscall fd registry
 global poolsize assembly debug              % configuration
 
@@ -50,6 +50,7 @@ text         = zeros(1, 32768, 'int64');      % instruction segment (0-based wor
 ti           = 0;                             % next free text slot
 symbols      = zeros(3276, 10, 'int64');      % symbol table, IdSize = 10
 symbol_names = cell(3276, 1);                 % identifier strings
+array_strides = cell(3276, 1);   % per-level byte strides for array symbols
 current_id   = 0;
 idmain       = 0;
 data         = 0;                           % next free data byte (xc.c char *data)
@@ -75,6 +76,7 @@ expr_type    = 1;   % INT
 basetype     = 1;
 index_of_bp  = 0;
 unit_was_array = 0;
+bstrides     = [];   % per-level byte strides of the current array-typed expr
 fidv         = [];  % OPEN/READ/CLOS registry (double vector)
 
 % ---- hidden self-test entries (Phases 1-2): must be checked before the
@@ -707,6 +709,11 @@ while true
             si = si + 1;                 % skip the closing quote
         end
         if q == 34
+            % NUL-terminate the stored literal: consecutive strings would
+            % otherwise bleed into each other when align8 pads nothing
+            % (post-parity %s fix — the reference relies on zeroed pages)
+            mem(data+1) = uint8(0);
+            data = data + 1;
             token_val = last_pos;        % string: token_val = data address
         else
             token = 128;                 % char literal -> Num (token_val = char)
@@ -868,9 +875,10 @@ nfail = nfail + lex_case('0 123 0x1F 017 0X2a 65535', ...
 
 % 5) strings + char literals (escape: \n only)
 BS = char(92); SQ = char(39);
+% strings now NUL-terminated in mem: "abc" at 0-3, "a\nb" at 4-7
 nfail = nfail + lex_case(['"abc" "a' BS 'nb" ' SQ 'x' SQ ' ' SQ BS 'n' SQ ' ' SQ BS BS SQ], ...
     [34 34 Num Num Num], 'strings and char literals', ...
-    'vals', [0 3 120 10 92], 'mem', {0, [97 98 99 97 10 98]});
+    'vals', [0 4 120 10 92], 'mem', {0, [97 98 99 0 97 10 98 0]});
 
 % 6) comments and # skip + line counting
 nfail = nfail + lex_case(['int a; // comment' char(10) '#define X 1' char(10) 'int b;'], ...
@@ -900,7 +908,7 @@ function nf = lex_case(srcstr, expected, name, varargin)
 % 'line' expected final line counter; 'mem' {addr, bytes} to verify bytes
 % stored in the data region.
 global src si line token token_val current_id symbols symbol_names ...
-       data mem text ti old_src old_text assembly poolsize
+       array_strides data mem text ti old_src old_text assembly poolsize
 
 nf = 0;
 % reset lexer state
@@ -917,6 +925,7 @@ old_text = 0;
 assembly = 0;
 symbols = zeros(3276, 10, 'int64');
 symbol_names = cell(3276, 1);
+array_strides = cell(3276, 1);
 
 evals = [];
 eline = [];
@@ -983,6 +992,19 @@ if cond
     v = a;
 else
     v = b;
+end
+end
+
+function s = array_strides_of(dims, elem)
+% array_strides_of — per-level byte strides for an array with dims and
+% elem-byte elements: s(j) = elem * prod(dims(j+1:end)), s(end) = elem.
+% For int[2][3] (elem 8): s = [24 8] — a[i] advances 24 bytes, a[i][j] 8.
+n = numel(dims);
+s = zeros(1, n);
+acc = elem;
+for j = n:-1:1
+    s(j) = acc;
+    acc = acc * dims(j);
 end
 end
 
@@ -1075,7 +1097,7 @@ function expression(level)
 % levels). Emits VM instructions; expr_type tracks the C type (0=char,
 % 1=int, 2+=pointer).
 global token token_val line current_id symbols expr_type index_of_bp ...
-       text ti data unit_was_array
+       text ti data unit_was_array bstrides array_strides
 
 % tokens (xc.c enum)
 Num=128; Id=133; Int=138; Sizeof=140;
@@ -1096,6 +1118,7 @@ end
 
 % ---- unit / unary ----
 unit_was_array = 0;   % set only when the unit is a bare array name (C2)
+bstrides = [];        % set only by an array-name unit (multi-dim strides)
 if token == Num
     match(Num);
     emit(IMM);
@@ -1113,21 +1136,41 @@ elseif token == 34                  % '"'
 elseif token == Sizeof
     match(Sizeof);
     match(40);                      % '('
-    expr_type = INT;
-    if token == Int
-        match(Int);
-    elseif token == 134             % Char
-        match(134);
-        expr_type = CHAR;
+    if token == Id && symbols(current_id,4) >= 4096
+        % sizeof(array name) = total bytes (post-parity)
+        match(Id);
+        match(41);
+        emit(IMM);
+        emit(symbols(current_id,10));
+        expr_type = INT;
+    elseif token == Int || token == 134
+        expr_type = INT;
+        if token == Int
+            match(Int);
+        else
+            match(134);             % Char
+            expr_type = CHAR;
+        end
+        while token == Mul
+            match(Mul);
+            expr_type = expr_type + PTR;
+        end
+        match(41);                  % ')'
+        emit(IMM);
+        emit(pick(expr_type == CHAR, 1, 8));   % sizeof(char)=1, sizeof(int)=8
+        expr_type = INT;
+    else
+        % sizeof(<expression>): parse for its type, drop the emitted code
+        % (C does not evaluate the operand of sizeof)
+        saved_ti = ti;
+        expression(Assign);
+        match(41);
+        sz = pick(expr_type == CHAR, 1, 8);
+        ti = saved_ti;
+        emit(IMM);
+        emit(sz);
+        expr_type = INT;
     end
-    while token == Mul
-        match(Mul);
-        expr_type = expr_type + PTR;
-    end
-    match(41);                      % ')'
-    emit(IMM);
-    emit(pick(expr_type == CHAR, 1, 8));   % sizeof(char)=1, sizeof(int)=8
-    expr_type = INT;
 elseif token == Id
     match(Id);
     id = current_id;
@@ -1156,6 +1199,7 @@ elseif token == Id
             emit(tmp);
         end
         expr_type = symbols(id,4);
+        bstrides = [];   % function results are scalars
     elseif symbols(id,5) == Num     % enum constant
         emit(IMM);
         emit(symbols(id,6));
@@ -1175,6 +1219,7 @@ elseif token == Id
             end
             expr_type = double(idtype - 4096) + PTR;   % pointer to element
             unit_was_array = 1;
+            bstrides = array_strides{id};   % per-level byte strides
         else
             if symbols(id,5) == Loc
                 emit(LEA);
@@ -1205,6 +1250,7 @@ elseif token == 40                  % '(': cast or parenthesis
         expression(Assign);
         match(41);                  % ')'
     end
+    bstrides = [];
 elseif token == Mul                 % dereference *addr
     match(Mul);
     expression(Inc);
@@ -1214,16 +1260,19 @@ elseif token == Mul                 % dereference *addr
         fail(sprintf('%d: bad dereference', line));
     end
     emit(pick(expr_type == CHAR, LC, LI));
+    bstrides = [];
 elseif token == And                 % address-of
     match(And);
     expression(Inc);
     if text(ti+1) == LC || text(ti+1) == LI
         ti = ti - 1;                % drop the load; ax holds the address
         expr_type = expr_type + PTR;
-    elseif ~unit_was_array
+        bstrides = [];
+    elseif ~unit_was_array && isempty(bstrides)
         fail(sprintf('%d: bad address of', line));
     end
-    % array name: address already in ax — & is a no-op (post-parity)
+    % array name or multi-dim row: address already in ax — no-op
+    bstrides = [];   % & yields a plain pointer
 elseif token == 33                  % '!': not
     match(33);
     expression(Inc);
@@ -1232,6 +1281,7 @@ elseif token == 33                  % '!': not
     emit(0);
     emit(EQ);
     expr_type = INT;
+    bstrides = [];
 elseif token == 126                 % '~': bitwise not
     match(126);
     expression(Inc);
@@ -1240,10 +1290,12 @@ elseif token == 126                 % '~': bitwise not
     emit(-1);
     emit(XOR);
     expr_type = INT;
+    bstrides = [];
 elseif token == Add                 % unary +
     match(Add);
     expression(Inc);
     expr_type = INT;
+    bstrides = [];
 elseif token == Sub                 % unary -
     match(Sub);
     if token == Num
@@ -1258,6 +1310,7 @@ elseif token == Sub                 % unary -
         emit(MUL);
     end
     expr_type = INT;
+    bstrides = [];
 elseif token == Inc || token == Dec % pre-increment/decrement
     tmp = token;
     match(token);
@@ -1276,6 +1329,7 @@ elseif token == Inc || token == Dec % pre-increment/decrement
     emit(pick(expr_type > PTR, 8, 1));
     emit(pick(tmp == Inc, ADD, SUB));
     emit(pick(expr_type == CHAR, SC, SI));
+    bstrides = [];
 else
     fail(sprintf('%d: bad expression', line));
 end
@@ -1283,6 +1337,8 @@ end
 % ---- binary / postfix operators ----
 while token >= level
     unit_was_array = 0;   % any operator makes the expression non-array (C2)
+    sav_stride = bstrides;   % left operand's per-level strides (multi-dim)
+    bstrides = [];           % default: ops yield scalars/plain pointers
     tmp = expr_type;
     if token == Assign
         match(Assign);
@@ -1372,10 +1428,16 @@ while token >= level
         emit(PUSH);
         expression(Mul);
         expr_type = tmp;
-        if expr_type > PTR          % pointer: scale by sizeof(int)
+        if expr_type > PTR || numel(sav_stride) > 1
+            % pointer/array: scale the int by the element stride
+            if ~isempty(sav_stride)
+                stride = sav_stride(1);
+            else
+                stride = 8;
+            end
             emit(PUSH);
             emit(IMM);
-            emit(8);
+            emit(stride);
             emit(MUL);
         end
         emit(ADD);
@@ -1385,17 +1447,27 @@ while token >= level
         expression(Mul);
         if tmp > PTR && tmp == expr_type
             % pointer - pointer: difference in elements
+            if ~isempty(sav_stride)
+                stride = sav_stride(1);
+            else
+                stride = 8;
+            end
             emit(SUB);
             emit(PUSH);
             emit(IMM);
-            emit(8);
+            emit(stride);
             emit(DIV);
             expr_type = INT;
-        elseif tmp > PTR
-            % pointer - int: scale the int
+        elseif tmp > PTR || numel(sav_stride) > 1
+            % pointer - int: scale the int by the element stride
+            if ~isempty(sav_stride)
+                stride = sav_stride(1);
+            else
+                stride = 8;
+            end
             emit(PUSH);
             emit(IMM);
-            emit(8);
+            emit(stride);
             emit(MUL);
             emit(SUB);
             expr_type = tmp;
@@ -1440,17 +1512,31 @@ while token >= level
         emit(PUSH);
         expression(Assign);
         match(93);                  % ']'
-        if tmp > PTR
+        if tmp > PTR || numel(sav_stride) > 1
+            % scale the index by the pointer/array stride
+            if ~isempty(sav_stride)
+                stride = sav_stride(1);
+            else
+                stride = 8;
+            end
             emit(PUSH);
             emit(IMM);
-            emit(8);
+            emit(stride);
             emit(MUL);
         elseif tmp < PTR
             fail(sprintf('%d: pointer type expected', line));
         end
-        expr_type = tmp - PTR;
-        emit(ADD);
-        emit(pick(expr_type == CHAR, LC, LI));
+        emit(ADD);                  % ax = base + index*stride
+        if numel(sav_stride) > 1
+            % multi-dim: a[i] is still an array — keep the address (no load)
+            bstrides = sav_stride(2:end);
+            expr_type = tmp;
+        else
+            % scalar element: load
+            bstrides = [];
+            expr_type = tmp - PTR;
+            emit(pick(expr_type == CHAR, LC, LI));
+        end
     else
         fail(sprintf('%d: compiler error, token = %d', line, token));
     end
@@ -1551,15 +1637,22 @@ end
 
 function function_parameter()
 % function_parameter — port of xc.c: parse (int a, char *b, ...) and store
-% each parameter as a Loc with Value = its frame slot index.
+% each parameter as a Loc with Value = its frame slot index. Post-parity:
+% (void) declares zero parameters; array parameters (int a[3], char s[])
+% decay to pointers. `)` is left for the caller (function_declaration).
 global token line current_id symbols index_of_bp
 
 % tokens
-Int=138; Char=134; Mul=159; Id=133;
+Int=138; Char=134; Mul=159; Id=133; Void=165; Num=128;
 CHAR=0; INT=1; PTR=2;
 Loc=132;
 
 params = 0;
+if token == Void                  % (void): zero parameters
+    match(Void);
+    index_of_bp = params + 1;
+    return;
+end
 while token ~= 41                   % ')'
     type = INT;
     if token == Int
@@ -1579,6 +1672,16 @@ while token ~= 41                   % ')'
         fail(sprintf('%d: duplicate parameter declaration', line));
     end
     match(Id);
+    if token == 164               % '[': array parameter decays to a pointer
+        while token == 164
+            match(164);
+            if token == Num
+                match(Num);
+            end
+            match(93);            % ']'
+        end
+        type = type + PTR;
+    end
     symbols(current_id,8) = symbols(current_id,5);   % BClass
     symbols(current_id,5) = int64(Loc);              % Class = Loc
     symbols(current_id,7) = symbols(current_id,4);   % BType
@@ -1596,18 +1699,27 @@ end
 function function_body()
 % function_body — port of xc.c: local declarations, ENT for the frame,
 % statements, trailing LEV.
-global token token_val line current_id symbols index_of_bp text ti
+%
+% ENT is emitted FIRST with a placeholder frame size, backpatched after all
+% locals are counted. Initializers emit inline right after ENT — the frame
+% exists at runtime, so scalar initializers may be any expression
+% (non-constant initializers, post-parity).
+global token token_val line current_id symbols index_of_bp text ti array_strides
 
 % tokens
-Int=138; Char=134; Mul=159; Id=133; Num=128;
+Int=138; Char=134; Mul=159; Id=133; Num=128; Assign=142;
 CHAR=0; INT=1; PTR=2;
 Loc=132;
 ENT=6; LEV=8;
+LEA=0; IMM=1; PUSH=13; SI=11; SC=12; ADD=25;
 
 pos_local = index_of_bp;
-inits = zeros(0, 3);   % [slot, value, is_char] — emitted after ENT
-arrinits = cell(1, 64);   % {base_slot, elem_bytes, values} — local arrays
-narr = 0;
+
+% frame first: ENT with a placeholder size, backpatched below
+emit(ENT);
+emit(0);
+ent_slot = ti;      % slot holding the size operand (0-based)
+
 while token == Int || token == Char
     if token == Int
         basetype = INT;
@@ -1629,21 +1741,31 @@ while token == Int || token == Char
             fail(sprintf('%d: duplicate local declaration', line));
         end
         match(Id);
-        if token == 164             % '[': local array (post-parity)
-            match(164);
-            if token ~= Num
-                fail(sprintf('%d: bad array size', line));
-            end
-            n = double(token_val);
-            match(Num);
-            match(93);              % ']'
-            if n < 0
-                fail('bad array size');
+        if token == 164             % '[': local array (post-parity, multi-dim)
+            dims = [];
+            while token == 164
+                match(164);
+                if token ~= Num
+                    fail(sprintf('%d: bad array size', line));
+                end
+                d = double(token_val);
+                match(Num);
+                match(93);          % ']'
+                if d < 0
+                    fail('bad array size');
+                end
+                dims = [dims, d];
             end
             elem = pick(type == 0, 1, 8);
-            slots = ceil(n * elem / 8);
+            nelem = prod(dims);
+            total = elem * nelem;
+            slots = ceil(total / 8);
             isarr = 1;
         else
+            dims = [];
+            elem = pick(type == 0, 1, 8);
+            nelem = 1;
+            total = 0;
             slots = 1;
             isarr = 0;
         end
@@ -1654,15 +1776,20 @@ while token == Int || token == Char
         symbols(current_id,9) = symbols(current_id,6);   % BValue
         pos_local = pos_local + slots;
         symbols(current_id,6) = int64(pos_local);
+        symbols(current_id,10) = int64(total);   % sizeof storage
+        if isarr
+            array_strides{current_id} = array_strides_of(dims, elem);
+        end
         if token == 142             % '=': initializer (post-parity)
             if isarr
+                % array initializer: constant elements only (flat row-major)
                 match(142);
                 if token == 123     % '{': braces form
                     match(123);
                     vals = [];
                     while token ~= 125  % '}'
                         vals = [vals, double(const_expr())];
-                        if numel(vals) > n
+                        if numel(vals) > nelem
                             fail(sprintf('%d: too many array initializers', line));
                         end
                         if token == 44  % ','
@@ -1674,7 +1801,7 @@ while token == Int || token == Char
                     saddr = token_val;
                     next();
                     s = mem_str(saddr);
-                    if numel(s) + 1 > n
+                    if numel(s) + 1 > nelem
                         fail(sprintf('%d: string initializer too long for array', line));
                     end
                     vals = double(s);
@@ -1683,17 +1810,39 @@ while token == Int || token == Char
                 end
                 % C zero-initializes the remaining elements: pad with 0s so
                 % reused (garbage) frame memory cannot leak into the array
-                if numel(vals) < n
-                    vals = [vals, zeros(1, n - numel(vals))];
+                if numel(vals) < nelem
+                    vals = [vals, zeros(1, nelem - numel(vals))];
                 end
-                narr = narr + 1;
-                if narr > numel(arrinits)
-                    fail('too many array initializers');
+                for i = 1:numel(vals)
+                    if elem == 1
+                        % char: byte at base + (i-1)
+                        emit(LEA);
+                        emit(index_of_bp - pos_local);
+                        emit(PUSH);
+                        emit(IMM);
+                        emit(i - 1);
+                        emit(ADD);
+                        emit(PUSH);
+                        emit(IMM);
+                        emit(vals(i));
+                        emit(SC);
+                    else
+                        emit(LEA);       % slot units: base + (i-1)
+                        emit(index_of_bp - pos_local + (i - 1));
+                        emit(PUSH);
+                        emit(IMM);
+                        emit(vals(i));
+                        emit(SI);
+                    end
                 end
-                arrinits{narr} = {pos_local, elem, vals};
             else
+                % scalar initializer: a constant or any runtime expression
                 match(142);
-                inits = [inits; pos_local, double(const_expr()), (type == 0)];
+                emit(LEA);
+                emit(index_of_bp - pos_local);
+                emit(PUSH);
+                expression(Assign);
+                emit(pick(type == 0, SC, SI));
             end
         end
         if token == 44              % ','
@@ -1703,47 +1852,8 @@ while token == Int || token == Char
     match(59);                      % ';'
 end
 
-emit(ENT);
-emit(pos_local - index_of_bp);
-
-% local initializers: the frame must exist first (post-parity)
-for k = 1:size(inits, 1)
-    emit(0);                       % LEA
-    emit(index_of_bp - inits(k,1));
-    emit(13);                      % PUSH
-    emit(1);                       % IMM
-    emit(inits(k,2));
-    emit(pick(inits(k,3) ~= 0, 12, 11));   % SC for char, SI otherwise
-end
-
-% local array initializers: per-element stores (post-parity)
-for k = 1:narr
-    base = arrinits{k}{1};
-    elem = arrinits{k}{2};
-    vals = arrinits{k}{3};
-    for i = 1:numel(vals)
-        if elem == 1
-            % char: byte at base + (i-1)
-            emit(0);                       % LEA
-            emit(index_of_bp - base);
-            emit(13);                      % PUSH (base address)
-            emit(1);                       % IMM
-            emit(i - 1);
-            emit(25);                      % ADD
-            emit(13);                      % PUSH (address)
-            emit(1);                       % IMM
-            emit(vals(i));
-            emit(12);                      % SC
-        else
-            emit(0);                       % LEA (slot units)
-            emit(index_of_bp - base + (i - 1));
-            emit(13);                      % PUSH (address)
-            emit(1);                       % IMM
-            emit(vals(i));
-            emit(11);                      % SI
-        end
-    end
-end
+% backpatch the ENT frame size now that all locals are counted
+text(ent_slot + 1) = int64(pos_local - index_of_bp);
 
 while token ~= 125                  % '}'
     statement();
@@ -1781,7 +1891,7 @@ end
 function global_declaration()
 % global_declaration — port of xc.c: enum / type / comma-separated global
 % variables or function declarations.
-global token line current_id symbols data ti mem token_val
+global token line current_id symbols data ti mem token_val array_strides
 
 % tokens
 Enum=136; Int=138; Char=134; Mul=159; Id=133; Num=128;
@@ -1838,24 +1948,32 @@ while token ~= 59 && token ~= 125   % ';' '}'
         symbols(current_id,5) = int64(Fun);
         symbols(current_id,6) = int64(ti + 1);   % 0-based slot of the body
         function_declaration();
-    elseif token == 164             % '[': array (post-parity)
-        match(164);
-        if token ~= Num
-            fail(sprintf('%d: bad array size', line));
-        end
-        n = double(token_val);
-        match(Num);
-        match(93);                  % ']'
-        if n < 0
-            fail('bad array size');
+    elseif token == 164             % '[': array (post-parity, multi-dim)
+        dims = [];
+        while token == 164
+            match(164);
+            if token ~= Num
+                fail(sprintf('%d: bad array size', line));
+            end
+            d = double(token_val);
+            match(Num);
+            match(93);              % ']'
+            if d < 0
+                fail('bad array size');
+            end
+            dims = [dims, d];
         end
         elem = pick(type == 0, 1, 8);           % CHAR -> 1 byte, else 8
+        nelem = prod(dims);
+        total = elem * nelem;
         symbols(current_id,4) = int64(type + 4096);  % ARRAY_FLAG marker
         symbols(current_id,5) = int64(Glo);
         symbols(current_id,6) = int64(data);     % byte address
-        data = data + n * elem;
-        base = data - n * elem;   % byte address of a[0]; capture before
-                                  % the initializer lexes (strings advance data)
+        symbols(current_id,10) = int64(total);   % sizeof storage
+        array_strides{current_id} = array_strides_of(dims, elem);
+        data = data + total;
+        base = data - total;   % byte address of a[0]; capture before
+                               % the initializer lexes (strings advance data)
         if token == 142             % '=': array initializer (post-parity)
             match(142);
             if token == 123         % '{': braces form
@@ -1869,7 +1987,7 @@ while token ~= 59 && token ~= 125   % ';' '}'
                         word_store(base + 8*i, v);
                     end
                     i = i + 1;
-                    if i > n
+                    if i > nelem
                         fail(sprintf('%d: too many array initializers', line));
                     end
                     if token == 44  % ','
@@ -1881,7 +1999,7 @@ while token ~= 59 && token ~= 125   % ';' '}'
                 saddr = token_val;
                 next();
                 s = mem_str(saddr);
-                if numel(s) + 1 > n
+                if numel(s) + 1 > nelem
                     fail(sprintf('%d: string initializer too long for array', line));
                 end
                 mem(base + 1 : base + numel(s)) = uint8(s);  % NUL padding stays zero
@@ -1894,6 +2012,14 @@ while token ~= 59 && token ~= 125   % ';' '}'
         symbols(current_id,6) = int64(data);     % byte address
         if token == 142             % '=': initializer (post-parity)
             match(142);
+            % globals are initialized at compile time, so only constants
+            % can be used here (locals support runtime expressions)
+            nonconst = (token == Id && symbols(current_id,5) ~= 128) || ...
+                       token == 40 || token == 148 || token == 159 || ...
+                       token == 33 || token == 126 || token == 162 || token == 163;
+            if nonconst
+                fail(sprintf('%d: non-constant global initializer not supported', line));
+            end
             word_store(data, const_expr());
         end
         data = data + 8;
@@ -1996,15 +2122,56 @@ ax = 0;
 end
 
 function ax = sys_prtf(tmp, nargs)
-% PRTF — read the NUL-terminated format string from mem, convert %lld/%llu
-% -> %d/%u, resolve each conversion's arg (%s args are addresses of mem
-% strings; others are numeric), sprintf + fprintf with the resolved args
-% passed individually. Returns the number of characters printed.
+% PRTF — read the NUL-terminated format string from mem, strip length
+% modifiers so sprintf gets plain %d/%u/%s/%c specs, resolve each
+% conversion's arg (%s args are addresses of mem strings; others are
+% numeric), sprintf + fprintf with the resolved args passed individually.
+% Returns the number of characters printed.
 global mem
 fmt_addr = word_load(tmp - 8);
 fmt = mem_str(fmt_addr);
-fmt2 = strrep(fmt, '%lld', '%d');
-fmt2 = strrep(fmt2, '%llu', '%u');
+% Normalize: drop length modifiers (l, ll, h, hh, j, z, t, L) before the
+% conversion char — %lld/%llu/%ld/%lu/%hd/%ls etc. become %d/%u/%d/%u/%d/%s
+% so sprintf accepts them and %s args resolve as strings.
+fmt2 = '';
+i = 1;
+nf = numel(fmt);
+while i <= nf
+    if fmt(i) ~= 37          % '%'
+        fmt2 = [fmt2, fmt(i)];
+        i = i + 1;
+        continue;
+    end
+    j = i + 1;
+    if j <= nf && fmt(j) == 37
+        fmt2 = [fmt2, '%%'];   % literal percent: no arg
+        i = j + 1;
+        continue;
+    end
+    k = j;
+    p = j;
+    while p <= nf   % flags, width, precision (non-alpha)
+        c = double(fmt(p));
+        if ~((c >= 65 && c <= 90) || (c >= 97 && c <= 122))
+            p = p + 1;
+        else
+            break;
+        end
+    end
+    k = p;
+    while k <= nf   % length modifiers (alpha but not the conversion)
+        if ~isempty(strfind('hljztL', fmt(k)))
+            k = k + 1;
+        else
+            break;
+        end
+    end
+    if k > nf
+        fail('PRTF: malformed format spec');
+    end
+    fmt2 = [fmt2, fmt(i), fmt(j:p-1), fmt(k)];
+    i = k + 1;
+end
 nvals = nargs - 1;
 if nvals < 0
     fail('PRTF: bad frame');

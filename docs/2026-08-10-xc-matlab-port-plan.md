@@ -1,9 +1,9 @@
 # xc.m — C Interpreter in MATLAB: Implementation Plan
 
 > **Status:** All phases 0-7 complete — full feature parity reached
-> (hello.c byte-exact vs the reference, suite green 118/118), plus post-parity
+> (hello.c byte-exact vs the reference, suite green 135/135), plus post-parity
 > additions (block comments, %s, arrays, initializers, void, multi-read —
-> suite 118/118).
+> suite 135/135).
 > **For agentic workers:** phases use checkbox (`- [ ]`) syntax for tracking. This
 > project is a git repository — commit after each verified phase; verify via the
 > stated test commands instead.
@@ -417,7 +417,7 @@ added 2026-08-15); `xc.m`/`cc_int.m` carry GPL notice headers.
 ## Post-parity (2026-08-10)
 
 Features beyond the reference dialect, added after full parity, all covered
-by the suite (118/118):
+by the suite (135/135):
 
 | Feature | Design |
 |---|---|
@@ -427,6 +427,11 @@ by the suite (118/118):
 | Initializers | `const_expr()`: Num, ±Num, char literal, string address, enum constant. Globals: stored at data before the 8-byte stride. Locals: buffered `[slot, value, is_char]` and emitted after ENT (LEA/PUSH/IMM/SI|SC) |
 | Array initializers | `int a[N] = {c0, c1, ...};` global (mem/word_store byte writes) and local (buffered, per-element stores emitted after ENT; char elements via LEA/PUSH/IMM/ADD/PUSH/IMM/SC); char arrays also via `char s[N] = "str"`; shorter lists zero-filled (C semantics), too-long lists error |
 | `void` functions | new Void token (165) for the seed; `void f() { return; }` parses (bare `return;` already worked); `void` variables rejected |
+| `(void)` / array params | `void f(void)` declares zero parameters; `int f(int a[3])` / `char s[]` decay to pointers (`Type += PTR`), the caller already passes array addresses |
+| Multi-dim arrays | dims parsed in a loop; per-level byte strides stored per-symbol (`array_strides`), carried through expressions as `bstrides`; `a[i]` of a multi-dim array is an address (no load), `a[i][j]` loads; Add/Sub/Brak scale by the current stride; `sizeof(a)` = total bytes (symbol column 10) |
+| Non-const local inits | ENT emitted first with a placeholder frame size, backpatched after all locals are counted; initializers emit inline after ENT (any expression). Global inits stay compile-time constants (targeted error) |
+| printf length modifiers | PRTF normalizes the format: length modifiers (`h l j z t L`) stripped before the conversion char, so `%ls`/`%ld`/`%hd`/`%llu` become plain `%s`/`%d`/`%u`; string literals NUL-terminated in mem so consecutive literals don't bleed (the reference relied on zeroed pages) |
+| `sizeof` exprs | `sizeof(arr)` (column-10 total), `sizeof(int/char/ptr)`, `sizeof(<expr>)` parsed for its type and the emitted code discarded |
 | Multi-read READ | `sys_read` uses `fread(fid, cnt)` directly — the runtime stops at EOF and advances the file position, so repeated reads work |
 
 Still unsupported (documented): array initializers, array/void parameters,
