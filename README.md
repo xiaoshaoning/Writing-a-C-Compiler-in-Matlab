@@ -96,9 +96,15 @@ matlab.bat -batch "run('tests/run_tests.m');"
 
 ## Notes
 
-- `xc.m` is a derivative port of `xc.c` (GPL2, lotabout/write-a-C-interpreter,
-  itself derived from c4). `hello.c` is copied from the same repo. The project
-  should adopt GPL2 before publishing.
+- Licensed under the **GNU General Public License, version 2** (see
+  `LICENSE`). `xc.m` is a derivative port of `xc.c` (GPL2,
+  lotabout/write-a-C-interpreter, itself derived from c4) and carries a GPL
+  notice header; `tests/programs/hello.c` is copied from the same repo.
+- Reference cross-check: the interpreter's expected exit codes and `hello.c`
+  stdout are verified against the reference `xc.c` build, compiled ad hoc
+  with `gcc xc.c -o xc_ref.exe` from the
+  [lotabout/write-a-C-interpreter](https://github.com/lotabout/write-a-C-interpreter)
+  repository (gcc 15.2.0 at `C:\msys64\ucrt64\bin\gcc.exe`).
 - Known bugs in the MATLAB clone (v1.2.37, fixed across v1.2.38-v1.3.21) are
   tracked in an internal bug report (`docs/2026-08-10-matlab-clone-bug-report.md`,
   gitignored — not shipped with the repo); the port targets v1.3.21, follows

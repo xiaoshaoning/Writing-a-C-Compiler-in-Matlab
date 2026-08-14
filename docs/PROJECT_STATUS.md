@@ -68,14 +68,14 @@ bound). The port targets the current runtime; historical behavior gaps and
 their resolutions are tracked in the (internal, gitignored) runtime bug
 report.
 
-## Open items
+## Resolved items
 
-1. **GPL2 adoption** — `xc.m` is a derivative of GPL2 `xc.c`/c4 and
-   `hello.c` is copied from the same repo; the project should adopt GPL2
-   before publishing (add `LICENSE`, update attribution).
-2. **Reference-build reproducibility** — the cross-check binary is built
-   ad hoc with `gcc xc.c -o xc_ref.exe`; document the command in the README
-   if the acceptance needs to be reproduced independently.
+1. **GPL2 adoption** — DONE (2026-08-15): `LICENSE` added (GNU GPL version 2,
+   canonical FSF text); GPL notice headers on `xc.m`/`cc_int.m`; README
+   attribution updated.
+2. **Reference-build reproducibility** — DONE (2026-08-15): the ad hoc
+   `gcc xc.c -o xc_ref.exe` cross-check command is documented in the README
+   Notes.
 
 ## Running
 

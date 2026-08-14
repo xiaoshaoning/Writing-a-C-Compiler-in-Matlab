@@ -411,7 +411,8 @@ README) — `gcc` is available at `C:\msys64\ucrt64\bin\gcc.exe`.
 
 `xc.m` is a derivative port of `xc.c` (lotabout/write-a-C-interpreter, GPL2,
 itself derived from c4). `tests/programs/hello.c` copied from the same repo with
-attribution. The project should adopt GPL2 before publishing.
+attribution. The project is licensed under the GNU GPL version 2 (`LICENSE`,
+added 2026-08-15); `xc.m`/`cc_int.m` carry GPL notice headers.
 
 ## Post-parity (2026-08-10)
 
