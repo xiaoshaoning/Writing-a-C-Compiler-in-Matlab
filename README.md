@@ -17,7 +17,7 @@ Building compilers/interpreters in MATLAB, following two classic tutorials:
 cc_int.m              assembly compiler (return N; → x86-64 .s)
 xc.m                  C interpreter (lexer → parser → VM → syscalls)
 tests/
-  run_tests.m         test harness (142 checks: probe gate, VM, lexer,
+  run_tests.m         test harness (145 checks: probe gate, VM, lexer,
                       program corpus, syscall/acceptance)
   programs/           test C programs
     return_2.c        return 2; (part 1 of the Norasandler series)
@@ -83,15 +83,17 @@ braces `{{1,2,3},{4,5,6}}` with C 6.7.9 brace elision; char arrays also via
 non-constant global initializers (`int h = g + 2;` — a startup prologue runs
 them before main), `void` functions and `(void)` parameter lists, array
 parameters (`int f(int a[3])` decays to a pointer), `sizeof` on array names
-and expressions, printf `%n` (writes the running count) and `%p` (hex
-pointer), and multi-read file semantics (each `read` advances a per-fd
-position). String literals are NUL-terminated in memory (the reference
-relies on zeroed pages — consecutive literals would otherwise bleed into
-each other). Still unsupported: `%*` dynamic width, `sizeof` of a multi-dim
-row (gives the element size), and pointer-to-row types (`&a[i]` on a
-multi-dim array is a plain pointer).
+and expressions (incl. multi-dim rows: `sizeof(a[0])` = 24 for `int a[2][3]`),
+printf `%*` dynamic width/precision, `%n` (writes the running count) and `%p`
+(hex pointer), pointer-to-(sub)array types via `&` (`(&a[0])[1]` indexes
+rows; `&a` is a pointer to the whole array), and multi-read file semantics
+(each `read` advances a per-fd position). String literals are NUL-terminated
+in memory (the reference relies on zeroed pages — consecutive literals would
+otherwise bleed into each other). The dialect is feature-complete against its
+documented scope; remaining C features (structs, unions, `switch`,
+`for`/`do-while`, …) are outside both the port and the reference dialect.
 
-Tests (142 checks — probe gate, VM selftest, lexer selftest, and the program
+Tests (145 checks — probe gate, VM selftest, lexer selftest, and the program
 corpus whose exit codes/outputs are cross-verified against the reference
 build):
 

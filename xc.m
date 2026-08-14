@@ -36,7 +36,7 @@ global text ti pc bp sp ax cycle            % VM + text segment
 global symbols symbol_names current_id idmain array_strides  % symbol table
 global ginit ginit_n                                % global runtime inits
 global mem data hp stack_base      % memory segments
-global expr_type basetype index_of_bp unit_was_array bstrides  % parser state
+global expr_type basetype index_of_bp unit_was_array bstrides barr_size barr  % parser state
 global fidv                                 % syscall fd registry
 global poolsize assembly debug              % configuration
 
@@ -80,6 +80,8 @@ basetype     = 1;
 index_of_bp  = 0;
 unit_was_array = 0;
 bstrides     = [];   % per-level byte strides of the current array-typed expr
+barr_size    = [];   % byte size of the current array-typed expression
+barr         = 0;    % 1 = the expression is an array VALUE
 fidv         = [];  % OPEN/READ/CLOS registry (double vector)
 
 % ---- hidden self-test entries (Phases 1-2): must be checked before the
@@ -1157,7 +1159,7 @@ function expression(level)
 % levels). Emits VM instructions; expr_type tracks the C type (0=char,
 % 1=int, 2+=pointer).
 global token token_val line current_id symbols expr_type index_of_bp ...
-       text ti data unit_was_array bstrides array_strides
+       text ti data unit_was_array bstrides barr_size barr array_strides
 
 % tokens (xc.c enum)
 Num=128; Id=133; Int=138; Sizeof=140;
@@ -1179,6 +1181,8 @@ end
 % ---- unit / unary ----
 unit_was_array = 0;   % set only when the unit is a bare array name (C2)
 bstrides = [];        % set only by an array-name unit (multi-dim strides)
+barr_size = [];       % byte size of the current array-typed expression
+barr = 0;             % 1 = the expression is an array VALUE (not a pointer)
 if token == Num
     match(Num);
     emit(IMM);
@@ -1196,14 +1200,7 @@ elseif token == 34                  % '"'
 elseif token == Sizeof
     match(Sizeof);
     match(40);                      % '('
-    if token == Id && symbols(current_id,4) >= 4096
-        % sizeof(array name) = total bytes (post-parity)
-        match(Id);
-        match(41);
-        emit(IMM);
-        emit(symbols(current_id,10));
-        expr_type = INT;
-    elseif token == Int || token == 134
+    if token == Int || token == 134
         expr_type = INT;
         if token == Int
             match(Int);
@@ -1221,12 +1218,18 @@ elseif token == Sizeof
         expr_type = INT;
     else
         % sizeof(<expression>): parse for its type, drop the emitted code
-        % (C does not evaluate the operand of sizeof)
+        % (C does not evaluate the operand of sizeof). Array names and
+        % multi-dim rows are array-valued and report their byte size.
         saved_ti = ti;
         expression(Assign);
         match(41);
-        sz = pick(expr_type == CHAR, 1, 8);
+        if barr
+            sz = barr_size;          % array-valued: its byte size
+        else
+            sz = pick(expr_type == CHAR, 1, 8);
+        end
         ti = saved_ti;
+        bstrides = []; barr_size = []; barr = 0;
         emit(IMM);
         emit(sz);
         expr_type = INT;
@@ -1259,7 +1262,7 @@ elseif token == Id
             emit(tmp);
         end
         expr_type = symbols(id,4);
-        bstrides = [];   % function results are scalars
+        bstrides = []; barr_size = []; barr = 0;   % results are scalars
     elseif symbols(id,5) == Num     % enum constant
         emit(IMM);
         emit(symbols(id,6));
@@ -1280,6 +1283,8 @@ elseif token == Id
             expr_type = double(idtype - 4096) + PTR;   % pointer to element
             unit_was_array = 1;
             bstrides = array_strides{id};   % per-level byte strides
+            barr_size = symbols(id,10);     % total bytes (sizeof storage)
+            barr = 1;
         else
             if symbols(id,5) == Loc
                 emit(LEA);
@@ -1306,11 +1311,12 @@ elseif token == 40                  % '(': cast or parenthesis
         match(41);                  % ')'
         expression(Inc);
         expr_type = tmp;
+        bstrides = []; barr_size = []; barr = 0;   % casts yield plain pointers
     else
         expression(Assign);
         match(41);                  % ')'
+        % a plain parenthesised expression keeps the inner array state
     end
-    bstrides = [];
 elseif token == Mul                 % dereference *addr
     match(Mul);
     expression(Inc);
@@ -1320,19 +1326,24 @@ elseif token == Mul                 % dereference *addr
         fail(sprintf('%d: bad dereference', line));
     end
     emit(pick(expr_type == CHAR, LC, LI));
-    bstrides = [];
+    bstrides = []; barr_size = []; barr = 0;
 elseif token == And                 % address-of
     match(And);
     expression(Inc);
     if text(ti+1) == LC || text(ti+1) == LI
         ti = ti - 1;                % drop the load; ax holds the address
         expr_type = expr_type + PTR;
-        bstrides = [];
+        bstrides = []; barr_size = []; barr = 0;
     elseif ~unit_was_array && isempty(bstrides)
         fail(sprintf('%d: bad address of', line));
     end
-    % array name or multi-dim row: address already in ax — no-op
-    bstrides = [];   % & yields a plain pointer
+    % array name or multi-dim row: address already in ax. Prepend the
+    % current sub-array size so the result is a pointer-to-(sub)array:
+    % (&a)[1] advances sizeof(a), (&a[0])[1] advances the row size.
+    if ~isempty(bstrides)
+        bstrides = [barr_size, bstrides];
+        barr = 0;   % & yields a pointer (sizeof gives the pointer size)
+    end
 elseif token == 33                  % '!': not
     match(33);
     expression(Inc);
@@ -1341,7 +1352,7 @@ elseif token == 33                  % '!': not
     emit(0);
     emit(EQ);
     expr_type = INT;
-    bstrides = [];
+    bstrides = []; barr_size = []; barr = 0;
 elseif token == 126                 % '~': bitwise not
     match(126);
     expression(Inc);
@@ -1350,12 +1361,12 @@ elseif token == 126                 % '~': bitwise not
     emit(-1);
     emit(XOR);
     expr_type = INT;
-    bstrides = [];
+    bstrides = []; barr_size = []; barr = 0;
 elseif token == Add                 % unary +
     match(Add);
     expression(Inc);
     expr_type = INT;
-    bstrides = [];
+    bstrides = []; barr_size = []; barr = 0;
 elseif token == Sub                 % unary -
     match(Sub);
     if token == Num
@@ -1370,7 +1381,7 @@ elseif token == Sub                 % unary -
         emit(MUL);
     end
     expr_type = INT;
-    bstrides = [];
+    bstrides = []; barr_size = []; barr = 0;
 elseif token == Inc || token == Dec % pre-increment/decrement
     tmp = token;
     match(token);
@@ -1389,7 +1400,7 @@ elseif token == Inc || token == Dec % pre-increment/decrement
     emit(pick(expr_type > PTR, 8, 1));
     emit(pick(tmp == Inc, ADD, SUB));
     emit(pick(expr_type == CHAR, SC, SI));
-    bstrides = [];
+    bstrides = []; barr_size = []; barr = 0;
 else
     fail(sprintf('%d: bad expression', line));
 end
@@ -1398,7 +1409,7 @@ end
 while token >= level
     unit_was_array = 0;   % any operator makes the expression non-array (C2)
     sav_stride = bstrides;   % left operand's per-level strides (multi-dim)
-    bstrides = [];           % default: ops yield scalars/plain pointers
+    bstrides = []; barr_size = []; barr = 0;  % ops yield scalars/pointers
     tmp = expr_type;
     if token == Assign
         match(Assign);
@@ -1590,10 +1601,12 @@ while token >= level
         if numel(sav_stride) > 1
             % multi-dim: a[i] is still an array — keep the address (no load)
             bstrides = sav_stride(2:end);
+            barr_size = sav_stride(1);   % sub-array size = the stride consumed
+            barr = 1;
             expr_type = tmp;
         else
             % scalar element: load
-            bstrides = [];
+            bstrides = []; barr_size = []; barr = 0;
             expr_type = tmp - PTR;
             emit(pick(expr_type == CHAR, LC, LI));
         end
@@ -2279,6 +2292,23 @@ while i <= nf
     end
     conv = fmt2(j);
     spec = fmt2(i:j);
+    % dynamic width/precision: each '*' consumes an extra arg and is
+    % substituted with its numeric value (a negative width becomes the
+    % '-' left-justify flag, e.g. '%5d' / '%-5d')
+    k = 2;
+    while k <= numel(spec) - 1
+        if spec(k) == '*'
+            if ai > nvals
+                fail('PRTF: more format specs than args');
+            end
+            wd = sprintf('%d', args(ai));
+            ai = ai + 1;
+            spec = [spec(1:k-1), wd, spec(k+1:end)];
+            k = k + numel(wd);
+        else
+            k = k + 1;
+        end
+    end
     if conv == 115            % 's': the arg addresses a mem string
         out = [out, fmt_str_spec(spec, mem_str(args(ai)))];
     elseif conv == 110        % 'n': write the running count to the arg

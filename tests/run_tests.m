@@ -242,6 +242,8 @@ ptests9 = {
     'pp_globinit.c',     5;
     'pp_globinit2.c',   42;
     'pp_badglobinit.c',  5;
+    'pp_sizeofrow.c',   33;
+    'pp_ptrrow.c',      22;
 };
 for k = 1:size(ptests9, 1)
     try
@@ -291,6 +293,17 @@ try
 catch e
     [npass nfail] = addcheck(npass, nfail, false, ...
         sprintf('pp_pptr.c: %s', e.message));
+end
+
+% dynamic width/precision (%*d, %*s, %-*d, %.Ns) — stdout check
+try
+    out = evalc('rc = xc(''tests/programs/pp_dynwidth.c'')');
+    [npass nfail] = addcheck(npass, nfail, rc == 0 && ...
+        strcmp(out, ['[   42][   hi][he][7    ]' char(10) 'exit(0)']), ...
+        'pp_dynwidth.c %%* width/precision');
+catch e
+    [npass nfail] = addcheck(npass, nfail, false, ...
+        sprintf('pp_dynwidth.c: %s', e.message));
 end
 
 % & on a non-lvalue errors (strict address-of)

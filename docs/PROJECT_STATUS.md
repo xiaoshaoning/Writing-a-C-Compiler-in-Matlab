@@ -25,7 +25,7 @@ x86-64 COFF assembly (Norasandler series), verified end-to-end through gcc.
 
 ## Verification
 
-- **Test suite**: `tests/run_tests.m` — **142/142** on the target runtime.
+- **Test suite**: `tests/run_tests.m` — **145/145** on the target runtime.
   Groups: runtime-primitive gate (probe), 26-case VM selftest, 9-case lexer
   selftest, program corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke.
 - **Reference cross-check**: the reference `xc.c` built with gcc 15.2.0
@@ -60,11 +60,14 @@ x86-64 COFF assembly (Norasandler series), verified end-to-end through gcc.
 - `void` functions and `(void)` parameter lists; array parameters decay to
   pointers (`int f(int a[3])`)
 - `sizeof` on array names (total bytes, stored in the symbol table) and on
-  expressions (parsed and discarded)
+  expressions — array-valued operands report their byte size, so
+  `sizeof(a[0])` on `int a[2][3]` is 24
 - printf length modifiers normalized away (`%ls`/`%ld`/`%hd`/`%llu` → plain
-  `%s`/`%d`/`%u`/`%d`); `%n` writes the running count to its arg address,
-  `%p` prints a lowercase-hex pointer; string literals NUL-terminated in mem
-  (consecutive literals no longer bleed)
+  `%s`/`%d`/`%u`/`%d`); `%*` dynamic width/precision; `%n` writes the running
+  count to its arg address; `%p` prints a lowercase-hex pointer; string
+  literals NUL-terminated in mem (consecutive literals no longer bleed)
+- Pointer-to-(sub)array via `&`: `(&a[0])[1]` indexes rows, `&a` is a pointer
+  to the whole array (its strides carry the sub-array size)
 - Constant initializers: `int x = 5;`, `char c = 'A';`, `char *s = "abc";`
 - `void` functions: `void f() { return; }` (void variables rejected)
 - Multi-read file semantics: repeated `read()` calls advance a per-fd
@@ -72,8 +75,10 @@ x86-64 COFF assembly (Norasandler series), verified end-to-end through gcc.
 
 ## Known limitations (documented dialect gaps)
 
-- `%*` dynamic width; `sizeof` of a multi-dim row (element size is reported);
-  pointer-to-row types (`&a[i]` on a multi-dim array is a plain pointer)
+The port is feature-complete against its documented scope. C features outside
+the scope of both the port and the reference dialect (structs, unions,
+`switch`, `for`/`do-while` loops, preprocessor macros, …) are unsupported.
+
 - The `-s` mnemonic column is padded manually to match the reference's
   `%8.4s` output (the runtime pads to width but not to string precision)
 
@@ -99,7 +104,7 @@ report.
 ## Running
 
 ```
-D:\...\matlab.bat tests/run_tests.m          # full suite (142 checks)
+D:\...\matlab.bat tests/run_tests.m          # full suite (145 checks)
 D:\...\matlab.bat -batch "xc('tests/programs/hello.c')"   # acceptance program
 D:\...\matlab.bat -batch "xc('-s', 'tests/programs/hello.c')"  # compile dump
 D:\...\matlab.bat -batch "xc('-d', 'tests/programs/hello.c')"  # trace
