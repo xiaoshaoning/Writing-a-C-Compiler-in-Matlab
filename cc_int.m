@@ -1,7 +1,7 @@
 function cc_int(varargin)
 
 if nargin ~= 2
-   error('USAGE: cc_int return_2.c return_2.s');  
+   error('USAGE: cc_int return_2.c return_2.s');
 end
 
 source_file = varargin{1};
@@ -14,26 +14,63 @@ return_value = [];
 
 while 1
   current_line = fgetl(fid);
-  
+
   if ~ischar(current_line)
       break;
   end
-  
-  % A literal search + manual slice is used instead of 'return.+' (which
-  % relies on regexp quantifiers); both are equivalent for "return <const>;"
-  % lines, and this form is portable across MATLAB implementations.
+
+  % Manual scan (no regexp quantifiers — portability note below): find the
+  % literal 'return', then skip whitespace, an optional '-', and read the
+  % digits. Tolerates spacing variants ("return 2;", "return2;",
+  % "return -2;") and rejects identifiers/comments containing "return"
+  % ("myreturn", "returnValue", "// returns ...") because the next char
+  % is not whitespace or a digit.
   result = regexp(current_line, 'return');
   if ~isempty(result)
-      return_value = current_line(result(1)+7:end-1);
-      break;
+      k = result(1) + 6;          % first char after 'return'
+      while k <= numel(current_line) && ...
+            (current_line(k) == ' ' || current_line(k) == char(9))
+          k = k + 1;
+      end
+      sign = 1;
+      if k <= numel(current_line) && current_line(k) == '-'
+          sign = -1;
+          k = k + 1;
+      end
+      v = 0;
+      got = 0;
+      while k <= numel(current_line) && ...
+            current_line(k) >= '0' && current_line(k) <= '9'
+          v = v * 10 + (current_line(k) - '0');
+          k = k + 1;
+          got = 1;
+      end
+      if got
+          % the rest of the line must be whitespace and an optional ';'
+          % (a plain integer constant only — part-1 scope is `return <int>;`)
+          while k <= numel(current_line) && ...
+                (current_line(k) == ' ' || current_line(k) == char(9))
+              k = k + 1;
+          end
+          if k <= numel(current_line) && current_line(k) == ';'
+              k = k + 1;   % anything after ';' is ignored (comment/ws)
+          elseif k <= numel(current_line)
+              error(sprintf('cc_int: return must be a plain integer constant: %s', ...
+                  current_line));
+          end
+          return_value = sign * v;
+          break;
+      end
   end
 end
-  
+
 fclose(fid);
 
-if ~isempty(return_value) 
+if ~isempty(return_value)
+    [~, name, ext] = fileparts(source_file);
+    srcname = [name, ext];
     fid_output = fopen(destination_file, 'w+');
-    fprintf(fid_output, '\t.file\t\"return_2.c\"\n');
+    fprintf(fid_output, '\t.file\t"%s"\n', srcname);
     fprintf(fid_output, '\t.text\n');
     fprintf(fid_output, '\t.globl\tmain\n');
     % Windows/MSYS2 binutils: ELF-style ".type main, @function" (the
@@ -53,7 +90,7 @@ if ~isempty(return_value)
     fprintf(fid_output, '%%rbp');
     fprintf(fid_output, '\n');
     fprintf(fid_output, '\t.cfi_def_cfa_register 6\n');
-    fprintf(fid_output, '\tmovl\t$%d, ', str2num(return_value));
+    fprintf(fid_output, '\tmovl\t$%d, ', return_value);
     fprintf(fid_output, '%s\n', '%eax');
     fprintf(fid_output, '\tpopq\t');
     fprintf(fid_output, '%%rbp');
@@ -63,6 +100,6 @@ if ~isempty(return_value)
     fprintf(fid_output, '\t.cfi_endproc\n');
     fprintf(fid_output, '.LFE0:\n');
     fclose(fid_output);
-end    
+end
 
 end
