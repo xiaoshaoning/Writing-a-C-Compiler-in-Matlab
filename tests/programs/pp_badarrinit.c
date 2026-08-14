@@ -1,3 +1,3 @@
-// Negative: array initializers are unsupported — must error clearly.
-int a[3] = {1,2,3};
+// Negative: too many array initializers must error.
+int a[3] = {1,2,3,4};
 int main() { return 0; }

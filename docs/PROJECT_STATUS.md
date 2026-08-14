@@ -25,7 +25,7 @@ x86-64 COFF assembly (Norasandler series), verified end-to-end through gcc.
 
 ## Verification
 
-- **Test suite**: `tests/run_tests.m` — **111/111** on the target runtime.
+- **Test suite**: `tests/run_tests.m` — **118/118** on the target runtime.
   Groups: runtime-primitive gate (probe), 26-case VM selftest, 9-case lexer
   selftest, program corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke.
 - **Reference cross-check**: the reference `xc.c` built with gcc 15.2.0
@@ -44,6 +44,9 @@ x86-64 COFF assembly (Norasandler series), verified end-to-end through gcc.
 - `%s` in printf (width/precision/truncation preserved)
 - Array declarations: `int a[10];` global and local; `a[i]`, `&a`, passing
   to functions (decay-to-pointer) all work
+- Array initializers: `int a[3] = {1,2,3};` global and local (braces form);
+  char arrays also via `char s[4] = "abc";` string form; shorter lists are
+  C zero-filled, too-long lists error
 - Constant initializers: `int x = 5;`, `char c = 'A';`, `char *s = "abc";`
 - `void` functions: `void f() { return; }` (void variables rejected)
 - Multi-read file semantics: repeated `read()` calls advance a per-fd
@@ -51,7 +54,6 @@ x86-64 COFF assembly (Norasandler series), verified end-to-end through gcc.
 
 ## Known limitations (documented dialect gaps)
 
-- Array initializers (`int a[3] = {1,2,3};`)
 - Array/`void` parameters, multi-dimension arrays
 - Non-constant initializers (`int a = g;` where `g` is a variable)
 - `sizeof` on array names; `%s` with length modifiers
@@ -80,7 +82,7 @@ report.
 ## Running
 
 ```
-D:\...\matlab.bat tests/run_tests.m          # full suite (111 checks)
+D:\...\matlab.bat tests/run_tests.m          # full suite (118 checks)
 D:\...\matlab.bat -batch "xc('tests/programs/hello.c')"   # acceptance program
 D:\...\matlab.bat -batch "xc('-s', 'tests/programs/hello.c')"  # compile dump
 D:\...\matlab.bat -batch "xc('-d', 'tests/programs/hello.c')"  # trace

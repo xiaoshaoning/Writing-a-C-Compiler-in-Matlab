@@ -1596,7 +1596,7 @@ end
 function function_body()
 % function_body — port of xc.c: local declarations, ENT for the frame,
 % statements, trailing LEV.
-global token line current_id symbols index_of_bp text ti
+global token token_val line current_id symbols index_of_bp text ti
 
 % tokens
 Int=138; Char=134; Mul=159; Id=133; Num=128;
@@ -1606,6 +1606,8 @@ ENT=6; LEV=8;
 
 pos_local = index_of_bp;
 inits = zeros(0, 3);   % [slot, value, is_char] — emitted after ENT
+arrinits = cell(1, 64);   % {base_slot, elem_bytes, values} — local arrays
+narr = 0;
 while token == Int || token == Char
     if token == Int
         basetype = INT;
@@ -1654,10 +1656,45 @@ while token == Int || token == Char
         symbols(current_id,6) = int64(pos_local);
         if token == 142             % '=': initializer (post-parity)
             if isarr
-                fail(sprintf('%d: array initializers not supported', line));
+                match(142);
+                if token == 123     % '{': braces form
+                    match(123);
+                    vals = [];
+                    while token ~= 125  % '}'
+                        vals = [vals, double(const_expr())];
+                        if numel(vals) > n
+                            fail(sprintf('%d: too many array initializers', line));
+                        end
+                        if token == 44  % ','
+                            match(44);
+                        end
+                    end
+                    match(125);
+                elseif token == 34 && type == CHAR  % '=' "str": copy bytes
+                    saddr = token_val;
+                    next();
+                    s = mem_str(saddr);
+                    if numel(s) + 1 > n
+                        fail(sprintf('%d: string initializer too long for array', line));
+                    end
+                    vals = double(s);
+                else
+                    fail(sprintf('%d: bad array initializer', line));
+                end
+                % C zero-initializes the remaining elements: pad with 0s so
+                % reused (garbage) frame memory cannot leak into the array
+                if numel(vals) < n
+                    vals = [vals, zeros(1, n - numel(vals))];
+                end
+                narr = narr + 1;
+                if narr > numel(arrinits)
+                    fail('too many array initializers');
+                end
+                arrinits{narr} = {pos_local, elem, vals};
+            else
+                match(142);
+                inits = [inits; pos_local, double(const_expr()), (type == 0)];
             end
-            match(142);
-            inits = [inits; pos_local, double(const_expr()), (type == 0)];
         end
         if token == 44              % ','
             match(44);
@@ -1677,6 +1714,35 @@ for k = 1:size(inits, 1)
     emit(1);                       % IMM
     emit(inits(k,2));
     emit(pick(inits(k,3) ~= 0, 12, 11));   % SC for char, SI otherwise
+end
+
+% local array initializers: per-element stores (post-parity)
+for k = 1:narr
+    base = arrinits{k}{1};
+    elem = arrinits{k}{2};
+    vals = arrinits{k}{3};
+    for i = 1:numel(vals)
+        if elem == 1
+            % char: byte at base + (i-1)
+            emit(0);                       % LEA
+            emit(index_of_bp - base);
+            emit(13);                      % PUSH (base address)
+            emit(1);                       % IMM
+            emit(i - 1);
+            emit(25);                      % ADD
+            emit(13);                      % PUSH (address)
+            emit(1);                       % IMM
+            emit(vals(i));
+            emit(12);                      % SC
+        else
+            emit(0);                       % LEA (slot units)
+            emit(index_of_bp - base + (i - 1));
+            emit(13);                      % PUSH (address)
+            emit(1);                       % IMM
+            emit(vals(i));
+            emit(11);                      % SI
+        end
+    end
 end
 
 while token ~= 125                  % '}'
@@ -1715,7 +1781,7 @@ end
 function global_declaration()
 % global_declaration — port of xc.c: enum / type / comma-separated global
 % variables or function declarations.
-global token line current_id symbols data ti
+global token line current_id symbols data ti mem token_val
 
 % tokens
 Enum=136; Int=138; Char=134; Mul=159; Id=133; Num=128;
@@ -1788,8 +1854,40 @@ while token ~= 59 && token ~= 125   % ';' '}'
         symbols(current_id,5) = int64(Glo);
         symbols(current_id,6) = int64(data);     % byte address
         data = data + n * elem;
-        if token == 142             % '=': array initializers unsupported
-            fail(sprintf('%d: array initializers not supported', line));
+        base = data - n * elem;   % byte address of a[0]; capture before
+                                  % the initializer lexes (strings advance data)
+        if token == 142             % '=': array initializer (post-parity)
+            match(142);
+            if token == 123         % '{': braces form
+                match(123);
+                i = 0;
+                while token ~= 125  % '}'
+                    v = const_expr();
+                    if type == CHAR
+                        mem(base + i + 1) = uint8(v);
+                    else
+                        word_store(base + 8*i, v);
+                    end
+                    i = i + 1;
+                    if i > n
+                        fail(sprintf('%d: too many array initializers', line));
+                    end
+                    if token == 44  % ','
+                        match(44);
+                    end
+                end
+                match(125);
+            elseif token == 34 && type == CHAR  % '=' "str": copy bytes
+                saddr = token_val;
+                next();
+                s = mem_str(saddr);
+                if numel(s) + 1 > n
+                    fail(sprintf('%d: string initializer too long for array', line));
+                end
+                mem(base + 1 : base + numel(s)) = uint8(s);  % NUL padding stays zero
+            else
+                fail(sprintf('%d: bad array initializer', line));
+            end
         end
     else
         symbols(current_id,5) = int64(Glo);

@@ -215,6 +215,12 @@ ptests9 = {
     'pp_addrof2.c',  78;
     'pp_addrof3.c',  34;
     'pp_fdreuse.c',   0;
+    'pp_arrinit.c', 789;
+    'pp_arrinit2.c', 123;
+    'pp_arrinit3.c', 198;
+    'pp_arrinit4.c', 195;
+    'pp_arrinit5.c', 294;
+    'pp_arrinit6.c', 147;
 };
 for k = 1:size(ptests9, 1)
     try
@@ -248,15 +254,26 @@ catch e
         'pp_badaddrof.c & on non-lvalue errors');
 end
 
-% array initializers error clearly (not a cryptic parse failure)
+% array initializer errors are clear (too many / bad form)
 try
     out = evalc('rc = xc(''tests/programs/pp_badarrinit.c'')');
     [npass nfail] = addcheck(npass, nfail, false, ...
         'pp_badarrinit.c should error');
 catch e
     [npass nfail] = addcheck(npass, nfail, ...
-        ~isempty(strfind(e.message, 'array initializer')), ...
-        'pp_badarrinit.c array-initializer error');
+        ~isempty(strfind(e.message, 'too many array initializer')), ...
+        'pp_badarrinit.c too-many-initializers error');
+end
+
+% char-array string initializer too long errors
+try
+    out = evalc('rc = xc(''tests/programs/pp_badarrinit2.c'')');
+    [npass nfail] = addcheck(npass, nfail, false, ...
+        'pp_badarrinit2.c should error');
+catch e
+    [npass nfail] = addcheck(npass, nfail, ...
+        ~isempty(strfind(e.message, 'string initializer too long')), ...
+        'pp_badarrinit2.c string-too-long error');
 end
 
 fprintf('run_tests: %d tests, %d passed, %d failed\n', npass + nfail, npass, nfail);

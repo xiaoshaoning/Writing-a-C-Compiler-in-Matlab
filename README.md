@@ -17,7 +17,7 @@ Building compilers/interpreters in MATLAB, following two classic tutorials:
 cc_int.m              assembly compiler (return N; → x86-64 .s)
 xc.m                  C interpreter (lexer → parser → VM → syscalls)
 tests/
-  run_tests.m         test harness (111 checks: probe gate, VM, lexer,
+  run_tests.m         test harness (118 checks: probe gate, VM, lexer,
                       program corpus, syscall/acceptance)
   programs/           test C programs
     return_2.c        return 2; (part 1 of the Norasandler series)
@@ -73,13 +73,15 @@ Post-parity additions beyond the reference dialect (all in the suite):
 precision preserved), array declarations (`int a[10];` — global and local,
 indexed via `[]`, decays to a pointer when passed), constant initializers
 (`int x = 5;`, `char c = 'A';`, `char *s = "abc";` — local initializers
-compile to post-ENT stores), `void` functions (`void f() { return; }`;
-`void` variables are rejected), and multi-read file semantics (each `read`
-advances a per-fd position). Still unsupported: array initializers
-(`int a[3] = {1,2,3};`), array/`void` parameters, multi-dimension arrays,
-and non-constant initializers.
+compile to post-ENT stores), array initializers (`int a[3] = {1,2,3};` —
+global and local, braces form; char arrays also via `char s[4] = "abc";`;
+shorter lists are C zero-filled, too-long lists error), `void` functions
+(`void f() { return; }`; `void` variables are rejected), and multi-read file
+semantics (each `read` advances a per-fd position). Still unsupported:
+array/`void` parameters, multi-dimension arrays, and non-constant
+initializers.
 
-Tests (111 checks — probe gate, VM selftest, lexer selftest, and the program
+Tests (118 checks — probe gate, VM selftest, lexer selftest, and the program
 corpus whose exit codes/outputs are cross-verified against the reference
 build):
 

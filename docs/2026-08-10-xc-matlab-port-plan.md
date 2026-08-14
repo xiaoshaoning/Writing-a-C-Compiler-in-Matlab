@@ -1,9 +1,9 @@
 # xc.m — C Interpreter in MATLAB: Implementation Plan
 
 > **Status:** All phases 0-7 complete — full feature parity reached
-> (hello.c byte-exact vs the reference, suite green 111/111), plus post-parity
+> (hello.c byte-exact vs the reference, suite green 118/118), plus post-parity
 > additions (block comments, %s, arrays, initializers, void, multi-read —
-> suite 111/111).
+> suite 118/118).
 > **For agentic workers:** phases use checkbox (`- [ ]`) syntax for tracking. This
 > project is a git repository — commit after each verified phase; verify via the
 > stated test commands instead.
@@ -417,7 +417,7 @@ added 2026-08-15); `xc.m`/`cc_int.m` carry GPL notice headers.
 ## Post-parity (2026-08-10)
 
 Features beyond the reference dialect, added after full parity, all covered
-by the suite (111/111):
+by the suite (118/118):
 
 | Feature | Design |
 |---|---|
@@ -425,6 +425,7 @@ by the suite (111/111):
 | `%s` in PRTF | format scan resolves each `%...s` arg (an address) to its mem string; specs are kept, so width/precision/truncation work; mixed args passed individually via a preallocated cell |
 | Array declarations | `int a[N];` global (N·8 bytes at data) and local (ceil(N·elem/8) frame slots); `Type += ARRAY_FLAG (0x1000)`; the Id unit emits the address without a load (decay to pointer); `&a` becomes a no-op; `a[i]`, `*p`, `f(a)` all work |
 | Initializers | `const_expr()`: Num, ±Num, char literal, string address, enum constant. Globals: stored at data before the 8-byte stride. Locals: buffered `[slot, value, is_char]` and emitted after ENT (LEA/PUSH/IMM/SI|SC) |
+| Array initializers | `int a[N] = {c0, c1, ...};` global (mem/word_store byte writes) and local (buffered, per-element stores emitted after ENT; char elements via LEA/PUSH/IMM/ADD/PUSH/IMM/SC); char arrays also via `char s[N] = "str"`; shorter lists zero-filled (C semantics), too-long lists error |
 | `void` functions | new Void token (165) for the seed; `void f() { return; }` parses (bare `return;` already worked); `void` variables rejected |
 | Multi-read READ | `sys_read` uses `fread(fid, cnt)` directly — the runtime stops at EOF and advances the file position, so repeated reads work |
 
