@@ -87,6 +87,13 @@ build):
 matlab.bat tests/run_tests.m
 ```
 
+Or in `-batch` mode (the clone does not resolve a script's local functions
+when the script is run by name after `addpath`, so invoke the file with `run`):
+
+```
+matlab.bat -batch "run('tests/run_tests.m');"
+```
+
 ## Notes
 
 - `xc.m` is a derivative port of `xc.c` (GPL2, lotabout/write-a-C-interpreter,

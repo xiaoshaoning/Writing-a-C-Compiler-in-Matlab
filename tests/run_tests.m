@@ -2,8 +2,9 @@
 %
 % Run from the project root:
 %   matlab.bat tests/run_tests.m
-% or:
-%   matlab.bat -batch "addpath('.'); addpath('tests'); run_tests"
+% or (batch mode — the clone does not resolve a script's local functions when
+% the script is run by name after addpath, so invoke the file with run()):
+%   matlab.bat -batch "run('tests/run_tests.m');"
 %
 % Exits non-zero if any test fails.
 
