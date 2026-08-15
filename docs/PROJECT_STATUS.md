@@ -8,14 +8,21 @@ lotabout's [write-a-C-interpreter](https://github.com/lotabout/write-a-C-interpr
 on-the-fly codegen → 38-opcode stack VM → syscalls. All seven planned phases
 are done, plus six post-parity features beyond the reference dialect.
 
-**Assembly track (`cc_int.m`): part 5.** Compiles `return <expr>;` to
+**Assembly track (`cc_int.m`): part 6.** Compiles `return <expr>;` to
 x86-64 COFF assembly (Norasandler series): parts 1-2 `return <int>;` +
-unary operators, part 3 bitwise binary operators (C precedence, arithmetic
-`>>`), part 4 logical `||`/`&&` with short-circuit jumps, part 5
-comparisons (`==`, `!=`, `<`, `>`, `<=`, `>=`, signed) via setcc, all with
-0/1 results, via a tokenizer + recursive-descent parser. Verified
-end-to-end through gcc; a gcc-gated group in the suite compiles and runs the
-`cc2_*.c`–`cc5_*.c` corpus.
+unary operators, part 3 bitwise binary operators, part 4 logical
+`||`/`&&` with short-circuit jumps, part 5 comparisons via setcc, part 6
+arithmetic `+ - * / %` with full C precedence and parenthesised
+sub-expressions (`cltd`/`idivl`, truncation toward zero), via a tokenizer +
+recursive-descent parser. Verified end-to-end through gcc; a gcc-gated
+group in the suite compiles and runs the `cc2_*.c`–`cc6_*.c` corpus.
+
+**Fix (part 6): `cdivmod` negative-divisor bug.** Cross-checking the
+arithmetic corpus against the interpreter exposed a latent `xc.m` bug:
+`mod(a,b)` has the *divisor's* sign, so `7 / -2` gave -4 (C: -3) and
+`7 % -2` gave -1 (C: +1). Rewritten as `q = fix(a/b); r = a - q*b`
+(truncation toward zero, remainder with the dividend's sign) — 4 new VM
+selftest cases (now 30) and `pp_divmod.c` (exit 89) cover it.
 
 ## Deliverables
 
@@ -31,10 +38,10 @@ end-to-end through gcc; a gcc-gated group in the suite compiles and runs the
 
 ## Verification
 
-- **Test suite**: `tests/run_tests.m` — **208/208** on the target runtime
-  (145 interpreter checks + 63 gcc-gated assembly-track checks; the gcc group
+- **Test suite**: `tests/run_tests.m` — **234/234** on the target runtime
+  (146 interpreter checks + 88 gcc-gated assembly-track checks; the gcc group
   skips if gcc is absent).
-  Groups: runtime-primitive gate (probe), 26-case VM selftest, 9-case lexer
+  Groups: runtime-primitive gate (probe), 30-case VM selftest, 9-case lexer
   selftest, program corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke.
 - **Reference cross-check**: the reference `xc.c` built with gcc 15.2.0
   (`C:\msys64\ucrt64\bin\gcc.exe`). Every corpus program's exit code is
@@ -112,7 +119,7 @@ report.
 ## Running
 
 ```
-D:\...\matlab.bat tests/run_tests.m          # full suite (208 checks)
+D:\...\matlab.bat tests/run_tests.m          # full suite (234 checks)
 D:\...\matlab.bat -batch "xc('tests/programs/hello.c')"   # acceptance program
 D:\...\matlab.bat -batch "xc('-s', 'tests/programs/hello.c')"  # compile dump
 D:\...\matlab.bat -batch "xc('-d', 'tests/programs/hello.c')"  # trace

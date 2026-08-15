@@ -244,6 +244,7 @@ ptests9 = {
     'pp_badglobinit.c',  5;
     'pp_sizeofrow.c',   33;
     'pp_ptrrow.c',      22;
+    'pp_divmod.c',      89;
 };
 for k = 1:size(ptests9, 1)
     try
@@ -418,6 +419,31 @@ else
         'cc5_chain.c',    1;
         'cc5_chain2.c',   0;
         'cc5_mix.c',      1;
+        'cc6_add.c',      8;
+        'cc6_sub.c',      2;
+        'cc6_mul.c',     15;
+        'cc6_div.c',      3;
+        'cc6_mod.c',      1;
+        'cc6_divneg.c', 253;
+        'cc6_modneg.c', 255;
+        'cc6_modneg2.c',  1;
+        'cc6_prec1.c',   14;
+        'cc6_paren.c',   20;
+        'cc6_negparen.c', 251;
+        'cc6_prec2.c',    5;
+        'cc6_assoc1.c',   1;
+        'cc6_prec3.c',    1;
+        'cc6_prec4.c',    1;
+        'cc6_prec5.c',    8;
+        'cc6_assoc2.c',  50;
+        'cc6_assoc3.c',  10;
+        'cc6_divneg2.c', 253;
+        'cc6_mix1.c',     7;
+        'cc6_assoc4.c',  24;
+        'cc6_paren2.c',  21;
+        'cc6_negparen2.c', 236;
+        'cc6_overflow.c', 44;
+        'cc6_overflow2.c', 128;
     };
     for k = 1:size(cctests, 1)
         try

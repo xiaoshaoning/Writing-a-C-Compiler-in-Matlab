@@ -11,6 +11,10 @@ function cc_int(varargin)
 %   Part 5: comparisons — `==`, `!=`, `<`, `>`, `<=`, `>=` (signed),
 %           precedence equality < relational < shift (C: `a & b < c` is
 %           `a & (b < c)`), results normalize to 0/1 via setcc.
+%   Part 6: arithmetic — `+`, `-`, `*`, `/`, `%` with full C precedence
+%           (relational < shift < additive < term < unary), parenthesised
+%           expressions, integer division truncating toward zero, `%` with
+%           the dividend's sign (cltd/idivl).
 %
 % Emits COFF assembly for MSYS2 binutils on Windows (see README for the
 % gcc invocation). Pipeline: tokenizer (next) → recursive-descent parser
@@ -385,15 +389,15 @@ end
 end
 
 function parse_shift()
-% shift := unary (('<<' | '>>') unary)* — left-associative; the shift
+% shift := additive (('<<' | '>>') additive)* — left-associative; the shift
 % count goes in %cl; '>>' is an arithmetic shift (signed int).
 global token
-parse_unary();
+parse_additive();
 while token == 140 || token == 141   % Shl Shr
     op = token;
     next();
     em('\tpushq\t%rax');        % save the left operand
-    parse_unary();
+    parse_additive();
     em('\tmovl\t%eax, %ecx');   % shift count in %cl
     em('\tpopq\t%rax');
     if op == 140
@@ -404,20 +408,70 @@ while token == 140 || token == 141   % Shl Shr
 end
 end
 
+function parse_additive()
+% additive := term (('+' | '-') term)* — left-associative.
+global token
+parse_term();
+while token == 43 || token == 45   % '+' '-'
+    op = token;
+    next();
+    em('\tpushq\t%rax');
+    parse_term();
+    em('\tmovl\t%eax, %ebx');
+    em('\tpopq\t%rax');
+    if op == 43
+        em('\taddl\t%ebx, %eax');
+    else
+        em('\tsubl\t%ebx, %eax');
+    end
+end
+end
+
+function parse_term()
+% term := unary (('*' | '/' | '%') unary)* — left-associative. '/' and '%'
+% use cltd/idivl: the 64-bit signed quotient is in eax, remainder in edx
+% (C semantics: truncation toward zero, remainder takes the dividend's
+% sign).
+global token
+parse_unary();
+while token == 42 || token == 47 || token == 37   % '*' '/' '%'
+    op = token;
+    next();
+    em('\tpushq\t%rax');
+    parse_unary();
+    em('\tmovl\t%eax, %ebx');
+    em('\tpopq\t%rax');
+    if op == 42
+        em('\timull\t%ebx, %eax');
+    else
+        em('\tcltd');
+        em('\tidivl\t%ebx');
+        if op == 37
+            em('\tmovl\t%edx, %eax');
+        end
+    end
+end
+end
+
 function parse_unary()
-% unary := ('-' | '~' | '!' | '+')* Num. Emits `movl $N, %eax` then
-% applies the operators in reverse (innermost first).
+% unary := ('-' | '~' | '!' | '+')* primary; primary := Num | '(' expr ')'.
+% Emits the primary then applies the operators in reverse (innermost first).
 global token token_val
 ops = [];
 while token == 45 || token == 126 || token == 33 || token == 43   % - ~ ! +
     ops = [ops, token];
     next();
 end
-if token ~= 128
-    fail('expected a number after the unary operators');
+if token == 40              % '(': parenthesised expression
+    next();
+    parse_expr();
+    expect(41);
+elseif token == 128         % Num
+    em(sprintf('\tmovl\t$%d, %%eax', double(token_val)));
+    next();
+else
+    fail('expected a number or parenthesised expression');
 end
-em(sprintf('\tmovl\t$%d, %%eax', double(token_val)));
-next();
 for k = numel(ops):-1:1
     if ops(k) == 45         % '-'
         em('\tnegl\t%eax');

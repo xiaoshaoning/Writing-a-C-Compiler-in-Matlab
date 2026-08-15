@@ -409,7 +409,8 @@ function [q, r] = cdivmod(a, b)
 % cdivmod — C truncating division/remainder for int64 operands, exact for
 % |a|,|b| < 2^53; b == 0 errors (a silent 0 would hide a C div-by-zero
 % crash). Quotient truncates toward zero; the remainder takes the sign
-% of the dividend (xc.c `a / b` / `a % b` semantics).
+% of the dividend (xc.c `a / b` / `a % b` semantics) — including for a
+% NEGATIVE divisor (the old mod-based remainder had the divisor's sign).
 % (Integer division of typed operands is not portable across MATLAB
 % versions, so the VM computes it from exact double math.)
 if b == 0
@@ -417,11 +418,9 @@ if b == 0
 end
 a = double(a);
 b = double(b);
-r = mod(a, b);
-if a < 0 && r ~= 0
-    r = r - b;
-end
-q = int64((a - r) / b);   % exact: quotient is an integer < 2^53
+q = fix(a / b);           % truncate toward zero — exact for |a|,|b| < 2^53
+r = a - q * b;            % remainder with the dividend's sign
+q = int64(q);
 r = int64(r);
 end
 
@@ -453,6 +452,14 @@ nfail = nfail + run_case([IMM -7 PUSH IMM 2 DIV PUSH EXIT], -3, ...
                          'DIV -7/2 -> -3 (trunc)');
 nfail = nfail + run_case([IMM -7 PUSH IMM 2 MOD PUSH EXIT], -1, ...
                          'MOD -7%%2 -> -1');
+nfail = nfail + run_case([IMM 7 PUSH IMM -2 DIV PUSH EXIT], -3, ...
+                         'DIV 7/-2 -> -3 (neg divisor)');
+nfail = nfail + run_case([IMM 7 PUSH IMM -2 MOD PUSH EXIT], 1, ...
+                         'MOD 7%%-2 -> 1 (dividend sign)');
+nfail = nfail + run_case([IMM -7 PUSH IMM -2 DIV PUSH EXIT], 3, ...
+                         'DIV -7/-2 -> 3 (neg divisor)');
+nfail = nfail + run_case([IMM -7 PUSH IMM -2 MOD PUSH EXIT], -1, ...
+                         'MOD -7%%-2 -> -1 (dividend sign)');
 nfail = nfail + run_case([IMM 5 PUSH IMM 3 SUB PUSH EXIT], 2, 'SUB 5-3 -> 2');
 nfail = nfail + run_case([IMM 1 PUSH IMM 40 SHL PUSH EXIT], 2^40, 'SHL 1<<40');
 nfail = nfail + run_case([IMM 2^40 PUSH IMM 40 SHR PUSH EXIT], 1, 'SHR 2^40>>40');
@@ -516,7 +523,7 @@ catch e
     end
 end
 
-fprintf('vm_selftest: %d cases, %d failed\n', 26, nfail);
+fprintf('vm_selftest: %d cases, %d failed\n', 30, nfail);
 end
 
 function nf = run_case(prog, expected, name, varargin)
