@@ -81,6 +81,21 @@ both tracks, the interpreter's trailing `exit(N)` trace stripped) and the
 cc17 corpus. Also: `#` preprocessor lines are skipped by the lexer, and the
 harness retries gcc once for the documented transient flakes.
 
+**Compiler: parity completion (2026-08-15) — 47/47 of the matchable
+interpreter corpus agrees through both tracks.** Three compiler gaps
+closed: the emitted `.comm` used the byte size as the COFF alignment,
+which mingw ld silently rejects for some values (32/40/48/56/96) — a
+fixed alignment of 16 works for every size; `(void)` params
+double-consumed the `)` (leaving `{` for the caller's expect); and the
+CRT printf got the raw `%ls` (wide-string meaning) instead of the
+interpreter's narrow-string convention — the compiler now normalises the
+same length modifiers as xc.m. Plus non-constant global initializers
+(`int h = g + 2;`, `int h = f();`) evaluate in main's startup prologue.
+The output-parity group grew from 6 to 53 programs (hello, p6_*, and 47
+of the pp_* corpus); the 4 excluded are the intended-error tests and
+`%p` (synthetic interpreter pointers vs real addresses — inherently
+unmatchable).
+
 ## Deliverables
 
 | Phase | Scope | Commit |
@@ -95,9 +110,9 @@ harness retries gcc once for the documented transient flakes.
 
 ## Verification
 
-- **Test suite**: `tests/run_tests.m` — **621/621** on the target runtime
+- **Test suite**: `tests/run_tests.m` — **668/668** on the target runtime
   (146 interpreter checks + 282 gcc-gated assembly-track checks + 187
-  cross-track parity checks + 6 cross-track output-parity checks; the gcc group skips if gcc is absent).
+  cross-track parity checks + 53 cross-track output-parity checks; the gcc group skips if gcc is absent).
   Groups: runtime-primitive gate (probe), 30-case VM selftest, 9-case lexer
   selftest, program corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke.
 - **Reference cross-check**: the reference `xc.c` built with gcc 15.2.0
@@ -176,7 +191,7 @@ report.
 ## Running
 
 ```
-D:\...\matlab.bat tests/run_tests.m          # full suite (621 checks)
+D:\...\matlab.bat tests/run_tests.m          # full suite (668 checks)
 D:\...\matlab.bat -batch "xc('tests/programs/hello.c')"   # acceptance program
 D:\...\matlab.bat -batch "xc('-s', 'tests/programs/hello.c')"  # compile dump
 D:\...\matlab.bat -batch "xc('-d', 'tests/programs/hello.c')"  # trace

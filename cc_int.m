@@ -55,7 +55,7 @@ function cc_int(varargin)
 global src si token token_val idname strtext out fname lbl lvars lvartype ...
        lvararr fbytes funcs fret called retlbl cfn globals gtype garr glist ...
        strs nstr etype ltype cret loopctx stags sdefs nstid estruc ...
-       lvarstruct gstruct typedefs enums lvarstride gstride bstride glabels sret sretsize libfns libcalls
+       lvarstruct gstruct typedefs enums lvarstride gstride bstride glabels sret sretsize libfns libcalls ginit
 
 if nargin ~= 2
    error('USAGE: cc_int in.c out.s');
@@ -99,6 +99,7 @@ globals = struct();  % defined global names
 gtype = struct();    % global name -> type code
 garr = struct();     % global name -> 1 if an array
 glist = {};          % {name, type, init or []} for the .comm/.data output
+ginit = {};          % {name, type, codes} non-constant global inits (startup)
 strs = {};           % {label, text} string literals for the .data output
 nstr = 0;            % string-literal counter
 stags = struct();    % struct tag -> stid (struct value types = 1000+2*stid)
@@ -899,7 +900,7 @@ function parse_function_tail(fname2, ischarfn, rettype)
 % after 'type name': '(' params ')' '{' <statements> return '}' — emit the
 % per-function prologue, backpatch the frame size, and the epilogue.
 global token out idname lvars lvartype lvararr lvarstruct fbytes funcs fret ...
-       retlbl cfn cret cvoid glabels fparams frettype sret sretsize sretbase
+       retlbl cfn cret cvoid glabels fparams frettype sret sretsize sretbase ginit
 % ischarfn: 0/1 (char return); rettype: the full return type code (0 int,
 % 1 char, 1000+2*stid struct). A struct return uses a hidden return pointer.
 expect(40);                 % (
@@ -949,6 +950,22 @@ em('\t.cfi_def_cfa_offset 16');
 em('\t.cfi_offset 6, -16');
 em('\tmovq\t%rsp, %rbp');
 em('\t.cfi_def_cfa_register 6');
+if strcmp(fname2, 'main') && ~isempty(ginit)
+    % non-constant global initializers run in main's startup prologue
+    for gk = 1:3:numel(ginit)
+        gname = ginit{gk};
+        gtype2 = ginit{gk+1};
+        icodes = ginit{gk+2};
+        for gkk = 1:numel(icodes)
+            em(icodes{gkk});
+        end
+        if gtype2 == 1
+            em(sprintf('\tmovb\t%%al, %s(%%rip)', gname));
+        else
+            em(sprintf('\tmovq\t%%rax, %s(%%rip)', gname));
+        end
+    end
+end
 frame_idx = em('\tsubq\t$0, %rsp');   % local frame; size backpatched
 
 parse_body();
@@ -983,7 +1000,7 @@ function parse_globals(name, base, depth, fptr)
 % global: name (('[' size ']')* | ('=' const|string|{…})? ) (',' name …)? ';'
 % — collected for the .comm/.data section emitted at the end of the file.
 % fptr: 1 for a global function pointer `type (*name)(params)`.
-global token idname strtext globals gtype garr gstruct glist gstride gvararrsz
+global token idname strtext globals gtype garr gstruct glist gstride gvararrsz out ginit
 while true
     if isfield(globals, name)
         fail(sprintf('duplicate global %s', name));
@@ -1066,13 +1083,26 @@ while true
                 neg = 1;
                 next();
             end
-            if token ~= 128
+            if token == 128
+                initv = double(token_val);
+                next();
+                if neg
+                    initv = -initv;
+                end
+            elseif ~neg
+                % non-constant initializer (a global, call, or expression):
+                % evaluate in main's startup prologue, store to the global
+                sav_out = out;
+                out = {};
+                parse_assignment();
+                icodes = out;
+                out = sav_out;
+                ginit{end+1} = name;    % flat triples: {name, type, codes}
+                ginit{end+1} = t;
+                ginit{end+1} = icodes;
+                initv = [];     % .comm (zero), then set at startup
+            else
                 fail('expected a constant global initializer');
-            end
-            initv = double(token_val);
-            next();
-            if neg
-                initv = -initv;
             end
         end
     end
@@ -1120,7 +1150,7 @@ for k = 1:numel(glist)
         nbytes = 8;
     end
     if isempty(v)
-        em(sprintf('	.comm	%s,%d,%d', nm, nbytes, nbytes));
+        em(sprintf('	.comm	%s,%d,16', nm, nbytes));
     else
         if ~dat
             em('	.data');
@@ -1272,10 +1302,49 @@ end
 
 function lab = new_str(text)
 % new_str — register a string literal, return its label (emitted later).
+% The printf length modifiers are normalised (as in xc.m): %ls/%ld/%llu/
+% %lu/%hd/%hs become %s/%d/%u/%u/%d/%s so the CRT printf agrees with the
+% interpreter's mini-printf (whose %ls means a narrow string).
 global strs nstr
 lab = sprintf('.Lstr%d', nstr);
 nstr = nstr + 1;
-strs{end+1} = {lab, text};
+strs{end+1} = {lab, norm_fmt(text)};
+end
+
+function t = norm_fmt(fmt)
+% norm_fmt — drop printf length modifiers (l, ll, h, hh, j, z, t, L) before
+% the conversion char; flags/width/precision and everything else are kept.
+t = '';
+i = 1;
+nf = numel(fmt);
+while i <= nf
+    if fmt(i) ~= 37          % '%'
+        t = [t, fmt(i)];
+        i = i + 1;
+        continue;
+    end
+    j = i + 1;
+    if j <= nf && fmt(j) == 37
+        t = [t, '%%'];       % literal percent: no arg
+        i = j + 1;
+        continue;
+    end
+    p = j;
+    while p <= nf && ~((fmt(p) >= 'A' && fmt(p) <= 'Z') || ...
+                       (fmt(p) >= 'a' && fmt(p) <= 'z'))
+        p = p + 1;
+    end
+    k = p;
+    while k <= nf && ~isempty(strfind('hljztL', fmt(k)))
+        k = k + 1;
+    end
+    if k > nf
+        t = [t, fmt(i)];     % a lone trailing '%': leave it
+        break;
+    end
+    t = [t, fmt(i), fmt(j:p-1), fmt(k)];
+    i = k + 1;
+end
 end
 
 function parse_body()
@@ -1327,8 +1396,7 @@ sizes = {};
 bvs = {};
 while token ~= 41           % ')'
     if token == 187         % 'void' alone: (void) — zero parameters
-        next();
-        expect(41);
+        next();             % leave the ')' for the caller's expect(41)
         break;
     end
     [base, stdef] = parse_basetype();
