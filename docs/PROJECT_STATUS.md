@@ -8,16 +8,15 @@ lotabout's [write-a-C-interpreter](https://github.com/lotabout/write-a-C-interpr
 on-the-fly codegen → 38-opcode stack VM → syscalls. All seven planned phases
 are done, plus six post-parity features beyond the reference dialect.
 
-**Assembly track (`cc_int.m`): part 13.** Adds `switch` (the value is kept
-in %r10; the cmpq/je dispatch is spliced before the case bodies; `break`
-targets the switch end, `continue` the enclosing loop), `sizeof` (type and
-expression forms), array initializers (`{1,2,3}` and `"str"`, local stores
-or `.data` values, zero-fill), `typedef`, `enum` constants, and
-multi-dimension arrays (`int a[2][3]` with per-level strides and row
-decay, via a `bstride` state like the interpreter). Verified end-to-end
-through gcc; a gcc-gated group in the suite compiles and runs the
-`cc2_*.c`–`cc13_*.c` corpus. By-value struct params/returns remain
-rejected (pass `struct T *`).
+**Cross-track parity harness (2026-08-15).** A suite group that runs the
+shared corpus through BOTH tracks — `xc` (interpreter) and `cc_int`
+(compiler) — and asserts `mod(interp_exit, 256) == compiler_exit` (the OS
+truncates the exit code to the low byte). 187 of the 233 `cc*.c` programs
+are shared and agree; the excluded ones are the documented dialect
+divergences (structs, `switch`, `typedef`, `for`/`do`/`break`/`continue`,
+`+=`, `&&`/`||` value semantics, declaration order, forward references,
+arg-count checks). Two independent implementations confirming each other
+on every suite run.
 
 **Fix (part 6): `cdivmod` negative-divisor bug.** Cross-checking the
 arithmetic corpus against the interpreter exposed a latent `xc.m` bug:
@@ -40,9 +39,9 @@ selftest cases (now 30) and `pp_divmod.c` (exit 89) cover it.
 
 ## Verification
 
-- **Test suite**: `tests/run_tests.m` — **380/380** on the target runtime
-  (146 interpreter checks + 234 gcc-gated assembly-track checks; the gcc
-  group skips if gcc is absent).
+- **Test suite**: `tests/run_tests.m` — **567/567** on the target runtime
+  (146 interpreter checks + 234 gcc-gated assembly-track checks + 187
+  cross-track parity checks; the gcc group skips if gcc is absent).
   Groups: runtime-primitive gate (probe), 30-case VM selftest, 9-case lexer
   selftest, program corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke.
 - **Reference cross-check**: the reference `xc.c` built with gcc 15.2.0
@@ -121,7 +120,7 @@ report.
 ## Running
 
 ```
-D:\...\matlab.bat tests/run_tests.m          # full suite (380 checks)
+D:\...\matlab.bat tests/run_tests.m          # full suite (567 checks)
 D:\...\matlab.bat -batch "xc('tests/programs/hello.c')"   # acceptance program
 D:\...\matlab.bat -batch "xc('-s', 'tests/programs/hello.c')"  # compile dump
 D:\...\matlab.bat -batch "xc('-d', 'tests/programs/hello.c')"  # trace
