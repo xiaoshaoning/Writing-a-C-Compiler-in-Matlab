@@ -15,6 +15,10 @@ function cc_int(varargin)
 %           (relational < shift < additive < term < unary), parenthesised
 %           expressions, integer division truncating toward zero, `%` with
 %           the dividend's sign (cltd/idivl).
+%   Part 7: statements and variables — `int x;`, `int x = 5;` (comma
+%           lists), local stack frame (subq after the prologue, backpatched
+%           size), expression statements, assignment (right-associative,
+%           address-based so `y = x = 5` chains), locals as primaries.
 %
 % Emits COFF assembly for MSYS2 binutils on Windows (see README for the
 % gcc invocation). Pipeline: tokenizer (next) → recursive-descent parser
@@ -24,7 +28,7 @@ function cc_int(varargin)
 %   gcc out.s -o out
 %   .\out.exe  (cmd)  /  ./out  (bash) — exit code is the returned value
 
-global src si token token_val out fname lbl
+global src si token token_val idname out fname lbl lvars nlocals
 
 if nargin ~= 2
    error('USAGE: cc_int in.c out.s');
@@ -47,7 +51,9 @@ si = 1;
 token = 0;
 token_val = 0;
 lbl = 0;      % unique-label counter for short-circuit jumps
-out = '';
+lvars = struct();   % local-variable name -> frame offset (bytes)
+nlocals = 0;        % number of local ints declared in main
+out = {};       % emitted assembly lines (cell; tabs are literal in em)
 
 next();
 parse_program();
@@ -56,8 +62,16 @@ fid_output = fopen(destination_file, 'w+');
 if fid_output < 0
     error(sprintf('could not open(%s)', destination_file));
 end
-fprintf(fid_output, '%s', out);
+fprintf(fid_output, '%s', cc_int_join(out));
 fclose(fid_output);
+end
+
+function s = cc_int_join(lines)
+% cc_int_join — join the emitted line cells into one output string.
+s = '';
+for k = 1:numel(lines)
+    s = [s, lines{k}, char(10)];
+end
 end
 
 % ---------------------------------------------------------------------------
@@ -69,12 +83,13 @@ function fail(msg)
 error(msg);
 end
 
-function em(line)
-% em — append one assembly line to the output buffer. MATLAB strings do
-% not process C escapes, so a literal backslash-t becomes a tab (part 1
-% relied on fprintf-format-string escape processing; this path does not).
+function idx = em(line)
+% em — append one assembly line to the output cell. MATLAB strings do not
+% process C escapes, so a literal backslash-t becomes a tab. Returns the
+% cell index (used to backpatch the frame size).
 global out
-out = [out, strrep(line, '\t', char(9)), char(10)];
+out{end+1} = strrep(line, '\t', char(9));
+idx = numel(out);
 end
 
 function expect(tk)
@@ -88,11 +103,11 @@ end
 end
 
 function next()
-% next — tokenizer. Num=128, Return=130, Int=131, Main=132, Shl=140,
+% next — tokenizer. Num=128, Return=130, Int=131, Id=150, Shl=140,
 % Shr=141, Lan=142, Lor=143, Lt=144, Gt=145, Le=146, Ge=147, Eq=148,
-% Ne=149; single-char operators/braces keep their ASCII code; 0 = EOF.
-% Skips whitespace.
-global src si token token_val
+% Ne=149, Assign=61 ('='); single-char operators/braces keep their ASCII
+% code; 0 = EOF. Skips whitespace. Identifier text goes into idname.
+global src si token token_val idname
 while si <= numel(src)
     c = src(si);
     if c == ' ' || c == char(9) || c == char(10) || c == char(13)
@@ -131,10 +146,9 @@ elseif (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
         token = 130;            % Return
     elseif strcmp(id, 'int')
         token = 131;            % Int
-    elseif strcmp(id, 'main')
-        token = 132;            % Main
     else
-        fail(sprintf('unknown identifier %s', id));
+        token = 150;            % Id (incl. 'main'); text in idname
+        idname = id;
     end
     return;
 elseif c == '='
@@ -143,7 +157,7 @@ elseif c == '='
         si = si + 1;
         token = 148;            % Eq
     else
-        fail('expected == (no assignment in part 5)');
+        token = 61;             % Assign ('=')
     end
     return;
 elseif c == '!'
@@ -205,9 +219,9 @@ end
 end
 
 function parse_program()
-% parse_program — int main() { return <unary>; } — emit the .s template
-% around the parsed body.
-global token out fname
+% parse_program — int main() { <statements> return <expr>; } — emit the .s
+% template around the parsed body, with a backpatched local-frame subq.
+global token out fname lvars nlocals
 em(sprintf('\t.file\t"%s"', fname));
 em('\t.text');
 em('\t.globl\tmain');
@@ -222,20 +236,27 @@ em('\t.cfi_def_cfa_offset 16');
 em('\t.cfi_offset 6, -16');
 em('\tmovq\t%rsp, %rbp');
 em('\t.cfi_def_cfa_register 6');
+frame_idx = em('\tsubq\t$0, %rsp');   % local frame; size backpatched
 
-expect(131);    % int
-expect(132);    % main
-expect(40);     % (
-expect(41);     % )
-expect(123);    % {
-expect(130);    % return
-parse_expr();
-expect(59);     % ;
+expect(131);        % int
+expect_id('main');
+expect(40);         % (
+expect(41);         % )
+expect(123);        % {
+
+% Backpatch the frame size once the locals are counted (parse_body ends
+% after the return statement). Round up to a multiple of 16 (%rsp stays
+% 16-aligned for the runtime's benefit).
+parse_body();
+frame_sz = 16 * ceil(4 * nlocals / 16);
+out{frame_idx} = sprintf('\tsubq\t$%d, %%rsp', frame_sz);
+
 expect(125);    % }
 if token ~= 0
     fail('trailing tokens after the main body');
 end
 
+em('\tmovq\t%rbp, %rsp');   % discard the local frame
 em('\tpopq\t%rbp');
 em('\t.cfi_def_cfa 7, 8');
 em('\tret');
@@ -243,9 +264,100 @@ em('\t.cfi_endproc');
 em('.LFE0:');
 end
 
+function parse_body()
+% parse_body — declarations and expression statements until `return`, then
+% the return expression. Locals are recorded in lvars and the frame size
+% is backpatched by parse_program.
+global token
+while token ~= 130          % return
+    if token == 131         % int: declaration
+        parse_declaration();
+    else
+        parse_expression_statement();   % expr ;
+    end
+end
+expect(130);                % return
+parse_expr();
+expect(59);                 % ;
+end
+
+function parse_declaration()
+% declaration := 'int' name (',' name)* ('=' expression)? ';' — each name
+% gets a 4-byte frame slot; the initializer is stored directly.
+global token idname lvars nlocals
+while true
+    expect(131);            % int
+    while true
+        if token ~= 150
+            fail('expected a variable name');
+        end
+        name = idname;
+        next();
+        if isfield(lvars, name)
+            fail(sprintf('duplicate local %s', name));
+        end
+        nlocals = nlocals + 1;
+        off = 4 * nlocals;
+        lvars.(name) = off;
+        if token == 61      % '=': initializer
+            next();
+            parse_assignment();
+            em(sprintf('\tmovl\t%%eax, -%d(%%rbp)', off));
+        end
+        if token == 44      % ','
+            next();
+        else
+            break;
+        end
+    end
+    expect(59);             % ;
+    if token == 131         % int: another declaration
+        continue;
+    end
+    return;
+end
+end
+
+function parse_expression_statement()
+% expression_statement := expression ';' — the value is discarded.
+parse_assignment();
+expect(59);
+end
+
 function parse_expr()
-% expression := logical_or
+% expression := assignment
+parse_assignment();
+end
+
+function parse_assignment()
+% assignment := logical_or ('=' assignment)* — right-associative. The LHS
+% must be an lvalue (a local whose load can be dropped, leaving its
+% address); the address is pushed, the RHS evaluated, then stored, so the
+% assignment's value (in eax) is the RHS — `y = x = 5` chains work.
+global token out
 parse_logical_or();
+while token == 61           % '='
+    if numel(out) >= 1 && strcmp(out{end}, sprintf('\tmovl\t(%%rax), %%eax'))
+        out(end) = [];      % drop the load; eax = the local's address
+    else
+        fail('bad lvalue in assignment');
+    end
+    em('\tpushq\t%rax');
+    next();
+    parse_assignment();
+    em('\tpopq\t%rbx');
+    em('\tmovl\t%eax, (%rbx)');
+end
+end
+
+function expect_id(name)
+% expect_id — consume the current identifier if its text is `name`.
+global token idname
+if token == 150 && strcmp(idname, name)
+    next();
+else
+    fail(sprintf('expected identifier %s', name));
+end
 end
 
 function parse_logical_or()
@@ -454,9 +566,9 @@ end
 end
 
 function parse_unary()
-% unary := ('-' | '~' | '!' | '+')* primary; primary := Num | '(' expr ')'.
-% Emits the primary then applies the operators in reverse (innermost first).
-global token token_val
+% unary := ('-' | '~' | '!' | '+')* primary; primary := Num | Id | '(' expr
+% ')' — a local variable loads from its frame slot (leaq + movl).
+global token token_val idname lvars
 ops = [];
 while token == 45 || token == 126 || token == 33 || token == 43   % - ~ ! +
     ops = [ops, token];
@@ -469,8 +581,17 @@ if token == 40              % '(': parenthesised expression
 elseif token == 128         % Num
     em(sprintf('\tmovl\t$%d, %%eax', double(token_val)));
     next();
+elseif token == 150         % Id: local variable
+    name = idname;
+    next();
+    if ~isfield(lvars, name)
+        fail(sprintf('undefined variable %s', name));
+    end
+    off = lvars.(name);
+    em(sprintf('\tleaq\t-%d(%%rbp), %%rax', off));
+    em('\tmovl\t(%rax), %eax');
 else
-    fail('expected a number or parenthesised expression');
+    fail('expected a number, variable, or parenthesised expression');
 end
 for k = numel(ops):-1:1
     if ops(k) == 45         % '-'

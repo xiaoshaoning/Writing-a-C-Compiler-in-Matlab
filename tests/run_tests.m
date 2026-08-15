@@ -444,6 +444,26 @@ else
         'cc6_negparen2.c', 236;
         'cc6_overflow.c', 44;
         'cc6_overflow2.c', 128;
+        'cc7_basic.c',     5;
+        'cc7_two.c',       7;
+        'cc7_init.c',      5;
+        'cc7_initref.c',   7;
+        'cc7_rmw.c',       6;
+        'cc7_chain.c',    10;
+        'cc7_arith.c',    11;
+        'cc7_div.c',       3;
+        'cc7_cmp.c',       1;
+        'cc7_late.c',     11;
+        'cc7_sub.c',     100;
+        'cc7_three.c',     7;
+        'cc7_neg.c',     251;
+        'cc7_mod.c',       1;
+        'cc7_assignval.c', 4;
+        'cc7_shl.c',       8;
+        'cc7_stmt.c',      3;
+        'cc7_logic.c',     1;
+        'cc7_negdiv.c',  254;
+        'cc7_copy.c',     42;
     };
     for k = 1:size(cctests, 1)
         try
