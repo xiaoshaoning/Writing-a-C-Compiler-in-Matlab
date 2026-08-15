@@ -19,6 +19,8 @@ function cc_int(varargin)
 %           lists), local stack frame (subq after the prologue, backpatched
 %           size), expression statements, assignment (right-associative,
 %           address-based so `y = x = 5` chains), locals as primaries.
+%   Part 8: control flow — `if`/`else`, `while`, blocks, and `return`
+%           anywhere (jumps to a .Lmain_ret epilogue label).
 %
 % Emits COFF assembly for MSYS2 binutils on Windows (see README for the
 % gcc invocation). Pipeline: tokenizer (next) → recursive-descent parser
@@ -146,6 +148,12 @@ elseif (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
         token = 130;            % Return
     elseif strcmp(id, 'int')
         token = 131;            % Int
+    elseif strcmp(id, 'if')
+        token = 151;            % If
+    elseif strcmp(id, 'while')
+        token = 152;            % While
+    elseif strcmp(id, 'else')
+        token = 153;            % Else
     else
         token = 150;            % Id (incl. 'main'); text in idname
         idname = id;
@@ -256,6 +264,7 @@ if token ~= 0
     fail('trailing tokens after the main body');
 end
 
+em('.Lmain_ret:');          % target of every `return`
 em('\tmovq\t%rbp, %rsp');   % discard the local frame
 em('\tpopq\t%rbp');
 em('\t.cfi_def_cfa 7, 8');
@@ -265,20 +274,83 @@ em('.LFE0:');
 end
 
 function parse_body()
-% parse_body — declarations and expression statements until `return`, then
-% the return expression. Locals are recorded in lvars and the frame size
-% is backpatched by parse_program.
+% parse_body — main's body: statements until the final top-level `return`
+% (mirrors the tutorial — main must end with a return).
 global token
 while token ~= 130          % return
-    if token == 131         % int: declaration
-        parse_declaration();
-    else
-        parse_expression_statement();   % expr ;
-    end
+    parse_statement();
 end
-expect(130);                % return
+parse_return_statement();
+end
+
+function parse_statement()
+% statement := declaration | '{' statement* '}' | if | while | return | expr ';'
+global token
+if token == 131             % int: declaration
+    parse_declaration();
+elseif token == 123         % '{': block
+    next();
+    while token ~= 125      % '}'
+        parse_statement();
+    end
+    next();
+elseif token == 151         % if
+    parse_if();
+elseif token == 152         % while
+    parse_while();
+elseif token == 130         % return (nested in a block)
+    parse_return_statement();
+else
+    parse_expression_statement();
+end
+end
+
+function parse_if()
+% if := 'if' '(' expr ')' statement ('else' statement)? — uniform shape:
+% je else-label / <then> / jmp end / else-label: [else] / end:
+global token
+next();                     % consume 'if'
+expect(40);
 parse_expr();
-expect(59);                 % ;
+expect(41);
+em('\tcmpl\t$0, %eax');
+e1 = newlabel();
+e2 = newlabel();
+em(sprintf('\tje\t%s', e1));
+parse_statement();
+em(sprintf('\tjmp\t%s', e2));
+em(sprintf('%s:', e1));
+if token == 153             % else
+    next();
+    parse_statement();
+end
+em(sprintf('%s:', e2));
+end
+
+function parse_while()
+% while := 'while' '(' expr ')' statement — start: / <cond> / je end /
+% <body> / jmp start / end:
+global token
+next();                     % consume 'while'
+s = newlabel();
+e = newlabel();
+em(sprintf('%s:', s));
+expect(40);
+parse_expr();
+expect(41);
+em('\tcmpl\t$0, %eax');
+em(sprintf('\tje\t%s', e));
+parse_statement();
+em(sprintf('\tjmp\t%s', s));
+em(sprintf('%s:', e));
+end
+
+function parse_return_statement()
+% return := 'return' expr ';' — value in eax, jump to the epilogue.
+expect(130);
+parse_expr();
+expect(59);
+em('\tjmp\t.Lmain_ret');
 end
 
 function parse_declaration()

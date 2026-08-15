@@ -1,9 +1,9 @@
 # xc.m — C Interpreter in MATLAB: Implementation Plan
 
 > **Status:** All phases 0-7 complete — full feature parity reached
-> (hello.c byte-exact vs the reference, suite green 254/254), plus post-parity
+> (hello.c byte-exact vs the reference, suite green 274/274), plus post-parity
 > additions (block comments, %s, arrays, initializers, void, multi-read —
-> suite 254/254).
+> suite 274/274).
 > **For agentic workers:** phases use checkbox (`- [ ]`) syntax for tracking. This
 > project is a git repository — commit after each verified phase; verify via the
 > stated test commands instead.
@@ -417,7 +417,7 @@ added 2026-08-15); `xc.m`/`cc_int.m` carry GPL notice headers.
 ## Post-parity (2026-08-10)
 
 Features beyond the reference dialect, added after full parity, all covered
-by the suite (254/254):
+by the suite (274/274):
 
 | Feature | Design |
 |---|---|

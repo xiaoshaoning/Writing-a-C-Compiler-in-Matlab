@@ -464,6 +464,26 @@ else
         'cc7_logic.c',     1;
         'cc7_negdiv.c',  254;
         'cc7_copy.c',     42;
+        'cc8_if.c',        5;
+        'cc8_if0.c',       0;
+        'cc8_else.c',      5;
+        'cc8_else0.c',     6;
+        'cc8_ifnobrace.c', 7;
+        'cc8_elsenobrace.c', 5;
+        'cc8_while.c',     5;
+        'cc8_while2.c',    0;
+        'cc8_whileif.c',  30;
+        'cc8_nested.c',    9;
+        'cc8_elif.c',      3;
+        'cc8_retif.c',    42;
+        'cc8_retwhile.c', 30;
+        'cc8_whilcmp.c',  10;
+        'cc8_while0.c',    7;
+        'cc8_count.c',     9;
+        'cc8_condassign.c', 4;
+        'cc8_nestedif.c',  9;
+        'cc8_double.c',    7;
+        'cc8_sum.c',      15;
     };
     for k = 1:size(cctests, 1)
         try
