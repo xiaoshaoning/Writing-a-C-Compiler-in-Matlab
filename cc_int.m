@@ -55,7 +55,7 @@ function cc_int(varargin)
 global src si token token_val idname strtext out fname lbl lvars lvartype ...
        lvararr fbytes funcs fret called retlbl cfn globals gtype garr glist ...
        strs nstr etype ltype cret loopctx stags sdefs nstid estruc ...
-       lvarstruct gstruct typedefs enums lvarstride gstride bstride glabels sret sretsize
+       lvarstruct gstruct typedefs enums lvarstride gstride bstride glabels sret sretsize libfns libcalls
 
 if nargin ~= 2
    error('USAGE: cc_int in.c out.s');
@@ -120,6 +120,19 @@ glabels = struct();    % label name -> {defined, line index, pending jmps}
 sret = 0;             % the current function returns a struct
 sretsize = 0;         % its size (bytes)
 sretbase = 0;         % the hidden slot pointer's rbp offset
+% runtime library: name -> CRT symbol. Calls to these emit a Win64-ABI
+% shim (`__cc_<name>_<nargs>`) in the generated assembly instead of a
+% direct `call`, so our stack-arg convention adapts to RCX/RDX/R8/R9.
+libfns = struct();
+libfns.printf = 'printf';
+libfns.malloc = 'malloc';
+libfns.memset = 'memset';
+libfns.memcmp = 'memcmp';
+libfns.exit = 'exit';
+libfns.open = '_open';
+libfns.read = '_read';
+libfns.close = '_close';
+libcalls = struct();  % 'name_nargs' -> 1 for every shim used (emitted)
 out = {};       % emitted assembly lines (cell; tabs are literal in em)
 
 next();
@@ -192,6 +205,10 @@ while si <= numel(src)
             si = si + 1;
         end
         si = si + 2;
+    elseif c == 35                 % '#': skip the preprocessor line
+        while si <= numel(src) && src(si) ~= char(10) && src(si) ~= char(13)
+            si = si + 1;
+        end
     else
         break;
     end
@@ -429,7 +446,7 @@ function parse_program()
 % parse_program — file headers, then every top-level declaration/function;
 % verify at the end that every called function and `main` were defined, and
 % emit the global data section.
-global token out fname funcs called glist
+global token out fname funcs called glist libfns
 em(sprintf('\t.file\t"%s"', fname));
 em('\t.text');
 while token ~= 0
@@ -437,7 +454,7 @@ while token ~= 0
 end
 names = fieldnames(called);
 for k = 1:numel(names)
-    if ~isfield(funcs, names{k})
+    if ~isfield(funcs, names{k}) && ~isfield(libfns, names{k})
         fail(sprintf('call to undefined function %s', names{k}));
     end
 end
@@ -445,6 +462,53 @@ if ~isfield(funcs, 'main')
     fail('no main function');
 end
 emit_globals();
+emit_libshims();
+end
+
+function emit_libshims()
+% emit_libshims — Win64-ABI adapters for every runtime-library call used.
+% Each `__cc_<name>_<nargs>` receives our stack-arg convention (arg1 at
+% 16(%rbp)) and re-packs it into RCX/RDX/R8/R9 plus the 32-byte shadow
+% space, aligns rsp to 16, zeroes AL (varargs), and calls the CRT symbol.
+global out libcalls libfns
+em('\t.text');
+ck = fieldnames(libcalls);
+for ci = 1:numel(ck)
+    key = ck{ci};
+    us = strfind(key, '_');
+    nm = key(1:us(end)-1);
+    na = str2num(key(us(end)+1:end));
+    crt = libfns.(nm);
+    em(sprintf('__cc_%s:', key));
+    em('\tpushq\t%rbp');
+    em('\tmovq\t%rsp, %rbp');
+    em('\tandq\t$-16, %rsp');      % align regardless of the caller
+    alloc = 32 + 8 * max(0, na - 4);
+    alloc = 16 * ceil(alloc / 16);
+    em(sprintf('\tsubq\t$%d, %%rsp', alloc));
+    % our convention: arg1 was pushed first (deepest), so arg_k sits at
+    % 16+8*(na-k)(%rbp)
+    em(sprintf('\tmovq\t%d(%%rbp), %%rcx', 16 + 8 * (na - 1)));
+    if na >= 2
+        em(sprintf('\tmovq\t%d(%%rbp), %%rdx', 16 + 8 * (na - 2)));
+    end
+    if na >= 3
+        em(sprintf('\tmovq\t%d(%%rbp), %%r8', 16 + 8 * (na - 3)));
+    end
+    if na >= 4
+        em(sprintf('\tmovq\t%d(%%rbp), %%r9', 16 + 8 * (na - 4)));
+    end
+    for kk = 5:na
+        % the kk-th arg at 16+8*(na-kk)(%rbp) -> the (kk-4)-th stack slot
+        em(sprintf('\tmovq\t%d(%%rbp), %%r10', 16 + 8 * (na - kk)));
+        em(sprintf('\tmovq\t%%r10, %d(%%rsp)', 32 + 8 * (kk - 5)));
+    end
+    em('\txorl\t%eax, %eax');     % no vector args for varargs
+    em(sprintf('\tcall\t%s', crt));
+    em('\tmovq\t%rbp, %rsp');
+    em('\tpopq\t%rbp');
+    em('\tret');
+end
 end
 
 function parse_decl_or_func()
@@ -2233,7 +2297,7 @@ function parse_unary()
 % apply in reverse. Types: etype tracks the type; arrays and struct values
 % decay (no load, estruc = 1 for struct values).
 global token token_val idname strtext lvars lvartype lvararr lvarstruct ...
-       globals gtype garr gstruct funcs fret frettype fparams called ltype ...
+       globals gtype garr gstruct funcs fret frettype fparams called ltype libfns libcalls ...
        etype estruc lvarstride gstride bstride lvararrsz gvararrsz curarrsz si typedefs
 ops = [];
 while token == 45 || token == 126 || token == 33 || token == 43 || ...   % - ~ ! +
@@ -2372,7 +2436,13 @@ elseif token == 150         % Id: function call or variable
                 name, nargs, funcs.(name)));
         end
         called.(name) = 1;
-        em(sprintf('\tcall\t%s', name));
+        if isfield(libfns, name)
+            % runtime-library call: go through the Win64-ABI shim
+            libcalls.(sprintf('%s_%d', name, nargs)) = 1;
+            em(sprintf('\tcall\t__cc_%s_%d', name, nargs));
+        else
+            em(sprintf('\tcall\t%s', name));
+        end
         if sret_call
             % pop args, the hidden slot pointer, AND the return slot
             em(sprintf('\taddq\t$%d, %%rsp', 8 * (nargs + 1) + rsz));

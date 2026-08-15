@@ -635,6 +635,8 @@ else
         'cc16_strarray.c', 105;
         'cc16_strarray2.c', 117;
         'cc16_strarray3.c', 241;
+        'cc17_shim.c',   42;
+        'cc17_fileio.c',  0;
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
@@ -676,18 +678,20 @@ else
     };
     for k = 1:size(cctests, 1)
         try
-            delete('tmp_cc.s');
-            delete('tmp_cc.exe');   % no stale exe can leak into this test
-            cc_int(['tests/programs/' cctests{k,1}], 'tmp_cc.s');
-            [st_gcc, ~] = system([gcc, ' tmp_cc.s -o tmp_cc.exe']);
-            if st_gcc == 0 && exist('tmp_cc.exe', 'file') == 2
-                [st_run, ~] = system('tmp_cc.exe');
-                if st_run < 0
-                    st_run = st_run + 256;   % return -1 (0xFFFFFFFF)
+            got = -999;
+            for attempt = 1:2   % retry: the runtime's system()/gcc flake
+                delete('tmp_cc.s');
+                delete('tmp_cc.exe');   % no stale exe can leak into this test
+                cc_int(['tests/programs/' cctests{k,1}], 'tmp_cc.s');
+                [st_gcc, ~] = system([gcc, ' tmp_cc.s -o tmp_cc.exe']);
+                if st_gcc == 0 && exist('tmp_cc.exe', 'file') == 2
+                    [st_run, ~] = system('tmp_cc.exe');
+                    if st_run < 0
+                        st_run = st_run + 256;   % return -1 (0xFFFFFFFF)
+                    end
+                    got = st_run;
+                    break;
                 end
-                got = st_run;
-            else
-                got = -999;
             end
             [npass nfail] = addcheck(npass, nfail, got == cctests{k,2}, ...
                 sprintf('cc_int %s -> exit %d', cctests{k,1}, cctests{k,2}));
@@ -708,6 +712,49 @@ else
     end
     delete('tmp_cc.s');
     delete('tmp_cc.exe');
+    % cross-track output parity: programs that print (via the compiler's
+    % runtime shims) must produce the SAME stdout through both tracks (the
+    % interpreter's trailing 'exit(N)' trace is stripped first).
+    ostests = {
+        'hello.c';
+        'p6_printf.c';
+        'p6_printf2.c';
+        'p6_file.c';
+        'p6_malloc.c';
+        'cc17_shim.c';
+    };
+    for ok = 1:numel(ostests)
+        try
+            oo = evalc(sprintf('rcx = xc(''tests/programs/%s'')', ostests{ok}));
+            op = strfind(oo, 'exit(');
+            if ~isempty(op)
+                oo = oo(1:op(end)-1);   % strip the interpreter's exit trace
+            end
+            delete('tmp_cc.s');
+            delete('tmp_cc.exe');
+            cc_int(['tests/programs/' ostests{ok}], 'tmp_cc.s');
+            st_gcc = system([gcc, ' tmp_cc.s -o tmp_cc.exe']);
+            if st_gcc ~= 0
+                error('gcc failed');
+            end
+            st_run = system('tmp_cc.exe > tmp_cc_out.txt');
+            if st_run < 0
+                st_run = st_run + 256;
+            end
+            fid = fopen('tmp_cc_out.txt', 'r');
+            if fid < 0
+                error('could not read the compiler output');
+            end
+            oc = char(fread(fid, inf, 'uint8')');
+            fclose(fid);
+            delete('tmp_cc_out.txt');
+            [npass nfail] = addcheck(npass, nfail, strcmp(oc, oo), ...
+                sprintf('output parity %s (xc == cc_int stdout)', ostests{ok}));
+        catch e
+            [npass nfail] = addcheck(npass, nfail, false, ...
+                sprintf('output parity %s: %s', ostests{ok}, e.message));
+        end
+    end
 
     % function called with the wrong number of arguments errors
     try

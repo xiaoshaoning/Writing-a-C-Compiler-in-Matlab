@@ -45,7 +45,7 @@ Building compilers/interpreters in MATLAB, following two classic tutorials:
 cc_int.m              assembly compiler (return <unary>; → x86-64 .s)
 xc.m                  C interpreter (lexer → parser → VM → syscalls)
 tests/
-  run_tests.m         test harness (613 checks: probe gate, VM, lexer,
+  run_tests.m         test harness (621 checks: probe gate, VM, lexer,
                       program corpus, syscall/acceptance, cc_int/gcc,
                       cross-track parity)
   programs/           test C programs
@@ -127,7 +127,7 @@ otherwise bleed into each other). The dialect is feature-complete against its
 documented scope; remaining C features (structs, unions, `switch`,
 `for`/`do-while`, …) are outside both the port and the reference dialect.
 
-Tests (613 checks — probe gate, VM selftest, lexer selftest, the program
+Tests (621 checks — probe gate, VM selftest, lexer selftest, the program
 corpus whose exit codes/outputs are cross-verified against the reference
 build, a gcc-gated group that compiles and runs the assembly-track
 programs, and a cross-track parity group that runs the shared corpus through

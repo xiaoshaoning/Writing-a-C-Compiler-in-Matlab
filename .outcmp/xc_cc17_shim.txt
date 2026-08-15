@@ -1,0 +1,2 @@
+xp=AAAA len=1 cmp=0
+exit(42)

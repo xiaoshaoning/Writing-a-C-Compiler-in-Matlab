@@ -68,6 +68,19 @@ garbage slot word — instead of `16+rsz`), indexed-row lvalues
 `etype`), and `curarrsz` now tracks rows. Test corpus: `cc16_*` (14
 programs).
 
+**Compiler: runtime library shims (2026-08-15) — stdout, heap, and file I/O.**
+`cc_int` emitted nothing but exit codes before; now calls to `printf`,
+`malloc`, `memset`, `memcmp`, `exit`, `open`/`read`/`close` generate
+Win64-ABI adapter shims (`__cc_<name>_<nargs>`) in the assembly that
+re-pack our stack-arg convention into RCX/RDX/R8/R9 + the 32-byte shadow
+space, 16-align via `andq $-16, %rsp`, zero AL for varargs, and call the
+CRT symbol (`_open`/`_read`/`_close` for the file trio). hello.c now
+compiles and prints the reference's fibonacci table; the suite gained a
+cross-track OUTPUT-parity group (6 programs whose stdout must match through
+both tracks, the interpreter's trailing `exit(N)` trace stripped) and the
+cc17 corpus. Also: `#` preprocessor lines are skipped by the lexer, and the
+harness retries gcc once for the documented transient flakes.
+
 ## Deliverables
 
 | Phase | Scope | Commit |
@@ -82,9 +95,9 @@ programs).
 
 ## Verification
 
-- **Test suite**: `tests/run_tests.m` — **613/613** on the target runtime
-  (146 interpreter checks + 280 gcc-gated assembly-track checks + 187
-  cross-track parity checks; the gcc group skips if gcc is absent).
+- **Test suite**: `tests/run_tests.m` — **621/621** on the target runtime
+  (146 interpreter checks + 282 gcc-gated assembly-track checks + 187
+  cross-track parity checks + 6 cross-track output-parity checks; the gcc group skips if gcc is absent).
   Groups: runtime-primitive gate (probe), 30-case VM selftest, 9-case lexer
   selftest, program corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke.
 - **Reference cross-check**: the reference `xc.c` built with gcc 15.2.0
@@ -163,7 +176,7 @@ report.
 ## Running
 
 ```
-D:\...\matlab.bat tests/run_tests.m          # full suite (613 checks)
+D:\...\matlab.bat tests/run_tests.m          # full suite (621 checks)
 D:\...\matlab.bat -batch "xc('tests/programs/hello.c')"   # acceptance program
 D:\...\matlab.bat -batch "xc('-s', 'tests/programs/hello.c')"  # compile dump
 D:\...\matlab.bat -batch "xc('-d', 'tests/programs/hello.c')"  # trace
