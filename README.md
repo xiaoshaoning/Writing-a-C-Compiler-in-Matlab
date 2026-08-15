@@ -4,7 +4,9 @@ Building compilers/interpreters in MATLAB, following two classic tutorials:
 
 1. **Assembly track** (`cc_int.m`) — Norasandler's [Writing a C
    Compiler](https://norasandler.com/2017/11/29/Write-a-Compiler.html):
-   compiles C to x86-64 assembly. Currently part 1: `return <int>;`.
+   compiles C to x86-64 assembly. Part 1: `return <int>;`. Part 2: unary
+   operators — `-`, `~`, `!`, unary `+`, arbitrarily nested
+   (`return -~!5;`), via a real tokenizer + recursive-descent parser.
 2. **Interpreter track** (`xc.m`) — lotabout's
    [write-a-C-interpreter](https://github.com/lotabout/write-a-C-interpreter):
    a C interpreter with a custom VM, ported to MATLAB — complete: lexer,
@@ -14,13 +16,14 @@ Building compilers/interpreters in MATLAB, following two classic tutorials:
 ## Layout
 
 ```
-cc_int.m              assembly compiler (return N; → x86-64 .s)
+cc_int.m              assembly compiler (return <unary>; → x86-64 .s)
 xc.m                  C interpreter (lexer → parser → VM → syscalls)
 tests/
-  run_tests.m         test harness (145 checks: probe gate, VM, lexer,
-                      program corpus, syscall/acceptance)
+  run_tests.m         test harness (156 checks: probe gate, VM, lexer,
+                      program corpus, syscall/acceptance, cc_int/gcc)
   programs/           test C programs
     return_2.c        return 2; (part 1 of the Norasandler series)
+    cc2_*.c          unary-operator programs (part 2, gcc-gated in the suite)
     hello.c           fibonacci demo — xc.m acceptance program
 docs/
   2026-08-10-xc-matlab-port-plan.md        implementation plan
@@ -41,9 +44,9 @@ D:\Projects\codes\MATLAB_in_c\release\v1.3.21\matlab.bat
 Windows cmd:
 
 ```
-matlab.bat -batch "addpath('.'); cc_int('tests/programs/return_2.c','return_2.s')"
-gcc return_2.s -o return_2
-.\return_2.exe
+matlab.bat -batch "addpath('.'); cc_int('tests/programs/cc2_nested.c','cc2_nested.s')"
+gcc cc2_nested.s -o cc2_nested
+.\cc2_nested.exe
 echo %errorlevel%
 ```
 
@@ -51,11 +54,14 @@ echo %errorlevel%
 directory on the MATLAB path implicitly — see the bug report. In cmd, the exit
 code is `%errorlevel%` — bash's `$?` does not work there.)
 
-Expected exit code: `2` (the constant in `return 2;`). The emitted assembly
-uses COFF directives (`.def main; .scl 2; .type 32; .endef`) instead of the
-tutorial's ELF `.type main, @function` — the `@` form is rejected by MSYS2
-binutils on Windows. Verified end-to-end: clone → `cc_int` → `gcc` (MSYS2
-ucrt64 15.2.0) → exit 2.
+Expected exit code: `1` (the value of `return -~!5;` — `!5` = 0, `~0` = -1,
+`-(-1)` = 1). The emitted assembly uses COFF directives
+(`.def main; .scl 2; .type 32; .endef`) instead of the tutorial's ELF
+`.type main, @function` — the `@` form is rejected by MSYS2 binutils on
+Windows. Exit codes are the low 8 bits of the returned value (214 for
+`return -42;`, 213 for `return ~42;`, 255 for `return ~0;`). Verified
+end-to-end: clone → `cc_int` → `gcc` (MSYS2 ucrt64 15.2.0) → exit code; the
+suite's gcc-gated group compiles and runs every `cc2_*.c` program.
 
 ### Interpreter track (xc.m)
 
@@ -93,9 +99,10 @@ otherwise bleed into each other). The dialect is feature-complete against its
 documented scope; remaining C features (structs, unions, `switch`,
 `for`/`do-while`, …) are outside both the port and the reference dialect.
 
-Tests (145 checks — probe gate, VM selftest, lexer selftest, and the program
+Tests (156 checks — probe gate, VM selftest, lexer selftest, the program
 corpus whose exit codes/outputs are cross-verified against the reference
-build):
+build, and a gcc-gated group that compiles and runs the assembly-track
+programs):
 
 ```
 matlab.bat tests/run_tests.m
