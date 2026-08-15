@@ -571,6 +571,24 @@ else
         'cc12_idx.c',       8;
         'cc12_garray.c',    5;
         'cc12_deref.c',     8;
+        'cc13_switch.c',   30;
+        'cc13_switch2.c',  99;
+        'cc13_break.c',     7;
+        'cc13_fall.c',    103;
+        'cc13_si1.c',      8;
+        'cc13_si2.c',      1;
+        'cc13_si3.c',      8;
+        'cc13_si4.c',     16;
+        'cc13_si5.c',      1;
+        'cc13_init.c',    65;   % 321 mod 256
+        'cc13_ginit.c',   65;   % 321 mod 256
+        'cc13_sinit.c',   38;   % 294 mod 256
+        'cc13_typedef.c',  5;
+        'cc13_enum.c',    21;
+        'cc13_enum2.c',  255;
+        'cc13_mdim.c',    57;
+        'cc13_mdim2.c',    6;
+        'cc13_mdim3.c',    7;
     };
     for k = 1:size(cctests, 1)
         try

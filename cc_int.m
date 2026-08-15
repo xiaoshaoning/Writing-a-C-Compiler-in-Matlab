@@ -55,7 +55,7 @@ function cc_int(varargin)
 global src si token token_val idname strtext out fname lbl lvars lvartype ...
        lvararr fbytes funcs fret called retlbl cfn globals gtype garr glist ...
        strs nstr etype ltype cret loopctx stags sdefs nstid estruc ...
-       lvarstruct gstruct
+       lvarstruct gstruct typedefs enums lvarstride gstride bstride
 
 if nargin ~= 2
    error('USAGE: cc_int in.c out.s');
@@ -105,8 +105,13 @@ estruc = 0;          % 1 = current expression is a struct VALUE (address in
                      % rax, no load pending)
 lvarstruct = struct();  % local name -> 1 if a direct struct value
 lvararr = struct();     % local name -> 1 if an array (name decays to a ptr)
+lvarstride = struct();  % local array name -> per-level byte strides
+bstride = [];           % the current expression's remaining array strides
 gstruct = struct();     % global name -> 1 if a direct struct value
 garr = struct();        % global name -> 1 if an array
+gstride = struct();     % global array name -> per-level byte strides
+typedefs = struct();    % typedef name -> base type code
+enums = struct();       % enum constant name -> value
 out = {};       % emitted assembly lines (cell; tabs are literal in em)
 
 next();
@@ -231,6 +236,18 @@ elseif (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
         token = 176;            % Continue
     elseif strcmp(id, 'struct')
         token = 178;            % Struct
+    elseif strcmp(id, 'switch')
+        token = 182;            % Switch
+    elseif strcmp(id, 'case')
+        token = 180;            % Case
+    elseif strcmp(id, 'default')
+        token = 181;            % Default
+    elseif strcmp(id, 'sizeof')
+        token = 183;            % Sizeof
+    elseif strcmp(id, 'typedef')
+        token = 184;            % Typedef
+    elseif strcmp(id, 'enum')
+        token = 185;            % Enum
     else
         token = 150;            % Id (incl. 'main'); text in idname
         idname = id;
@@ -420,8 +437,27 @@ end
 
 function parse_decl_or_func()
 % type ('*')* name — '(' means a function definition, otherwise globals;
-% a struct type definition (`struct Tag { … };`) registers the type.
-global token idname
+% a struct type definition (`struct Tag { … };`) registers the type;
+% `typedef` registers a type alias; `enum { … }` registers constants.
+global token idname typedefs enums
+if token == 184         % typedef
+    next();
+    [base, stdef] = parse_basetype();
+    if isa(stdef, 'cell')
+        fail('struct definitions are not allowed in typedefs');
+    end
+    if token ~= 150
+        fail('expected a typedef name');
+    end
+    typedefs.(idname) = base;
+    next();
+    expect(59);
+    return;
+end
+if token == 185         % enum
+    parse_enum();
+    return;
+end
 [base, stdef] = parse_basetype();
 if isa(stdef, 'cell')
     register_struct(stdef{1}, stdef{2});
@@ -446,6 +482,43 @@ if token == 40              % '(': function
 else
     parse_globals(name, base, depth);
 end
+end
+
+function parse_enum()
+% enum [tag] { A, B = n, … } ';' — register the constants (values start at
+% 0 and increment, or follow explicit '=' values).
+global token idname enums
+next();                     % 'enum'
+if token == 150             % optional tag
+    next();
+end
+if token ~= 123
+    fail('expected { after enum');
+end
+next();
+i = 0;
+while token ~= 125
+    if token ~= 150
+        fail('expected an enum identifier');
+    end
+    nm = idname;
+    next();
+    if token == 61          % '='
+        next();
+        if token ~= 128
+            fail('expected an enum value');
+        end
+        i = double(token_val);
+        next();
+    end
+    enums.(nm) = i;
+    i = i + 1;
+    if token == 44
+        next();
+    end
+end
+next();                     % '}'
+expect(59);                 % ';'
 end
 
 function [base, stdef] = parse_basetype()
@@ -476,6 +549,9 @@ elseif token == 178         % struct
         end
         base = 1000 + 2 * stags.(tag);
     end
+elseif token == 150 && isfield(typedefs, idname)
+    base = typedefs.(idname);
+    next();
 else
     fail('expected a type');
 end
@@ -597,6 +673,54 @@ else
 end
 end
 
+function s = cstride_of(dims, elem)
+% array_strides — per-level byte strides: s(k) = elem * prod(dims(k+1:end));
+% for int[2][3] (elem 8): s = [24 8] — a[i] advances 24 bytes, a[i][j] 8.
+fprintf('DBG strides: dims=[%s] elem=%d\n', num2str(dims), elem);   % TEMP
+n = numel(dims);
+s = zeros(1, n);
+acc = elem;
+for k = n:-1:1
+    s(k) = acc;
+    acc = acc * dims(k);
+end
+end
+
+function vals = parse_arr_init()
+% parse_arr_init — a constant array initializer: {c1, c2, …} or a string
+% literal; returns the element values (a row vector).
+global token strtext
+if token == 123         % '{'
+    next();
+    vals = [];
+    while token ~= 125
+        neg = 0;
+        if token == 45
+            neg = 1;
+            next();
+        end
+        if token ~= 128
+            fail('expected a constant array initializer');
+        end
+        v = double(token_val);
+        next();
+        if neg
+            v = -v;
+        end
+        vals(end+1) = v;
+        if token == 44
+            next();
+        end
+    end
+    next();             % '}'
+elseif token == 172     % string literal
+    vals = double(strtext);
+    next();
+else
+    fail('expected { or a string array initializer');
+end
+end
+
 function parse_function_tail(fname2, ischarfn)
 % after 'type name': '(' params ')' '{' <statements> return '}' — emit the
 % per-function prologue, backpatch the frame size, and the epilogue.
@@ -658,27 +782,29 @@ fbytes = save_fbytes;
 end
 
 function parse_globals(name, base, depth)
-% global: name (('[' Num ']') | ('=' const|string)?) (',' name …)? ';' —
-% collected for the .comm/.data section emitted at the end of the file.
-global token idname strtext globals gtype garr gstruct glist
+% global: name (('[' size ']')* | ('=' const|string|{…})? ) (',' name …)? ';'
+% — collected for the .comm/.data section emitted at the end of the file.
+global token idname strtext globals gtype garr gstruct glist gstride
 while true
     if isfield(globals, name)
         fail(sprintf('duplicate global %s', name));
     end
     globals.(name) = 1;
     t = base + 2 * depth;
+    dims = [];
     isarr = 0;
-    asz = 0;
-    if token == 91          % '[': array
-        next();
-        if token ~= 128
-            fail('expected a constant array size');
-        end
-        asz = double(token_val);
-        next();
-        expect(93);
-        if asz < 0
-            fail('bad array size');
+    if token == 91          % '[': array (possibly multi-dimension)
+        while token == 91
+            next();
+            if token ~= 128
+                fail('expected a constant array size');
+            end
+            dims(end+1) = double(token_val);
+            next();
+            expect(93);
+            if dims(end) < 0
+                fail('bad array size');
+            end
         end
         isarr = 1;
     end
@@ -690,10 +816,24 @@ while true
     else
         sbase = 0;
     end
+    if isarr && base >= 1000
+        gstride.(name) = cstride_of(dims, ssize_of(base));
+    elseif isarr && base == 1
+        gstride.(name) = cstride_of(dims, 1);
+    elseif isarr
+        gstride.(name) = cstride_of(dims, 8);
+    end
     initv = [];
     if token == 61          % '=': constant initializer
         next();
-        if token == 172     % string literal: pointer init
+        if isarr
+            initv = parse_arr_init();
+            if base == 1
+                while numel(initv) < prod(dims)
+                    initv(end+1) = 0;
+                end
+            end
+        elseif token == 172     % string literal: pointer init
             initv = ['S', strtext];
             next();
         else
@@ -712,7 +852,7 @@ while true
             end
         end
     end
-    glist{end+1} = {name, gtype.(name), isarr, asz, initv, sbase};
+    glist{end+1} = {name, gtype.(name), isarr, dims, initv, sbase};
     if token == 44          % ','
         next();
         if token ~= 150
@@ -737,51 +877,65 @@ for k = 1:numel(glist)
     nm = g{1};
     t = g{2};
     isarr = g{3};
-    asz = g{4};
+    dims = g{4};
     v = g{5};
+    sbase = g{6};
     if isarr
         if mod(t, 2) == 1       % char-based element
-            nbytes = asz;
-        elseif g{6} ~= 0
-            nbytes = asz * ssize_of(g{6});   % struct array
+            nbytes = prod(dims);
+        elseif sbase ~= 0
+            nbytes = prod(dims) * ssize_of(sbase);   % struct array
         else
-            nbytes = 8 * asz;
+            nbytes = 8 * prod(dims);
         end
     elseif t == 1
         nbytes = 1;
-    elseif g{6} ~= 0
-        nbytes = ssize_of(g{6});   % a struct value
+    elseif sbase ~= 0
+        nbytes = ssize_of(sbase);   % a struct value
     else
         nbytes = 8;
     end
     if isempty(v)
-        em(sprintf('\t.comm\t%s,%d,%d', nm, nbytes, nbytes));
+        em(sprintf('	.comm	%s,%d,%d', nm, nbytes, nbytes));
     else
         if ~dat
-            em('\t.data');
+            em('	.data');
             dat = 1;
         end
-        em(sprintf('\t.globl\t%s', nm));
+        em(sprintf('	.globl	%s', nm));
         em(sprintf('%s:', nm));
         if ischar(v)
             % string-literal pointer initializer (marker 'S' + text)
-            em(sprintf('\t.quad\t%s', new_str(v(2:end))));
+            em(sprintf('	.quad	%s', new_str(v(2:end))));
+        elseif isarr
+            % array initializer: values comma-separated (byte for char
+            % elements, quad otherwise)
+            line = '	.byte	';
+            if mod(t, 2) ~= 1
+                line = '	.quad	';
+            end
+            for kk = 1:numel(v)
+                line = [line, sprintf('%d', v(kk))];
+                if kk < numel(v)
+                    line = [line, ', '];
+                end
+            end
+            em(line);
         elseif t == 1
-            em(sprintf('\t.byte\t%d', v));
+            em(sprintf('	.byte	%d', v));
         else
-            em(sprintf('\t.quad\t%d', v));
+            em(sprintf('	.quad	%d', v));
         end
     end
 end
-em('\t.data');
 for k = 1:numel(strs)
     s = strs{k};
     em(sprintf('%s:', s{1}));
     txt = s{2};
-    txt = strrep(txt, '\', '\\');
-    txt = strrep(txt, '"', '\"');
+    txt = strrep(txt, '', '\\');
+    txt = strrep(txt, '"', '\\"');
     txt = strrep(txt, char(10), '\n');
-    em(sprintf('\t.string\t"%s"', txt));
+    em(sprintf('	.string	"%s"', txt));
 end
 end
 
@@ -865,8 +1019,9 @@ end
 function parse_statement()
 % statement := declaration | '{' statement* '}' | if | while | for | do |
 % break | continue | return | expr ';'
-global token
-if token == 131 || token == 134 || token == 178    % int/char/struct: decl
+global token idname typedefs
+if token == 131 || token == 134 || token == 178 || ...   % int/char/struct: decl
+   (token == 150 && isfield(typedefs, idname))            % typedef'd type
     parse_declaration();
 elseif token == 123         % '{': block
     next();
@@ -882,6 +1037,8 @@ elseif token == 173         % for
     parse_for();
 elseif token == 174         % do
     parse_do();
+elseif token == 182         % switch
+    parse_switch();
 elseif token == 175         % break
     parse_break();
 elseif token == 176         % continue
@@ -1006,6 +1163,80 @@ loopctx(end) = [];
 expect(59);                 % ';'
 end
 
+function parse_switch()
+% switch := 'switch' '(' expr ')' '{' (case const ':' stmts | default ':'
+% stmts)* '}' — the value is kept in %r10; the dispatch (cmpq/je per case)
+% is spliced before the case bodies, whose lines are buffered during the
+% parse. break targets the switch end; continue the enclosing loop.
+global token out loopctx
+next();                     % 'switch'
+expect(40);
+parse_expr();
+expect(41);
+em('\tmovq\t%rax, %r10');   % the switch value
+if token ~= 123
+    fail('expected { after switch');
+end
+next();
+sn = numel(out);
+e = newlabel();
+if isempty(loopctx)
+    contl = e;
+else
+    contl = loopctx{end}{2};
+end
+loopctx{end+1} = {e, contl};
+cases = {};
+deflbl = '';
+while token ~= 125          % '}'
+    if token == 180         % case
+        next();
+        if token ~= 128
+            fail('expected a case value');
+        end
+        v = double(token_val);
+        next();
+        expect(58);         % ':'
+        l = newlabel();
+        em(sprintf('%s:', l));
+        cases{end+1} = {v, l};
+    elseif token == 181     % default
+        next();
+        expect(58);
+        deflbl = newlabel();
+        em(sprintf('%s:', deflbl));
+    else
+        parse_statement();
+    end
+end
+next();                     % '}'
+em(sprintf('%s:', e));       % the break target (after all case bodies)
+loopctx(end) = [];
+% splice the dispatch before the case bodies (cell slicing is broken on
+% the clone, so copy element-by-element)
+body = {};
+for k = sn+1:numel(out)
+    body{end+1} = out{k};
+end
+out(sn+1:numel(out)) = [];
+disp = {};
+for k = 1:numel(cases)
+    disp{end+1} = sprintf('\tcmpq\t$%d, %%r10', cases{k}{1});
+    disp{end+1} = sprintf('\tje\t%s', cases{k}{2});
+end
+if ~isempty(deflbl)
+    disp{end+1} = sprintf('\tjmp\t%s', deflbl);
+else
+    disp{end+1} = sprintf('\tjmp\t%s', e);
+end
+for k = 1:numel(disp)
+    out{end+1} = disp{k};
+end
+for k = 1:numel(body)
+    out{end+1} = body{k};
+end
+end
+
 function parse_break()
 % break := 'break' ';' — jump to the innermost loop's end label.
 global token loopctx
@@ -1044,7 +1275,7 @@ end
 function parse_declaration()
 % declaration := type ('*')* name (('[' size ']')? (',' …)*) ('=' expr)? ';'
 % — storage: char 1 byte, int/pointer 8, struct its size, arrays n*elem.
-global token idname lvars lvartype lvararr lvarstruct fbytes
+global token idname lvars lvartype lvararr lvarstruct lvarstride fbytes
 [base, stdef] = parse_basetype();
 if isa(stdef, 'cell')
     fail('struct definitions are only allowed at file scope');
@@ -1064,32 +1295,36 @@ while true
         fail(sprintf('duplicate local %s', name));
     end
     t = base + 2 * depth;
+    dims = [];
     isarr = 0;
-    asz = 0;
-    if token == 91          % '[': array
-        next();
-        if token ~= 128
-            fail('expected a constant array size');
-        end
-        asz = double(token_val);
-        next();
-        expect(93);
-        if asz < 0
-            fail('bad array size');
+    if token == 91          % '[': array (possibly multi-dimension)
+        while token == 91
+            next();
+            if token ~= 128
+                fail('expected a constant array size');
+            end
+            dims(end+1) = double(token_val);
+            next();
+            expect(93);
+            if dims(end) < 0
+                fail('bad array size');
+            end
         end
         isarr = 1;
     end
     if isarr
         if t == 1
-            nbytes = asz;           % char array: 1 byte per element
+            elem = 1;
         elseif base >= 1000
-            nbytes = asz * ssize_of(base);
+            elem = ssize_of(base);
         else
-            nbytes = 8 * asz;
+            elem = 8;
         end
+        nbytes = prod(dims) * elem;
         lvartype.(name) = t + 2;    % the name decays to a pointer
         lvararr.(name) = 1;
         lvarstruct.(name) = 0;
+        lvarstride.(name) = cstride_of(dims, elem);
     elseif t == 1
         nbytes = 1;
         lvartype.(name) = t;
@@ -1111,11 +1346,37 @@ while true
     lvars.(name) = off;
     if token == 61          % '=': initializer
         next();
-        parse_assignment();
-        if t == 1
-            em(sprintf('\tmovb\t%%al, %d(%%rbp)', off));
+        if isarr
+            % constant array initializer: stores emitted directly
+            vals = parse_arr_init();
+            nelem = prod(dims);
+            if t == 1
+                elem = 1;
+            elseif base >= 1000
+                elem = ssize_of(base);
+            else
+                elem = 8;
+            end
+            if numel(vals) > nelem
+                fail('too many array initializers');
+            end
+            while numel(vals) < nelem
+                vals(end+1) = 0;    % C zero-fills the rest
+            end
+            for k = 1:numel(vals)
+                if t == 1
+                    em(sprintf('\tmovb\t$%d, %d(%%rbp)', vals(k), off + (k-1)));
+                else
+                    em(sprintf('\tmovq\t$%d, %d(%%rbp)', vals(k), off + (k-1)*elem));
+                end
+            end
         else
-            em(sprintf('\tmovq\t%%rax, %d(%%rbp)', off));
+            parse_assignment();
+            if t == 1
+                em(sprintf('\tmovb\t%%al, %d(%%rbp)', off));
+            else
+                em(sprintf('\tmovq\t%%rax, %d(%%rbp)', off));
+            end
         end
     end
     if token == 44          % ','
@@ -1501,7 +1762,8 @@ function parse_unary()
 % apply in reverse. Types: etype tracks the type; arrays and struct values
 % decay (no load, estruc = 1 for struct values).
 global token token_val idname strtext lvars lvartype lvararr lvarstruct ...
-       globals gtype garr gstruct funcs fret called ltype etype estruc
+       globals gtype garr gstruct funcs fret called ltype etype estruc ...
+       lvarstride gstride bstride
 ops = [];
 while token == 45 || token == 126 || token == 33 || token == 43 || ...   % - ~ ! +
       token == 38 || token == 42 || token == 170 || token == 171          % & * ++ --
@@ -1516,6 +1778,41 @@ elseif token == 128         % Num
     em(sprintf('\tmovq\t$%d, %%rax', double(token_val)));
     etype = 0;
     next();
+elseif token == 183         % sizeof: type or expression
+    next();
+    expect(40);
+    if token == 131 || token == 134 || token == 178   % a type
+        [base, stdef] = parse_basetype();
+        depth = 0;
+        while token == 42       % '*'
+            depth = depth + 1;
+            next();
+        end
+        if base == 1 && depth == 0
+            sz = 1;
+        elseif base >= 1000 && depth == 0
+            sz = ssize_of(base);
+        else
+            sz = 8;
+        end
+        expect(41);
+    else
+        % sizeof(expr): parse for the type, drop the emitted code
+        sn = numel(out);
+        parse_assignment();
+        expect(41);
+        if etype == 1
+            sz = 1;
+        elseif estruc
+            sz = ssize_of(etype);
+        else
+            sz = 8;
+        end
+        out(sn+1:numel(out)) = [];
+    end
+    em(sprintf('\tmovq\t$%d, %%rax', sz));
+    etype = 0;
+    estruc = 0;
 elseif token == 172         % Str: string literal -> char* to .Lstr data
     lab = new_str(strtext);
     em(sprintf('\tleaq\t%s(%%rip), %%rax', lab));
@@ -1556,7 +1853,9 @@ elseif token == 150         % Id: function call or variable
         end
     else
         % variable: local/param (rbp) or global (rip); arrays and struct
-        % values skip the load (their address is the value)
+        % values skip the load (their address is the value); enum constants
+        % are immediates.
+        isval = 0;
         if isfield(lvars, name)
             t = lvartype.(name);
             isarr = lvararr.(name);
@@ -1567,19 +1866,35 @@ elseif token == 150         % Id: function call or variable
             isarr = garr.(name);
             isst = gstruct.(name);
             em(sprintf('\tleaq\t%s(%%rip), %%rax', name));
+        elseif isfield(enums, name)
+            em(sprintf('\tmovq\t$%d, %%rax', enums.(name)));
+            etype = 0;
+            estruc = 0;
+            isval = 1;
         else
             fail(sprintf('undefined variable %s', name));
         end
-        etype = t;
-        if isst
-            estruc = 1;         % a struct value: address already in rax
-        else
-            estruc = 0;
-            if ~isarr
-                if t == 1
-                    em('\tmovzbl\t(%rax), %eax');
+        if ~isval
+            etype = t;
+            if isarr
+                if isfield(lvars, name)
+                    bstride = lvarstride.(name);
                 else
-                    em('\tmovq\t(%rax), %rax');
+                    bstride = gstride.(name);
+                end
+            else
+                bstride = [];
+            end
+            if isst
+                estruc = 1;         % a struct value: address already in rax
+            else
+                estruc = 0;
+                if ~isarr
+                    if t == 1
+                        em('\tmovzbl\t(%rax), %eax');
+                    else
+                        em('\tmovq\t(%rax), %rax');
+                    end
                 end
             end
         end
@@ -1596,28 +1911,52 @@ while token == 91 || token == 170 || token == 171 || token == 46 || token == 179
         em('\tpushq\t%rax');      % save the base address
         parse_assignment();
         expect(93);
-        if t >= 2
-            if t ~= 3       % char*: element size 1
-                em(sprintf('\timulq\t$%d, %%rax', elem_size(t)));
-            end
-            em('\tmovq\t%rax, %rbx');
+        if ~isempty(bstride)
+            scale = bstride(1);
+        elseif t >= 2
+            scale = elem_size(t);
         else
             fail('pointer type expected for indexing');
         end
+        if scale ~= 1
+            em(sprintf('\timulq\t$%d, %%rax', scale));
+        end
+        em('\tmovq\t%rax, %rbx');
         em('\tpopq\t%rax');
         em('\taddq\t%rbx, %rax');     % the element address
-        et = t - 2;
-        if t == 3
-            etype = 1;                % char
-            em('\tmovzbl\t(%rax), %eax');
-            estruc = 0;
-        elseif et >= 1000
-            etype = et;               % struct element: address, no load
-            estruc = 1;
+        if ~isempty(bstride)
+            if numel(bstride) > 1
+                bstride = bstride(2:end);   % a row: address, no load
+                % etype stays the pointer type (the row decays)
+            else
+                bstride = [];
+                if t == 3
+                    etype = 1;
+                    em('\tmovzbl\t(%rax), %eax');
+                    estruc = 0;
+                elseif t - 2 >= 1000
+                    etype = t - 2;
+                    estruc = 1;
+                else
+                    etype = t - 2;
+                    em('\tmovq\t(%rax), %rax');
+                    estruc = 0;
+                end
+            end
         else
-            etype = et;
-            em('\tmovq\t(%rax), %rax');
-            estruc = 0;
+            et = t - 2;
+            if t == 3
+                etype = 1;                % char
+                em('\tmovzbl\t(%rax), %eax');
+                estruc = 0;
+            elseif et >= 1000
+                etype = et;               % struct element: address, no load
+                estruc = 1;
+            else
+                etype = et;
+                em('\tmovq\t(%rax), %rax');
+                estruc = 0;
+            end
         end
     elseif token == 46 || token == 179    % '.' or '->': member access
         dot = (token == 46);
