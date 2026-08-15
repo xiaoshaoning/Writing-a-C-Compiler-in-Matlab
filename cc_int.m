@@ -8,6 +8,9 @@ function cc_int(varargin)
 %   Part 4: logical operators — `||` and `&&` with C precedence
 %           (|| < && < bitwise) and short-circuit jumps; results normalize
 %           to 0/1.
+%   Part 5: comparisons — `==`, `!=`, `<`, `>`, `<=`, `>=` (signed),
+%           precedence equality < relational < shift (C: `a & b < c` is
+%           `a & (b < c)`), results normalize to 0/1 via setcc.
 %
 % Emits COFF assembly for MSYS2 binutils on Windows (see README for the
 % gcc invocation). Pipeline: tokenizer (next) → recursive-descent parser
@@ -82,8 +85,9 @@ end
 
 function next()
 % next — tokenizer. Num=128, Return=130, Int=131, Main=132, Shl=140,
-% Shr=141, Lan=142, Lor=143; single-char operators/braces keep their ASCII
-% code; 0 = EOF. Skips whitespace.
+% Shr=141, Lan=142, Lor=143, Lt=144, Gt=145, Le=146, Ge=147, Eq=148,
+% Ne=149; single-char operators/braces keep their ASCII code; 0 = EOF.
+% Skips whitespace.
 global src si token token_val
 while si <= numel(src)
     c = src(si);
@@ -129,22 +133,46 @@ elseif (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
         fail(sprintf('unknown identifier %s', id));
     end
     return;
+elseif c == '='
+    si = si + 1;
+    if si <= numel(src) && src(si) == '='
+        si = si + 1;
+        token = 148;            % Eq
+    else
+        fail('expected == (no assignment in part 5)');
+    end
+    return;
+elseif c == '!'
+    si = si + 1;
+    if si <= numel(src) && src(si) == '='
+        si = si + 1;
+        token = 149;            % Ne
+    else
+        token = 33;             % '!' (logical not)
+    end
+    return;
 elseif c == '<'
     si = si + 1;
-    if si <= numel(src) && src(si) == '<'
+    if si <= numel(src) && src(si) == '='
+        si = si + 1;
+        token = 146;            % Le
+    elseif si <= numel(src) && src(si) == '<'
         si = si + 1;
         token = 140;            % Shl
     else
-        fail('expected << (no < operator in part 3)');
+        token = 144;            % Lt
     end
     return;
 elseif c == '>'
     si = si + 1;
-    if si <= numel(src) && src(si) == '>'
+    if si <= numel(src) && src(si) == '='
+        si = si + 1;
+        token = 147;            % Ge
+    elseif si <= numel(src) && src(si) == '>'
         si = si + 1;
         token = 141;            % Shr
     else
-        fail('expected >> (no > operator in part 3)');
+        token = 145;            % Gt
     end
     return;
 elseif c == '&'
@@ -296,16 +324,63 @@ end
 end
 
 function parse_bit_and()
-% bitwise_and := shift ('&' shift)*
+% bitwise_and := equality ('&' equality)*
+global token
+parse_equality();
+while token == 38           % '&'
+    next();
+    em('\tpushq\t%rax');
+    parse_equality();
+    em('\tmovl\t%eax, %ebx');
+    em('\tpopq\t%rax');
+    em('\tandl\t%ebx, %eax');
+end
+end
+
+function parse_equality()
+% equality := relational (('==' | '!=') relational)* — result 0/1 via setcc
+global token
+parse_relational();
+while token == 148 || token == 149   % Eq Ne
+    op = token;
+    next();
+    em('\tpushq\t%rax');
+    parse_relational();
+    em('\tmovl\t%eax, %ebx');
+    em('\tpopq\t%rax');
+    em('\tcmpl\t%ebx, %eax');
+    if op == 148
+        em('\tsete\t%al');
+    else
+        em('\tsetne\t%al');
+    end
+    em('\tmovzbl\t%al, %eax');
+end
+end
+
+function parse_relational()
+% relational := shift (('<' | '>' | '<=' | '>=') shift)* — signed
+% comparisons; eax = left, ebx = right, so setl/setg/etc. read eax-ebx.
 global token
 parse_shift();
-while token == 38           % '&'
+while token == 144 || token == 145 || token == 146 || token == 147  % Lt Gt Le Ge
+    op = token;
     next();
     em('\tpushq\t%rax');
     parse_shift();
     em('\tmovl\t%eax, %ebx');
     em('\tpopq\t%rax');
-    em('\tandl\t%ebx, %eax');
+    em('\tcmpl\t%ebx, %eax');
+    if op == 144        % Lt
+        em('\tsetl\t%al');
+    elseif op == 145    % Gt
+        em('\tsetg\t%al');
+    elseif op == 146    % Le
+        em('\tsetle\t%al');
+    else                % Ge
+        em('\tsetge\t%al');
+    end
+    em('\tmovzbl\t%al, %eax');
 end
 end
 

@@ -395,6 +395,29 @@ else
         'cc4_notmix.c',   1;
         'cc4_assoc.c',    1;
         'cc4_assoc2.c',   0;
+        'cc5_lt.c',       1;
+        'cc5_lt0.c',      0;
+        'cc5_gt.c',       1;
+        'cc5_gt0.c',      0;
+        'cc5_le.c',       1;
+        'cc5_le0.c',      0;
+        'cc5_ge.c',       1;
+        'cc5_ge0.c',      0;
+        'cc5_eq.c',       1;
+        'cc5_eq0.c',      0;
+        'cc5_ne.c',       1;
+        'cc5_ne0.c',      0;
+        'cc5_signed.c',   1;
+        'cc5_signed0.c',  0;
+        'cc5_prec1.c',    1;
+        'cc5_prec2.c',    1;
+        'cc5_prec3.c',    1;
+        'cc5_prec4.c',    1;
+        'cc5_prec5.c',    1;
+        'cc5_negcmp.c',   1;
+        'cc5_chain.c',    1;
+        'cc5_chain2.c',   0;
+        'cc5_mix.c',      1;
     };
     for k = 1:size(cctests, 1)
         try
