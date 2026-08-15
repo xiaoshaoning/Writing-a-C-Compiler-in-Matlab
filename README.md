@@ -26,7 +26,9 @@ Building compilers/interpreters in MATLAB, following two classic tutorials:
    `int a[10]`, `&`/`*`, `p[i]`, scaled pointer arithmetic), string
    literals, `++`/`--`, `?:`, `for`/`do-while`, `break`/`continue`, and
    `//`/`/* */` comments. All values are 64-bit (like the interpreter) so
-   addresses round-trip correctly.
+   addresses round-trip correctly. Part 12: structs — `struct Tag { … };`
+   definitions, struct variables/arrays/pointers (`.`, `->`, nested),
+   element-scaled pointer arithmetic; params/returns are by-pointer only.
 2. **Interpreter track** (`xc.m`) — lotabout's
    [write-a-C-interpreter](https://github.com/lotabout/write-a-C-interpreter):
    a C interpreter with a custom VM, ported to MATLAB — complete: lexer,
@@ -39,12 +41,12 @@ Building compilers/interpreters in MATLAB, following two classic tutorials:
 cc_int.m              assembly compiler (return <unary>; → x86-64 .s)
 xc.m                  C interpreter (lexer → parser → VM → syscalls)
 tests/
-  run_tests.m         test harness (350 checks: probe gate, VM, lexer,
+  run_tests.m         test harness (362 checks: probe gate, VM, lexer,
                       program corpus, syscall/acceptance, cc_int/gcc)
   programs/           test C programs
     return_2.c        return 2; (part 1 of the Norasandler series)
-    cc2_*.c–cc11_*.c  unary … pointers / control-flow / strings programs
-                      (parts 2-11, gcc-gated in the suite)
+    cc2_*.c–cc12_*.c  unary … pointers / structs programs
+                      (parts 2-12, gcc-gated in the suite)
     hello.c           fibonacci demo — xc.m acceptance program
 docs/
   2026-08-10-xc-matlab-port-plan.md        implementation plan
@@ -120,7 +122,7 @@ otherwise bleed into each other). The dialect is feature-complete against its
 documented scope; remaining C features (structs, unions, `switch`,
 `for`/`do-while`, …) are outside both the port and the reference dialect.
 
-Tests (350 checks — probe gate, VM selftest, lexer selftest, the program
+Tests (362 checks — probe gate, VM selftest, lexer selftest, the program
 corpus whose exit codes/outputs are cross-verified against the reference
 build, and a gcc-gated group that compiles and runs the assembly-track
 programs):

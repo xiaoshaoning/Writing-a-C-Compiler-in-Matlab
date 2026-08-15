@@ -8,19 +8,16 @@ lotabout's [write-a-C-interpreter](https://github.com/lotabout/write-a-C-interpr
 on-the-fly codegen → 38-opcode stack VM → syscalls. All seven planned phases
 are done, plus six post-parity features beyond the reference dialect.
 
-**Assembly track (`cc_int.m`): part 11.** Compiles pointers, arrays, and the
-rest of the statement/expression set to x86-64 COFF assembly (Norasandler
-series): parts 1-10 plus part 11 — `int *p`/`char *s` (multi-level),
-`int a[10]` (local/global/param), `&`/`*`, `p[i]` with element-scaled
-indexing, pointer arithmetic (`p+n`, `p-q`), string literals (`.data`
-`.string`, rip-relative), `++`/`--` (pre/post, pointer-scaled), `?:`
-ternary, `for`/`do-while` (the `for` step is line-buffered and spliced
-after the body), `break`/`continue` (loop-label stack), and `//`/`/* */`
-comments. **All values are 64-bit** (the 32-bit migration exposed a latent
-bug: `leaq` computes 64-bit addresses but `movl` stores truncated them,
-crashing on stacks above 4GB). Verified end-to-end through gcc; a
-gcc-gated group in the suite compiles and runs the `cc2_*.c`–`cc11_*.c`
-corpus.
+**Assembly track (`cc_int.m`): part 12.** Adds structs to the x86-64 COFF
+compiler (Norasandler series): `struct Tag { int x; char c; … };` type
+definitions, struct variables/arrays/pointers (local and global), `.` and
+`->` member access with nested structs, and element-scaled pointer
+arithmetic on struct pointers (`p++`, `p+n`, `p-q`, `p[i]`). Struct values
+evaluate to their address (no load — `estruc` tracks the value state);
+params/returns are by-pointer only (by-value is rejected with a clear
+message). Struct value types are 1000+2*stid. Verified end-to-end through
+gcc; a gcc-gated group in the suite compiles and runs the `cc2_*.c`–
+`cc12_*.c` corpus.
 
 **Fix (part 6): `cdivmod` negative-divisor bug.** Cross-checking the
 arithmetic corpus against the interpreter exposed a latent `xc.m` bug:
@@ -43,8 +40,8 @@ selftest cases (now 30) and `pp_divmod.c` (exit 89) cover it.
 
 ## Verification
 
-- **Test suite**: `tests/run_tests.m` — **350/350** on the target runtime
-  (146 interpreter checks + 204 gcc-gated assembly-track checks; the gcc
+- **Test suite**: `tests/run_tests.m` — **362/362** on the target runtime
+  (146 interpreter checks + 216 gcc-gated assembly-track checks; the gcc
   group skips if gcc is absent).
   Groups: runtime-primitive gate (probe), 30-case VM selftest, 9-case lexer
   selftest, program corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke.
@@ -124,7 +121,7 @@ report.
 ## Running
 
 ```
-D:\...\matlab.bat tests/run_tests.m          # full suite (350 checks)
+D:\...\matlab.bat tests/run_tests.m          # full suite (362 checks)
 D:\...\matlab.bat -batch "xc('tests/programs/hello.c')"   # acceptance program
 D:\...\matlab.bat -batch "xc('-s', 'tests/programs/hello.c')"  # compile dump
 D:\...\matlab.bat -batch "xc('-d', 'tests/programs/hello.c')"  # trace

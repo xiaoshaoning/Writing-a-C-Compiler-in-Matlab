@@ -559,6 +559,18 @@ else
         'cc11_strlen.c',    5;
         'cc11_strlit.c',   99;
         'cc11_strptr.c',    5;
+        'cc12_basic.c',    34;
+        'cc12_arrow.c',    56;
+        'cc12_char.c',     72;
+        'cc12_fn.c',       30;
+        'cc12_arr.c',      65;   % 321 mod 256
+        'cc12_nested.c',   56;
+        'cc12_global.c',   42;
+        'cc12_arith.c',     7;
+        'cc12_pplus.c',     9;
+        'cc12_idx.c',       8;
+        'cc12_garray.c',    5;
+        'cc12_deref.c',     8;
     };
     for k = 1:size(cctests, 1)
         try
