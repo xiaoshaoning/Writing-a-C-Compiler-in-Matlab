@@ -50,6 +50,24 @@ and statement expressions use it too), global function pointers
 member declaration order is tracked in the struct def and the values are
 laid out into bytes little-endian). Test corpus: `cc15_*` (20 programs).
 
+**Compiler: struct-returning function pointers, local structs/enums,
+string→char[] (2026-08-15).** `cc_int.m` gained: struct-returning function
+pointers (`struct P (*fp)(int)` — the return type is encoded into the fptr
+type as `2000 + rettype`, so a call through a struct-returning pointer
+reserves the hidden slot and pops it correctly; char-returning pointers
+work too), local struct definitions (including the compound
+`struct Q { … } q;` form, file scope included, via a `register_struct`
+that returns the stid), local `enum`s (statement-level dispatch), enum
+values as constant expressions (`B = A + 2` — a compile-time evaluator),
+and string→char[] assignment (`s = "hi"` copies the bytes bounded by the
+array's size; `a[1] = "xy"` for rows; the array's total size is tracked
+in `lvararrsz`/`gvararrsz`). Fixed: the call-through-pointer reload/cleanup
+offsets scaled by the slot size (16-byte structs called `24(%rsp)` — a
+garbage slot word — instead of `16+rsz`), indexed-row lvalues
+(`lvalue_addr` accepts the `addq %rbx, %rax` tail; the row branch restores
+`etype`), and `curarrsz` now tracks rows. Test corpus: `cc16_*` (14
+programs).
+
 ## Deliverables
 
 | Phase | Scope | Commit |
@@ -64,8 +82,8 @@ laid out into bytes little-endian). Test corpus: `cc15_*` (20 programs).
 
 ## Verification
 
-- **Test suite**: `tests/run_tests.m` — **599/599** on the target runtime
-  (146 interpreter checks + 266 gcc-gated assembly-track checks + 187
+- **Test suite**: `tests/run_tests.m` — **613/613** on the target runtime
+  (146 interpreter checks + 280 gcc-gated assembly-track checks + 187
   cross-track parity checks; the gcc group skips if gcc is absent).
   Groups: runtime-primitive gate (probe), 30-case VM selftest, 9-case lexer
   selftest, program corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke.
@@ -145,7 +163,7 @@ report.
 ## Running
 
 ```
-D:\...\matlab.bat tests/run_tests.m          # full suite (599 checks)
+D:\...\matlab.bat tests/run_tests.m          # full suite (613 checks)
 D:\...\matlab.bat -batch "xc('tests/programs/hello.c')"   # acceptance program
 D:\...\matlab.bat -batch "xc('-s', 'tests/programs/hello.c')"  # compile dump
 D:\...\matlab.bat -batch "xc('-d', 'tests/programs/hello.c')"  # trace
