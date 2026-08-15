@@ -1504,16 +1504,6 @@ while token == 61 || (token >= 160 && token <= 169)
 end
 end
 
-function expect_id(name)
-% expect_id — consume the current identifier if its text is `name`.
-global token idname
-if token == 150 && strcmp(idname, name)
-    next();
-else
-    fail(sprintf('expected identifier %s', name));
-end
-end
-
 function parse_logical_or()
 % logical_or := logical_and ('||' logical_and)* — short-circuit: a
 % nonzero operand jumps straight to set-the-result-to-1.
