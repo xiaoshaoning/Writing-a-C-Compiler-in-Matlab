@@ -340,12 +340,12 @@ catch e
 end
 
 % --- group 10: assembly track (cc_int, gcc-gated) ---
-% Norasandler part 2 (unary operators). Only runs when gcc is available;
-% the check compiles the generated .s, runs the .exe, and compares the
-% 8-bit exit status. NOTE: the runtime's system() maps the process exit
-% code to its low byte but reports an all-ones 32-bit code (return -1) as
-% -1 — a confirmed-successful run with a negative status means the program
-% returned -1, i.e. 255.
+% Norasandler parts 2-3 (unary + bitwise binary operators). Only runs when
+% gcc is available; the check compiles the generated .s, runs the .exe,
+% and compares the 8-bit exit status. NOTE: the runtime's system() maps
+% the process exit code to its low byte but reports an all-ones 32-bit code
+% (return -1) as -1 — a confirmed-successful run with a negative status
+% means the program returned -1, i.e. 255.
 gcc = 'C:\msys64\ucrt64\bin\gcc.exe';
 if exist(gcc, 'file') ~= 2
     gcc = 'gcc';
@@ -354,7 +354,7 @@ end
 if gcc_ok ~= 0
     fprintf('SKIP  cc_int group (gcc not found)\n');
 else
-    cc2 = {
+    cctests = {
         'return_2.c',     2;
         'cc2_neg.c',    214;
         'cc2_not.c',    213;
@@ -366,13 +366,25 @@ else
         'cc2_neg0.c',     0;
         'cc2_lnatneg.c',  0;
         'cc2_negnot.c',   6;
+        'cc3_or.c',      47;
+        'cc3_and.c',      8;
+        'cc3_xor.c',     39;
+        'cc3_shl.c',     16;
+        'cc3_shr.c',      8;
+        'cc3_shrneg.c', 252;
+        'cc3_prec1.c',    7;
+        'cc3_prec2.c',    7;
+        'cc3_prec3.c',  240;
+        'cc3_prec4.c',    1;
+        'cc3_shrall.c', 255;
+        'cc3_mixed.c',   23;
     };
-    for k = 1:size(cc2, 1)
+    for k = 1:size(cctests, 1)
         try
-            cc_int(['tests/programs/' cc2{k,1}], 'tmp_cc2.s');
-            [st_gcc, ~] = system([gcc, ' tmp_cc2.s -o tmp_cc2.exe']);
+            cc_int(['tests/programs/' cctests{k,1}], 'tmp_cc.s');
+            [st_gcc, ~] = system([gcc, ' tmp_cc.s -o tmp_cc.exe']);
             if st_gcc == 0
-                [st_run, ~] = system('tmp_cc2.exe');
+                [st_run, ~] = system('tmp_cc.exe');
                 if st_run < 0
                     st_run = st_run + 256;   % return -1 (0xFFFFFFFF)
                 end
@@ -380,15 +392,15 @@ else
             else
                 got = -999;
             end
-            [npass nfail] = addcheck(npass, nfail, got == cc2{k,2}, ...
-                sprintf('cc_int %s -> exit %d', cc2{k,1}, cc2{k,2}));
+            [npass nfail] = addcheck(npass, nfail, got == cctests{k,2}, ...
+                sprintf('cc_int %s -> exit %d', cctests{k,1}, cctests{k,2}));
         catch e
             [npass nfail] = addcheck(npass, nfail, false, ...
-                sprintf('cc_int %s: %s', cc2{k,1}, e.message));
+                sprintf('cc_int %s: %s', cctests{k,1}, e.message));
         end
     end
-    delete('tmp_cc2.s');
-    delete('tmp_cc2.exe');
+    delete('tmp_cc.s');
+    delete('tmp_cc.exe');
 end
 
 

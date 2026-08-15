@@ -3,10 +3,12 @@ function cc_int(varargin)
 %   Part 1: `return <int>;`
 %   Part 2: unary operators — `return -42;`, `return ~42;`, `return !42;`,
 %           unary plus, arbitrarily nested (`return -~!5;`).
+%   Part 3: bitwise binary operators — `|`, `&`, `^`, `<<`, `>>` with C
+%           precedence (| < ^ < & < shift), left-associative.
 %
 % Emits COFF assembly for MSYS2 binutils on Windows (see README for the
 % gcc invocation). Pipeline: tokenizer (next) → recursive-descent parser
-% (parse_program/parse_unary) → codegen.
+% (parse_program/parse_expr/…) → codegen.
 %
 %   cc_int('in.c', 'out.s')
 %   gcc out.s -o out
@@ -75,8 +77,9 @@ end
 end
 
 function next()
-% next — tokenizer. Num=128, Return=130, Int=131, Main=132; single-char
-% operators/braces keep their ASCII code; 0 = EOF. Skips whitespace.
+% next — tokenizer. Num=128, Return=130, Int=131, Main=132, Shl=140,
+% Shr=141; single-char operators/braces keep their ASCII code; 0 = EOF.
+% Skips whitespace.
 global src si token token_val
 while si <= numel(src)
     c = src(si);
@@ -122,6 +125,24 @@ elseif (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
         fail(sprintf('unknown identifier %s', id));
     end
     return;
+elseif c == '<'
+    si = si + 1;
+    if si <= numel(src) && src(si) == '<'
+        si = si + 1;
+        token = 140;            % Shl
+    else
+        fail('expected << (no < operator in part 3)');
+    end
+    return;
+elseif c == '>'
+    si = si + 1;
+    if si <= numel(src) && src(si) == '>'
+        si = si + 1;
+        token = 141;            % Shr
+    else
+        fail('expected >> (no > operator in part 3)');
+    end
+    return;
 else
     token = double(c);
     si = si + 1;
@@ -154,7 +175,7 @@ expect(40);     % (
 expect(41);     % )
 expect(123);    % {
 expect(130);    % return
-parse_unary();
+parse_expr();
 expect(59);     % ;
 expect(125);    % }
 if token ~= 0
@@ -168,9 +189,76 @@ em('\t.cfi_endproc');
 em('.LFE0:');
 end
 
+function parse_expr()
+% expression := bitwise_or
+parse_bit_or();
+end
+
+function parse_bit_or()
+% bitwise_or := bitwise_xor ('|' bitwise_xor)*
+global token
+parse_bit_xor();
+while token == 124          % '|'
+    next();
+    em('\tpushq\t%rax');    % save the left operand
+    parse_bit_xor();
+    em('\tmovl\t%eax, %ebx');
+    em('\tpopq\t%rax');
+    em('\torl\t%ebx, %eax');
+end
+end
+
+function parse_bit_xor()
+% bitwise_xor := bitwise_and ('^' bitwise_and)*
+global token
+parse_bit_and();
+while token == 94           % '^'
+    next();
+    em('\tpushq\t%rax');
+    parse_bit_and();
+    em('\tmovl\t%eax, %ebx');
+    em('\tpopq\t%rax');
+    em('\txorl\t%ebx, %eax');
+end
+end
+
+function parse_bit_and()
+% bitwise_and := shift ('&' shift)*
+global token
+parse_shift();
+while token == 38           % '&'
+    next();
+    em('\tpushq\t%rax');
+    parse_shift();
+    em('\tmovl\t%eax, %ebx');
+    em('\tpopq\t%rax');
+    em('\tandl\t%ebx, %eax');
+end
+end
+
+function parse_shift()
+% shift := unary (('<<' | '>>') unary)* — left-associative; the shift
+% count goes in %cl; '>>' is an arithmetic shift (signed int).
+global token
+parse_unary();
+while token == 140 || token == 141   % Shl Shr
+    op = token;
+    next();
+    em('\tpushq\t%rax');        % save the left operand
+    parse_unary();
+    em('\tmovl\t%eax, %ecx');   % shift count in %cl
+    em('\tpopq\t%rax');
+    if op == 140
+        em('\tshll\t%cl, %eax');
+    else
+        em('\tsarl\t%cl, %eax');
+    end
+end
+end
+
 function parse_unary()
-% parse_unary — unary := ('-' | '~' | '!' | '+')* Num. Emits `movl $N,
-% %eax` then applies the operators in reverse (innermost first).
+% unary := ('-' | '~' | '!' | '+')* Num. Emits `movl $N, %eax` then
+% applies the operators in reverse (innermost first).
 global token token_val
 ops = [];
 while token == 45 || token == 126 || token == 33 || token == 43   % - ~ ! +
