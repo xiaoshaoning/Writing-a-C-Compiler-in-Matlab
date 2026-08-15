@@ -601,6 +601,26 @@ else
         'cc14_bv2.c',     42;
         'cc14_bv3.c',     38;
         'cc14_bv4.c',      9;
+        'cc15_cast.c',    65;
+        'cc15_cast2.c',   44;
+        'cc15_comma.c',    3;
+        'cc15_comma2.c',   6;
+        'cc15_fptrcall.c', 15;
+        'cc15_gfptr.c',    5;
+        'cc15_gsinit.c',  56;
+        'cc15_gsinit2.c', 89;   % 345 mod 256
+        'cc15_gsinit3.c', 72;
+        'cc15_gsinit4.c',  9;
+        'cc15_nestedstruct.c', 89;   % 345 mod 256
+        'cc15_shortcircuit.c', 105;
+        'cc15_void.c',    11;
+        'cc15_void2.c',    5;
+        'cc15_assignval.c',  5;
+        'cc15_memberaddr.c', 9;
+        'cc15_memberarrow.c', 7;
+        'cc15_moddiv.c',   3;
+        'cc15_sizeoftype.c', 81;   % 41 mod 256
+        'cc15_ternary.c',  4;
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).

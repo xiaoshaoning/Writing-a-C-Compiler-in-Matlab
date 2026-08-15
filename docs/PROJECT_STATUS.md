@@ -32,11 +32,23 @@ address, calls through pointers with `call *%rax`, `int (*fp)(int)`
 declarations), `goto`/labels (forward jumps backpatched per function), and
 by-value struct params/returns (hidden return slot at `16+8*nparams(%rbp)`
 pushed deepest by the caller, chunked 8-byte copies both ways, size-8
-structs handled). Test corpus: `cc14_*` (12 programs, 246 gcc-gated checks
-total). Also fixed: `si` missing from `parse_statement`'s globals (the
-label-peek restore was a no-op), a lost `bstride`/`isst` block in
-`parse_unary`, `estruc` not reset by Num/Str literals, and forward function
-references (mutual recursion).
+structs handled). Test corpus: `cc14_*` (12 programs). Also fixed: `si`
+missing from `parse_statement`'s globals (the label-peek restore was a
+no-op), a lost `bstride`/`isst` block in `parse_unary`, `estruc` not reset
+by Num/Str literals, and forward function references (mutual recursion).
+
+**Compiler: void, casts, comma, global function pointers, global struct
+initializers (2026-08-15).** `cc_int.m` gained: `void` functions (and
+`(void)` params, bare `return;`, empty bodies via a block-style body parse
+for void functions), C casts `(int)x`/`(char*)p`/`(char)x` (the `(`-branch
+peeks for a type keyword; `(char)` truncates with `movsbl`), the comma
+operator (`parse_expr` is now `assignment (',' assignment)*`; parenthesised
+and statement expressions use it too), global function pointers
+(`int (*gfp)(int,int);`), `(*fp)(args)` calls (function pointers carry a
+2002 type marker so `*fp` skips the load), and global struct initializers
+(`struct P gp = {5,6};`, nested `{{…},…}`, char members, partial inits —
+member declaration order is tracked in the struct def and the values are
+laid out into bytes little-endian). Test corpus: `cc15_*` (20 programs).
 
 ## Deliverables
 
@@ -52,8 +64,8 @@ references (mutual recursion).
 
 ## Verification
 
-- **Test suite**: `tests/run_tests.m` — **579/579** on the target runtime
-  (146 interpreter checks + 246 gcc-gated assembly-track checks + 187
+- **Test suite**: `tests/run_tests.m` — **599/599** on the target runtime
+  (146 interpreter checks + 266 gcc-gated assembly-track checks + 187
   cross-track parity checks; the gcc group skips if gcc is absent).
   Groups: runtime-primitive gate (probe), 30-case VM selftest, 9-case lexer
   selftest, program corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke.
@@ -133,7 +145,7 @@ report.
 ## Running
 
 ```
-D:\...\matlab.bat tests/run_tests.m          # full suite (579 checks)
+D:\...\matlab.bat tests/run_tests.m          # full suite (599 checks)
 D:\...\matlab.bat -batch "xc('tests/programs/hello.c')"   # acceptance program
 D:\...\matlab.bat -batch "xc('-s', 'tests/programs/hello.c')"  # compile dump
 D:\...\matlab.bat -batch "xc('-d', 'tests/programs/hello.c')"  # trace
