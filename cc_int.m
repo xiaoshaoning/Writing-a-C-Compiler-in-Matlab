@@ -1,5 +1,5 @@
 function cc_int(varargin)
-% cc_int — x86-64 assembly compiler (Norasandler "Writing a C Compiler").
+% cc_int — x86-64 assembly compiler (Norasandqer "Writing a C Compiler").
 %   Part 1: `return <int>;`
 %   Part 2: unary operators — `return -42;`, `return ~42;`, `return !42;`,
 %           unary plus, arbitrarily nested (`return -~!5;`).
@@ -14,7 +14,7 @@ function cc_int(varargin)
 %   Part 6: arithmetic — `+`, `-`, `*`, `/`, `%` with full C precedence
 %           (relational < shift < additive < term < unary), parenthesised
 %           expressions, integer division truncating toward zero, `%` with
-%           the dividend's sign (cltd/idivl).
+%           the dividend's sign (cqto/idivq).
 %   Part 7: statements and variables — `int x;`, `int x = 5;` (comma
 %           lists), local stack frame (subq after the prologue, backpatched
 %           size), expression statements, assignment (right-associative,
@@ -29,6 +29,13 @@ function cc_int(varargin)
 %           literals), global variables (.comm / .data, rip-relative
 %           access, constant initializers), and compound assignment
 %           (`+=`, `-=`, `*=`, `/=`, `%=`, `<<=`, `>>=`, `&=`, `|=`, `^=`).
+%   Part 11: pointers and arrays — `int *p`, `int a[10]` (local/global/
+%           param), `&` / `*`, `p[i]`, pointer arithmetic (scaled by the
+%           element size), string literals. Plus: `++`/`--` (pre/post),
+%           `?:` ternary, `for`/`do-while`, `break`/`continue`, and `//`
+%           and `/* */` comments.
+%   Types: 0=int, 1=char, 2=int*, 3=char*, 4=int**, … (base + 2*ptr depth;
+%   only t==1 is a byte; a pointer's element size is 1 iff t==3).
 %
 % Emits COFF assembly for MSYS2 binutils on Windows (see README for the
 % gcc invocation). Pipeline: tokenizer (next) → recursive-descent parser
@@ -38,8 +45,9 @@ function cc_int(varargin)
 %   gcc out.s -o out
 %   .\out.exe  (cmd)  /  ./out  (bash) — exit code is the returned value
 
-global src si token token_val idname out fname lbl lvars lvartype fbytes ...
-       funcs called retlbl cfn globals gtype glist ltype cret
+global src si token token_val idname strtext out fname lbl lvars lvartype ...
+       lvararr fbytes funcs fret called retlbl cfn globals gtype garr glist ...
+       strs nstr etype ltype cret loopctx
 
 if nargin ~= 2
    error('USAGE: cc_int in.c out.s');
@@ -61,19 +69,27 @@ fname = [name, ext];
 si = 1;
 token = 0;
 token_val = 0;
+strtext = '';   % text of the last string literal
 lbl = 0;      % unique-label counter for short-circuit jumps
 cfn = 0;      % function counter (.LFBn/.LFEn/.Lretn)
+loopctx = {};   % stack of {break_label, continue_label} for break/continue
 lvars = struct();    % local/param name -> frame offset (bytes)
-lvartype = struct(); % local/param name -> 1 = char, 0 = int
+lvartype = struct(); % local/param name -> type code (0 int, 1 char, 2 int* …)
+lvararr = struct();  % local name -> 1 if an array (name decays to a pointer)
 fbytes = 0;          % current function's frame bytes (locals only)
 funcs = struct();    % defined function name -> param count
+fret = struct();     % function name -> return type code
 called = struct();   % called function names (verified defined at the end)
 retlbl = '';         % current function's return label
 cret = 0;            % current function returns char
-ltype = 0;           % type of the last parsed lvalue (0 = int, 1 = char)
+etype = 0;           % type code of the current expression
+ltype = 0;           % type of the last parsed lvalue (store width)
 globals = struct();  % defined global names
-gtype = struct();    % global name -> 1 = char, 0 = int
-glist = {};          % {name, is_char, init or []} for the .comm/.data output
+gtype = struct();    % global name -> type code
+garr = struct();     % global name -> 1 if an array
+glist = {};          % {name, type, init or []} for the .comm/.data output
+strs = {};           % {label, text} string literals for the .data output
+nstr = 0;            % string-literal counter
 out = {};       % emitted assembly lines (cell; tabs are literal in em)
 
 next();
@@ -124,16 +140,28 @@ end
 end
 
 function next()
-% next — tokenizer. Num=128, Return=130, Int=131, Char=134, Id=150,
+% next — tokenizer. Num=128, Return=130, Int=131, Char=134, Str=172, Id=150,
 % Shl=140, Shr=141, Lan=142, Lor=143, Lt=144, Gt=145, Le=146, Ge=147,
-% Eq=148, Ne=149, Assign=61 ('='), AddAssign=160 .. XorAssign=169; single-char
-% operators/braces keep their ASCII code; 0 = EOF. Skips whitespace.
-% Identifier text goes into idname; char literals ('A', '\n') become Num.
-global src si token token_val idname
+% Eq=148, Ne=149, Assign=61 ('='), AddAssign=160 .. XorAssign=169, Inc=170,
+% Dec=171, For=173, Do=174, Break=175, Continue=176; single-char
+% operators/braces keep their ASCII code; 0 = EOF. Skips whitespace and
+% `//`/`/* */` comments. Identifier text goes into idname; char literals
+% ('A', '\n') become Num; string literals become Str (text in strtext).
+global src si token token_val idname strtext
 while si <= numel(src)
     c = src(si);
     if c == ' ' || c == char(9) || c == char(10) || c == char(13)
         si = si + 1;
+    elseif c == '/' && si + 1 <= numel(src) && src(si+1) == '/'
+        while si <= numel(src) && src(si) ~= char(10) && src(si) ~= char(13)
+            si = si + 1;
+        end
+    elseif c == '/' && si + 1 <= numel(src) && src(si+1) == '*'
+        si = si + 2;
+        while si + 1 <= numel(src) && ~(src(si) == '*' && src(si+1) == '/')
+            si = si + 1;
+        end
+        si = si + 2;
     else
         break;
     end
@@ -176,10 +204,44 @@ elseif (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
         token = 152;            % While
     elseif strcmp(id, 'else')
         token = 153;            % Else
+    elseif strcmp(id, 'for')
+        token = 173;            % For
+    elseif strcmp(id, 'do')
+        token = 174;            % Do
+    elseif strcmp(id, 'break')
+        token = 175;            % Break
+    elseif strcmp(id, 'continue')
+        token = 176;            % Continue
     else
         token = 150;            % Id (incl. 'main'); text in idname
         idname = id;
     end
+    return;
+elseif c == 34                  % '"': string literal
+    si = si + 1;
+    strtext = '';
+    while si <= numel(src)
+        v = src(si);
+        if v == 34              % closing quote
+            break;
+        end
+        si = si + 1;
+        if v == 92              % backslash escape
+            if si <= numel(src)
+                v = src(si);
+                si = si + 1;
+                if v == 110
+                    v = char(10);
+                end
+            end
+        end
+        strtext = [strtext, v];
+    end
+    if si > numel(src)
+        fail('unterminated string literal');
+    end
+    si = si + 1;                % closing quote
+    token = 172;                % Str
     return;
 elseif c == 39                  % '\'': char literal
     si = si + 1;
@@ -295,6 +357,12 @@ elseif c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '^'
         else
             token = 169;        % XorAssign
         end
+    elseif c == '+' && si <= numel(src) && src(si) == '+'
+        si = si + 1;
+        token = 170;            % Inc
+    elseif c == '-' && si <= numel(src) && src(si) == '-'
+        si = si + 1;
+        token = 171;            % Dec
     else
         token = double(c);
     end
@@ -329,16 +397,21 @@ emit_globals();
 end
 
 function parse_decl_or_func()
-% type name — '(' means a function definition, otherwise global variable(s)
+% type ('*')* name — '(' means a function definition, otherwise globals
 global token idname
 if token == 131             % int
-    isc = 0;
+    base = 0;
     next();
 elseif token == 134         % char
-    isc = 1;
+    base = 1;
     next();
 else
     fail('expected int or char declaration');
+end
+depth = 0;
+while token == 42           % '*'
+    depth = depth + 1;
+    next();
 end
 if token ~= 150
     fail('expected a name');
@@ -346,22 +419,27 @@ end
 name = idname;
 next();
 if token == 40              % '(': function
-    parse_function_tail(name, isc);
+    if depth > 0
+        fail('pointer-returning functions are not supported');
+    end
+    parse_function_tail(name, base);
 else
-    parse_globals(name, isc);
+    parse_globals(name, base, depth);
 end
 end
 
 function parse_function_tail(fname2, ischarfn)
 % after 'type name': '(' params ')' '{' <statements> return '}' — emit the
 % per-function prologue, backpatch the frame size, and the epilogue.
-global token out idname lvars lvartype fbytes funcs retlbl cfn cret
+global token out idname lvars lvartype lvararr fbytes funcs fret retlbl cfn cret
 expect(40);                 % (
 save_lvars = lvars;
 save_lvartype = lvartype;
+save_lvararr = lvararr;
 save_fbytes = fbytes;
 lvars = struct();
 lvartype = struct();
+lvararr = struct();
 fbytes = 0;
 nparams = parse_params();
 expect(41);                 % )
@@ -370,6 +448,7 @@ if isfield(funcs, fname2)
     fail(sprintf('duplicate function %s', fname2));
 end
 funcs.(fname2) = nparams;   % register before the body (recursion)
+fret.(fname2) = ischarfn;   % return type for call sites
 cret = ischarfn;
 cfn = cfn + 1;
 fn = cfn;
@@ -402,37 +481,60 @@ em(sprintf('.LFE%d:', fn));
 
 lvars = save_lvars;
 lvartype = save_lvartype;
+lvararr = save_lvararr;
 fbytes = save_fbytes;
 end
 
-function parse_globals(name, isc)
-% global variable(s): name (, name)* ('=' constant)? ';' — collected for
-% the .comm/.data section emitted at the end of the file.
-global token idname globals gtype glist
+function parse_globals(name, base, depth)
+% global: name (('[' Num ']') | ('=' const|string)?) (',' name …)? ';' —
+% collected for the .comm/.data section emitted at the end of the file.
+global token idname strtext globals gtype garr glist
 while true
     if isfield(globals, name)
         fail(sprintf('duplicate global %s', name));
     end
     globals.(name) = 1;
-    gtype.(name) = isc;
+    t = base + 2 * depth;
+    isarr = 0;
+    asz = 0;
+    if token == 91          % '[': array
+        next();
+        if token ~= 128
+            fail('expected a constant array size');
+        end
+        asz = double(token_val);
+        next();
+        expect(93);
+        if asz < 0
+            fail('bad array size');
+        end
+        isarr = 1;
+    end
+    gtype.(name) = t + 2 * isarr;
+    garr.(name) = isarr;
     initv = [];
     if token == 61          % '=': constant initializer
         next();
-        neg = 0;
-        if token == 45      % '-'
-            neg = 1;
+        if token == 172     % string literal: pointer init
+            initv = ['S', strtext];
             next();
-        end
-        if token ~= 128
-            fail('expected a constant global initializer');
-        end
-        initv = double(token_val);
-        next();
-        if neg
-            initv = -initv;
+        else
+            neg = 0;
+            if token == 45      % '-'
+                neg = 1;
+                next();
+            end
+            if token ~= 128
+                fail('expected a constant global initializer');
+            end
+            initv = double(token_val);
+            next();
+            if neg
+                initv = -initv;
+            end
         end
     end
-    glist{end+1} = {name, isc, initv};
+    glist{end+1} = {name, gtype.(name), isarr, asz, initv};
     if token == 44          % ','
         next();
         if token ~= 150
@@ -448,21 +550,30 @@ expect(59);                 % ;
 end
 
 function emit_globals()
-% emit the .comm (uninitialized) and .data (initialized) global definitions.
-global out glist
+% emit the .comm (uninitialized) and .data (initialized) global definitions,
+% then the string literals.
+global out glist strs
 dat = 0;
 for k = 1:numel(glist)
     g = glist{k};
     nm = g{1};
-    isc = g{2};
-    v = g{3};
-    if isc
-        sz = 1;
+    t = g{2};
+    isarr = g{3};
+    asz = g{4};
+    v = g{5};
+    if isarr
+        if mod(t, 2) == 1       % char-based element
+            nbytes = asz;
+        else
+            nbytes = 4 * asz;
+        end
+    elseif t == 1
+        nbytes = 1;
     else
-        sz = 4;
+        nbytes = 4;
     end
     if isempty(v)
-        em(sprintf('\t.comm\t%s,%d,%d', nm, sz, sz));
+        em(sprintf('\t.comm\t%s,%d,%d', nm, nbytes, nbytes));
     else
         if ~dat
             em('\t.data');
@@ -470,13 +581,34 @@ for k = 1:numel(glist)
         end
         em(sprintf('\t.globl\t%s', nm));
         em(sprintf('%s:', nm));
-        if isc
+        if ischar(v)
+            % string-literal pointer initializer (marker 'S' + text)
+            em(sprintf('\t.quad\t%s', new_str(v(2:end))));
+        elseif t == 1
             em(sprintf('\t.byte\t%d', v));
         else
-            em(sprintf('\t.long\t%d', v));
+            em(sprintf('\t.quad\t%d', v));
         end
     end
 end
+em('\t.data');
+for k = 1:numel(strs)
+    s = strs{k};
+    em(sprintf('%s:', s{1}));
+    txt = s{2};
+    txt = strrep(txt, '\', '\\');
+    txt = strrep(txt, '"', '\"');
+    txt = strrep(txt, char(10), '\n');
+    em(sprintf('\t.string\t"%s"', txt));
+end
+end
+
+function lab = new_str(text)
+% new_str — register a string literal, return its label (emitted later).
+global strs nstr
+lab = sprintf('.Lstr%d', nstr);
+nstr = nstr + 1;
+strs{end+1} = {lab, text};
 end
 
 function parse_body()
@@ -490,29 +622,46 @@ parse_return_statement();
 end
 
 function nparams = parse_params()
-% params := (int|char name (',' int|char name)*)? — collect names/types
-% first, then assign rbp offsets: with args pushed left-to-right, param k
-% (1-based) sits at 8*(nparams-k+2)(%%rbp) (rbp+16 for the last param).
-global token idname lvars lvartype
+% params := (int|char ('*')* name (('[' … ']')? (',' …)*))? — collect
+% names/types first, then assign rbp offsets: with args pushed
+% left-to-right, param k (1-based) sits at 8*(nparams-k+2)(%%rbp). Array
+% params decay to pointers.
+global token idname lvars lvartype lvararr
 nparams = 0;
 names = {};
-cflags = {};
+types = {};
 while token ~= 41           % ')'
     if token == 131         % int
-        isc = 0;
+        base = 0;
         next();
     elseif token == 134     % char
-        isc = 1;
+        base = 1;
         next();
     else
         fail('expected a parameter declaration');
+    end
+    depth = 0;
+    while token == 42       % '*'
+        depth = depth + 1;
+        next();
     end
     if token ~= 150
         fail('expected a parameter name');
     end
     names{end+1} = idname;
-    cflags{end+1} = isc;
+    t = base + 2 * depth;
     next();
+    if token == 91          % '[': array parameter decays to a pointer
+        while token == 91
+            next();
+            if token == 128
+                next();
+            end
+            expect(93);
+        end
+        t = t + 2;
+    end
+    types{end+1} = t;
     if token == 44          % ','
         next();
     elseif token ~= 41
@@ -526,12 +675,14 @@ for k = 1:nparams
         fail(sprintf('duplicate parameter %s', nm));
     end
     lvars.(nm) = 8 * (nparams - k + 2);
-    lvartype.(nm) = cflags{k};
+    lvartype.(nm) = types{k};
+    lvararr.(nm) = 0;   % params are pointers, not arrays
 end
 end
 
 function parse_statement()
-% statement := declaration | '{' statement* '}' | if | while | return | expr ';'
+% statement := declaration | '{' statement* '}' | if | while | for | do |
+% break | continue | return | expr ';'
 global token
 if token == 131 || token == 134    % int/char: declaration
     parse_declaration();
@@ -545,6 +696,14 @@ elseif token == 151         % if
     parse_if();
 elseif token == 152         % while
     parse_while();
+elseif token == 173         % for
+    parse_for();
+elseif token == 174         % do
+    parse_do();
+elseif token == 175         % break
+    parse_break();
+elseif token == 176         % continue
+    parse_continue();
 elseif token == 130         % return (nested in a block)
     parse_return_statement();
 else
@@ -560,7 +719,7 @@ next();                     % consume 'if'
 expect(40);
 parse_expr();
 expect(41);
-em('\tcmpl\t$0, %eax');
+em('\tcmpq\t$0, %rax');
 e1 = newlabel();
 e2 = newlabel();
 em(sprintf('\tje\t%s', e1));
@@ -575,21 +734,116 @@ em(sprintf('%s:', e2));
 end
 
 function parse_while()
-% while := 'while' '(' expr ')' statement — start: / <cond> / je end /
-% <body> / jmp start / end:
-global token
+% while := 'while' '(' expr ')' statement — break targets the end label,
+% continue the start label.
+global token loopctx
 next();                     % consume 'while'
 s = newlabel();
 e = newlabel();
+loopctx{end+1} = {e, s};
 em(sprintf('%s:', s));
 expect(40);
 parse_expr();
 expect(41);
-em('\tcmpl\t$0, %eax');
+em('\tcmpq\t$0, %rax');
 em(sprintf('\tje\t%s', e));
 parse_statement();
 em(sprintf('\tjmp\t%s', s));
 em(sprintf('%s:', e));
+loopctx(end) = [];
+end
+
+function parse_for()
+% for := 'for' '(' [init] ';' [cond] ';' [step] ')' statement
+% Runtime order: init / s: cond / body / st: step / jmp s / e:. The step is
+% token-wise BEFORE the body, so its emitted lines are buffered and spliced
+% after the body.
+global token loopctx out
+next();                     % consume 'for'
+expect(40);
+if token ~= 59              % ';': optional init
+    parse_assignment();
+end
+expect(59);
+s = newlabel();
+e = newlabel();
+st = newlabel();
+loopctx{end+1} = {e, st};
+em(sprintf('%s:', s));
+if token ~= 59              % optional condition
+    parse_expr();
+    em('\tcmpq\t$0, %rax');
+    em(sprintf('\tje\t%s', e));
+end
+expect(59);
+sn = numel(out);            % buffer the step's emitted lines
+if token ~= 41              % optional step
+    parse_assignment();
+end
+expect(41);
+% copy the step's lines one-by-one (the clone's cell slicing with a
+% vector/colon index returns empty — scalar {k} indexing works)
+step_lines = {};
+for kk = sn+1:numel(out)
+    step_lines{end+1} = out{kk};
+end
+out(sn+1:numel(out)) = [];
+parse_statement();          % the body
+em(sprintf('%s:', st));     % continue target
+for k = 1:numel(step_lines)
+    out{end+1} = step_lines{k};
+end
+em(sprintf('\tjmp\t%s', s));
+em(sprintf('%s:', e));
+loopctx(end) = [];
+end
+
+function parse_do()
+% do := 'do' statement 'while' '(' expr ')' ';' — break targets the end,
+% continue the condition label.
+global token loopctx
+next();                     % consume 'do'
+s = newlabel();
+c = newlabel();
+e = newlabel();
+loopctx{end+1} = {e, c};
+em(sprintf('%s:', s));
+parse_statement();
+em(sprintf('%s:', c));      % continue target
+if token ~= 152             % 'while'
+    fail('expected while after the do body');
+end
+next();
+expect(40);
+parse_expr();
+expect(41);
+em('\tcmpq\t$0, %rax');
+em(sprintf('\tjne\t%s', s));
+em(sprintf('%s:', e));
+loopctx(end) = [];
+expect(59);                 % ';'
+end
+
+function parse_break()
+% break := 'break' ';' — jump to the innermost loop's end label.
+global token loopctx
+if isempty(loopctx)
+    fail('break outside a loop');
+end
+next();
+expect(59);
+em(sprintf('\tjmp\t%s', loopctx{end}{1}));
+end
+
+function parse_continue()
+% continue := 'continue' ';' — jump to the innermost loop's step/cond label.
+global token loopctx
+if isempty(loopctx)
+    fail('continue outside a loop');
+end
+next();
+expect(59);
+em(sprintf('\tjmp\t%s', loopctx{end}{2}));
 end
 
 function parse_return_statement()
@@ -606,19 +860,25 @@ em(sprintf('\tjmp\t%s', retlbl));
 end
 
 function parse_declaration()
-% declaration := type name (',' name)* ('=' expression)? ';' — int gets 4
-% frame bytes, char 1 (packed); the initializer is stored directly.
-global token idname lvars lvartype fbytes
+% declaration := type ('*')* name (('[' size ']')? (',' …)*) ('=' expr)? ';'
+% — int/pointer 8 frame bytes, char 1, arrays n*elem; the initializer is
+% stored directly (byte for char).
+global token idname lvars lvartype lvararr fbytes
 if token == 131             % int
-    isc = 0;
+    base = 0;
     next();
 elseif token == 134         % char
-    isc = 1;
+    base = 1;
     next();
 else
     fail('expected a local declaration');
 end
 while true
+    depth = 0;
+    while token == 42       % '*'
+        depth = depth + 1;
+        next();
+    end
     if token ~= 150
         fail('expected a variable name');
     end
@@ -627,22 +887,49 @@ while true
     if isfield(lvars, name)
         fail(sprintf('duplicate local %s', name));
     end
-    if isc
-        off = -(fbytes + 1);
-        fbytes = fbytes + 1;
-    else
-        off = -(fbytes + 4);
-        fbytes = fbytes + 4;
+    t = base + 2 * depth;
+    isarr = 0;
+    asz = 0;
+    if token == 91          % '[': array
+        next();
+        if token ~= 128
+            fail('expected a constant array size');
+        end
+        asz = double(token_val);
+        next();
+        expect(93);
+        if asz < 0
+            fail('bad array size');
+        end
+        isarr = 1;
     end
+    if isarr
+        if base == 1
+            nbytes = asz;       % char array: 1 byte per element
+        else
+            nbytes = 8 * asz;
+        end
+        lvartype.(name) = t + 2;   % the name decays to a pointer
+        lvararr.(name) = 1;
+    else
+        if t == 1
+            nbytes = 1;
+        else
+            nbytes = 8;
+        end
+        lvartype.(name) = t;
+        lvararr.(name) = 0;
+    end
+    off = -(fbytes + nbytes);
+    fbytes = fbytes + nbytes;
     lvars.(name) = off;
-    lvartype.(name) = isc;
     if token == 61          % '=': initializer
         next();
         parse_assignment();
-        if isc
+        if t == 1
             em(sprintf('\tmovb\t%%al, %d(%%rbp)', off));
         else
-            em(sprintf('\tmovl\t%%eax, %d(%%rbp)', off));
+            em(sprintf('\tmovq\t%%rax, %d(%%rbp)', off));
         end
     end
     if token == 44          % ','
@@ -661,25 +948,47 @@ expect(59);
 end
 
 function parse_expr()
-% expression := assignment
-parse_assignment();
+% expression := conditional
+parse_conditional();
+end
+
+function parse_conditional()
+% conditional := logical_or ('?' assignment ':' conditional)? — the else
+% branch is right-associative; the result is int-typed.
+global token etype
+parse_logical_or();
+if token == 63              % '?'
+    next();
+    em('\tcmpq\t$0, %rax');
+    f = newlabel();
+    e = newlabel();
+    em(sprintf('\tje\t%s', f));
+    parse_assignment();
+    if token == 58          % ':'
+        next();
+    else
+        fail('missing colon in conditional');
+    end
+    em(sprintf('\tjmp\t%s', e));
+    em(sprintf('%s:', f));
+    parse_conditional();
+    em(sprintf('%s:', e));
+    etype = 0;
+end
 end
 
 function parse_assignment()
-% assignment := logical_or (assign-op assignment)* — right-associative.
+% assignment := conditional (assign-op assignment)* — right-associative.
 % The LHS must be an lvalue (its load is dropped, leaving the address);
 % the address is pushed, the RHS evaluated, then stored, so the value (in
-% eax) is the RHS — `y = x = 5` chains work. Compound ops load-modify-store.
-global token out ltype
-parse_logical_or();
+% eax) is the RHS — `y = x = 5` chains work. Compound ops load-modify-store
+% and scale by the element size for pointer `+=`/`-=`.
+global token out ltype etype
+parse_conditional();
 while token == 61 || (token >= 160 && token <= 169)
     op = token;
     sav_ltype = ltype;      % the LHS's type (RHS parsing may change ltype)
-    if numel(out) >= 1 && ...
-       (strcmp(out{end}, sprintf('\tmovl\t(%%rax), %%eax')) || ...
-        strcmp(out{end}, sprintf('\tmovzbl\t(%%rax), %%eax')))
-        out(end) = [];      % drop the load; eax = the lvalue's address
-    else
+    if ~lvalue_addr()
         fail('bad lvalue in assignment');
     end
     if op == 61             % plain '='
@@ -687,60 +996,64 @@ while token == 61 || (token >= 160 && token <= 169)
         next();
         parse_assignment();
         em('\tpopq\t%rbx');
-        if sav_ltype
+        if sav_ltype == 1
             em('\tmovb\t%al, (%rbx)');
         else
-            em('\tmovl\t%eax, (%rbx)');
+            em('\tmovq\t%rax, (%rbx)');
         end
     else
         % compound: load-modify-store through the address
         em('\tpushq\t%rax');            % save the address
-        if sav_ltype
+        if sav_ltype == 1
             em('\tmovzbl\t(%rax), %eax');
         else
-            em('\tmovl\t(%rax), %eax');
+            em('\tmovq\t(%rax), %rax');
         end
         em('\tpushq\t%rax');            % save the old value
         next();
         parse_assignment();
         if op == 165 || op == 166      % <<= >>= (count in %cl)
-            em('\tmovl\t%eax, %ecx');
+            em('\tmovq\t%rax, %rcx');
             em('\tpopq\t%rax');
             if op == 165
-                em('\tshll\t%cl, %eax');
+                em('\tshlq\t%cl, %rax');
             else
-                em('\tsarl\t%cl, %eax');
+                em('\tsarq\t%cl, %rax');
             end
         else
-            em('\tmovl\t%eax, %ebx');   % rhs
+            em('\tmovq\t%rax, %rbx');   % rhs
+            if (op == 160 || op == 161) && sav_ltype >= 2 && sav_ltype ~= 3
+                em('\timulq\t$8, %rbx');   % pointer +=/-=: scale by elem
+            end
             em('\tpopq\t%rax');         % old value
             if op == 160        % +=
-                em('\taddl\t%ebx, %eax');
+                em('\taddq\t%rbx, %rax');
             elseif op == 161    % -=
-                em('\tsubl\t%ebx, %eax');
+                em('\tsubq\t%rbx, %rax');
             elseif op == 162    % *=
-                em('\timull\t%ebx, %eax');
+                em('\timulq\t%rbx, %rax');
             elseif op == 163 || op == 164   % /= %%=
-                em('\tcltd');
-                em('\tidivl\t%ebx');
+                em('\tcqto');
+                em('\tidivq\t%rbx');
                 if op == 164
-                    em('\tmovl\t%edx, %eax');
+                    em('\tmovq\t%rdx, %rax');
                 end
             elseif op == 167    % &=
-                em('\tandl\t%ebx, %eax');
+                em('\tandq\t%rbx, %rax');
             elseif op == 168    % |=
-                em('\torl\t%ebx, %eax');
+                em('\torq\t%rbx, %rax');
             else                % ^=
-                em('\txorl\t%ebx, %eax');
+                em('\txorq\t%rbx, %rax');
             end
         end
         em('\tpopq\t%rbx');              % the address
-        if sav_ltype
+        if sav_ltype == 1
             em('\tmovb\t%al, (%rbx)');
         else
-            em('\tmovl\t%eax, (%rbx)');
+            em('\tmovq\t%rax, (%rbx)');
         end
     end
+    etype = sav_ltype;      % the assignment's value has the lvalue's type
 end
 end
 
@@ -757,44 +1070,46 @@ end
 function parse_logical_or()
 % logical_or := logical_and ('||' logical_and)* — short-circuit: a
 % nonzero operand jumps straight to set-the-result-to-1.
-global token
+global token etype
 parse_logical_and();
 while token == 143           % Lor
     next();
     t = newlabel();
     e = newlabel();
-    em('\tcmpl\t$0, %eax');
+    em('\tcmpq\t$0, %rax');
     em(sprintf('\tjne\t%s', t));
     parse_logical_and();
-    em('\tcmpl\t$0, %eax');
+    em('\tcmpq\t$0, %rax');
     em(sprintf('\tjne\t%s', t));
-    em('\tmovl\t$0, %eax');
+    em('\tmovq\t$0, %rax');
     em(sprintf('\tjmp\t%s', e));
     em(sprintf('%s:', t));
-    em('\tmovl\t$1, %eax');
+    em('\tmovq\t$1, %rax');
     em(sprintf('%s:', e));
+    etype = 0;
 end
 end
 
 function parse_logical_and()
 % logical_and := bitwise_or ('&&' bitwise_or)* — short-circuit: a zero
 % operand jumps straight to set-the-result-to-0.
-global token
+global token etype
 parse_bit_or();
 while token == 142           % Lan
     next();
     f = newlabel();
     e = newlabel();
-    em('\tcmpl\t$0, %eax');
+    em('\tcmpq\t$0, %rax');
     em(sprintf('\tje\t%s', f));
     parse_bit_or();
-    em('\tcmpl\t$0, %eax');
+    em('\tcmpq\t$0, %rax');
     em(sprintf('\tje\t%s', f));
-    em('\tmovl\t$1, %eax');
+    em('\tmovq\t$1, %rax');
     em(sprintf('\tjmp\t%s', e));
     em(sprintf('%s:', f));
-    em('\tmovl\t$0, %eax');
+    em('\tmovq\t$0, %rax');
     em(sprintf('%s:', e));
+    etype = 0;
 end
 end
 
@@ -807,80 +1122,84 @@ end
 
 function parse_bit_or()
 % bitwise_or := bitwise_xor ('|' bitwise_xor)*
-global token
+global token etype
 parse_bit_xor();
 while token == 124          % '|'
     next();
     em('\tpushq\t%rax');    % save the left operand
     parse_bit_xor();
-    em('\tmovl\t%eax, %ebx');
+    em('\tmovq\t%rax, %rbx');
     em('\tpopq\t%rax');
-    em('\torl\t%ebx, %eax');
+    em('\torq\t%rbx, %rax');
+    etype = 0;
 end
 end
 
 function parse_bit_xor()
 % bitwise_xor := bitwise_and ('^' bitwise_and)*
-global token
+global token etype
 parse_bit_and();
 while token == 94           % '^'
     next();
     em('\tpushq\t%rax');
     parse_bit_and();
-    em('\tmovl\t%eax, %ebx');
+    em('\tmovq\t%rax, %rbx');
     em('\tpopq\t%rax');
-    em('\txorl\t%ebx, %eax');
+    em('\txorq\t%rbx, %rax');
+    etype = 0;
 end
 end
 
 function parse_bit_and()
 % bitwise_and := equality ('&' equality)*
-global token
+global token etype
 parse_equality();
 while token == 38           % '&'
     next();
     em('\tpushq\t%rax');
     parse_equality();
-    em('\tmovl\t%eax, %ebx');
+    em('\tmovq\t%rax, %rbx');
     em('\tpopq\t%rax');
-    em('\tandl\t%ebx, %eax');
+    em('\tandq\t%rbx, %rax');
+    etype = 0;
 end
 end
 
 function parse_equality()
 % equality := relational (('==' | '!=') relational)* — result 0/1 via setcc
-global token
+global token etype
 parse_relational();
 while token == 148 || token == 149   % Eq Ne
     op = token;
     next();
     em('\tpushq\t%rax');
     parse_relational();
-    em('\tmovl\t%eax, %ebx');
+    em('\tmovq\t%rax, %rbx');
     em('\tpopq\t%rax');
-    em('\tcmpl\t%ebx, %eax');
+    em('\tcmpq\t%rbx, %rax');
     if op == 148
         em('\tsete\t%al');
     else
         em('\tsetne\t%al');
     end
     em('\tmovzbl\t%al, %eax');
+    etype = 0;
 end
 end
 
 function parse_relational()
 % relational := shift (('<' | '>' | '<=' | '>=') shift)* — signed
 % comparisons; eax = left, ebx = right, so setl/setg/etc. read eax-ebx.
-global token
+global token etype
 parse_shift();
 while token == 144 || token == 145 || token == 146 || token == 147  % Lt Gt Le Ge
     op = token;
     next();
     em('\tpushq\t%rax');
     parse_shift();
-    em('\tmovl\t%eax, %ebx');
+    em('\tmovq\t%rax, %rbx');
     em('\tpopq\t%rax');
-    em('\tcmpl\t%ebx, %eax');
+    em('\tcmpq\t%rbx, %rax');
     if op == 144        % Lt
         em('\tsetl\t%al');
     elseif op == 145    % Gt
@@ -891,51 +1210,81 @@ while token == 144 || token == 145 || token == 146 || token == 147  % Lt Gt Le G
         em('\tsetge\t%al');
     end
     em('\tmovzbl\t%al, %eax');
+    etype = 0;
 end
 end
 
 function parse_shift()
 % shift := additive (('<<' | '>>') additive)* — left-associative; the shift
 % count goes in %cl; '>>' is an arithmetic shift (signed int).
-global token
+global token etype
 parse_additive();
 while token == 140 || token == 141   % Shl Shr
     op = token;
     next();
     em('\tpushq\t%rax');        % save the left operand
     parse_additive();
-    em('\tmovl\t%eax, %ecx');   % shift count in %cl
+    em('\tmovq\t%rax, %rcx');   % shift count in %cl
     em('\tpopq\t%rax');
     if op == 140
-        em('\tshll\t%cl, %eax');
+        em('\tshlq\t%cl, %rax');
     else
-        em('\tsarl\t%cl, %eax');
+        em('\tsarq\t%cl, %rax');
     end
+    etype = 0;
 end
 end
 
 function parse_additive()
-% additive := term (('+' | '-') term)* — left-associative.
-global token
+% additive := term (('+' | '-') term)* — pointer operands scale the
+% integer by the element size (1 for char*, 4 otherwise); ptr - ptr gives
+% the element difference.
+global token etype
 parse_term();
 while token == 43 || token == 45   % '+' '-'
     op = token;
+    t = etype;              % the left operand's type
     next();
     em('\tpushq\t%rax');
     parse_term();
-    em('\tmovl\t%eax, %ebx');
+    rhs_t = etype;
+    em('\tmovq\t%rax, %rbx');
     em('\tpopq\t%rax');
-    if op == 43
-        em('\taddl\t%ebx, %eax');
+    if t >= 2               % the left is a pointer
+        if op == 45 && rhs_t >= 2
+            % ptr - ptr: byte difference / element size
+            em('\tsubq\t%rbx, %rax');
+            if t ~= 3
+                em('\tmovq\t$8, %rcx');
+                em('\tcqto');
+                em('\tidivq\t%rcx');
+            end
+            etype = 0;
+        else
+            if t ~= 3       % char*: element size 1 — no scaling
+                em('\timulq\t$8, %rbx');
+            end
+            if op == 43
+                em('\taddq\t%rbx, %rax');
+            else
+                em('\tsubq\t%rbx, %rax');
+            end
+            etype = t;      % still a pointer
+        end
     else
-        em('\tsubl\t%ebx, %eax');
+        if op == 43
+            em('\taddq\t%rbx, %rax');
+        else
+            em('\tsubq\t%rbx, %rax');
+        end
+        etype = 0;
     end
 end
 end
 
 function parse_term()
 % term := unary (('*' | '/' | '%') unary)* — left-associative. '/' and '%'
-% use cltd/idivl: the 64-bit signed quotient is in eax, remainder in edx
+% use cqto/idivq: the 64-bit signed quotient is in eax, remainder in edx
 % (C semantics: truncation toward zero, remainder takes the dividend's
 % sign).
 global token
@@ -945,38 +1294,47 @@ while token == 42 || token == 47 || token == 37   % '*' '/' '%'
     next();
     em('\tpushq\t%rax');
     parse_unary();
-    em('\tmovl\t%eax, %ebx');
+    em('\tmovq\t%rax, %rbx');
     em('\tpopq\t%rax');
     if op == 42
-        em('\timull\t%ebx, %eax');
+        em('\timulq\t%rbx, %rax');
     else
-        em('\tcltd');
-        em('\tidivl\t%ebx');
+        em('\tcqto');
+        em('\tidivq\t%rbx');
         if op == 37
-            em('\tmovl\t%edx, %eax');
+            em('\tmovq\t%rdx, %rax');
         end
     end
+    etype = 0;
 end
 end
 
 function parse_unary()
-% unary := ('-' | '~' | '!' | '+')* primary; primary := Num | Id | '(' expr
-% ')' — a variable (local/param/global) loads from its slot: leaq the
-% address, then movl/movzbl.
-global token token_val idname lvars lvartype globals gtype funcs called ltype
+% unary := prefix* primary postfix*; primary := Num | Str | Id | '(' expr ')'
+% postfix := '[' expr ']' | '++' | '--'. Prefix ops apply in reverse.
+% Types: etype tracks the current expression type; arrays decay (no load).
+global token token_val idname strtext lvars lvartype lvararr globals gtype ...
+       funcs fret called ltype etype
 ops = [];
-while token == 45 || token == 126 || token == 33 || token == 43   % - ~ ! +
+while token == 45 || token == 126 || token == 33 || token == 43 || ...   % - ~ ! +
+      token == 38 || token == 42 || token == 170 || token == 171          % & * ++ --
     ops = [ops, token];
     next();
 end
-if token == 40              % '(': parenthesised expression
+if token == 40              % '(': parenthesised expression (may assign)
     next();
-    parse_expr();
+    parse_assignment();
     expect(41);
 elseif token == 128         % Num
-    em(sprintf('\tmovl\t$%d, %%eax', double(token_val)));
+    em(sprintf('\tmovq\t$%d, %%rax', double(token_val)));
+    etype = 0;
     next();
-elseif token == 150         % Id: function call or local variable
+elseif token == 172         % Str: string literal -> char* to .Lstr data
+    lab = new_str(strtext);
+    em(sprintf('\tleaq\t%s(%%rip), %%rax', lab));
+    etype = 3;              % char*
+    next();
+elseif token == 150         % Id: function call or variable
     name = idname;
     next();
     if token == 40          % '(': function call
@@ -1004,37 +1362,160 @@ elseif token == 150         % Id: function call or local variable
         if nargs > 0
             em(sprintf('\taddq\t$%d, %%rsp', 8 * nargs));
         end
+        if isfield(fret, name)
+            etype = fret.(name);
+        else
+            etype = 0;
+        end
     else
-        % variable: local/param (rbp-relative) or global (rip-relative)
+        % variable: local/param (rbp) or global (rip); arrays skip the load
         if isfield(lvars, name)
-            isc = lvartype.(name);
+            t = lvartype.(name);
+            isarr = lvararr.(name);
             em(sprintf('\tleaq\t%d(%%rbp), %%rax', lvars.(name)));
         elseif isfield(globals, name)
-            isc = gtype.(name);
+            t = gtype.(name);
+            isarr = garr.(name);
             em(sprintf('\tleaq\t%s(%%rip), %%rax', name));
         else
             fail(sprintf('undefined variable %s', name));
         end
-        ltype = isc;   % record the lvalue's type for assignment stores
-        if isc
-            em('\tmovzbl\t(%rax), %eax');
-        else
-            em('\tmovl\t(%rax), %eax');
+        etype = t;
+        if ~isarr
+            if t == 1
+                em('\tmovzbl\t(%rax), %eax');
+            else
+                em('\tmovq\t(%rax), %rax');
+            end
         end
     end
 else
     fail('expected a number, variable, or parenthesised expression');
 end
+
+% postfix: [i], ++, --
+while token == 91 || token == 170 || token == 171
+    if token == 91          % '[': index by the element size, then load
+        t = etype;          % the base's type (the index parse changes etype)
+        next();
+        em('\tpushq\t%rax');      % save the base address
+        parse_assignment();
+        expect(93);
+        if t >= 2
+            if t ~= 3       % char*: element size 1
+                em('\timulq\t$8, %rax');
+            end
+            em('\tmovq\t%rax, %rbx');
+        else
+            fail('pointer type expected for indexing');
+        end
+        em('\tpopq\t%rax');
+        em('\taddq\t%rbx, %rax');     % the element address
+        if t == 3
+            etype = 1;                % char
+            em('\tmovzbl\t(%rax), %eax');
+        else
+            etype = t - 2;
+            em('\tmovq\t(%rax), %rax');
+        end
+    else                    % postfix ++/--
+        op = token;
+        next();
+        if ~lvalue_addr()
+            fail('bad lvalue for increment');
+        end
+        incdec(op, etype, 1);   % postfix: leave the old value
+    end
+end
+
+% prefix operators, innermost (rightmost) first
 for k = numel(ops):-1:1
-    if ops(k) == 45         % '-'
-        em('\tnegl\t%eax');
-    elseif ops(k) == 126    % '~'
-        em('\tnotl\t%eax');
-    elseif ops(k) == 33     % '!': logical not — eax = (eax == 0)
-        em('\tcmpl\t$0, %eax');
+    op = ops(k);
+    if op == 45             % '-'
+        em('\tnegq\t%rax');
+    elseif op == 126        % '~'
+        em('\tnotq\t%rax');
+    elseif op == 33         % '!': logical not — eax = (eax == 0)
+        em('\tcmpq\t$0, %rax');
         em('\tsete\t%al');
         em('\tmovzbl\t%al, %eax');
+    elseif op == 38         % '&': address-of — drop the trailing load
+        if ~lvalue_addr() && etype < 2
+            fail('bad address of');
+        end
+        etype = etype + 2;
+    elseif op == 42         % '*': dereference — load through the pointer
+        if etype < 2
+            fail('bad dereference');
+        end
+        if etype == 3
+            em('\tmovzbl\t(%rax), %eax');
+        else
+            em('\tmovq\t(%rax), %rax');
+        end
+        etype = etype - 2;
+    elseif op == 170 || op == 171    % prefix ++/--
+        if ~lvalue_addr()
+            fail('bad lvalue for increment');
+        end
+        incdec(op, etype, 0);   % prefix: leave the new value
     end
     % unary '+' is a no-op
+end
+ltype = etype;   % for assignment store widths
+end
+
+function ok = lvalue_addr()
+% lvalue_addr — if the expression ended with a load (variable/deref/index),
+% drop it so eax holds the lvalue's address. Returns success.
+global out
+if numel(out) >= 1 && ...
+   (strcmp(out{end}, sprintf('\tmovq\t(%%rax), %%rax')) || ...
+    strcmp(out{end}, sprintf('\tmovzbl\t(%%rax), %%eax')))
+    out(end) = [];
+    ok = 1;
+else
+    ok = 0;
+end
+end
+
+function incdec(op, t, post)
+% incdec — ++/-- on the lvalue whose address is in eax, type t. Scale is
+% 1 for scalars/char*, 4 for other pointers. post=1 leaves the OLD value
+% in eax; post=0 leaves the NEW value.
+global out
+scale = 1;
+if t >= 2 && t ~= 3
+    scale = 8;
+end
+em('\tpushq\t%rax');            % save the address
+if t == 1
+    em('\tmovzbl\t(%rax), %eax');
+else
+    em('\tmovq\t(%rax), %rax');
+end
+if post
+    em('\tmovq\t%rax, %rbx');   % old value = the postfix result
+end
+if op == 170
+    em(sprintf('\taddq\t$%d, %%rax', scale));
+else
+    em(sprintf('\tsubq\t$%d, %%rax', scale));
+end
+if post
+    em('\tpopq\t%rcx');         % the address
+    if t == 1
+        em('\tmovb\t%al, (%rcx)');
+    else
+        em('\tmovq\t%rax, (%rcx)');
+    end
+    em('\tmovq\t%rbx, %rax');   % restore the old value
+else
+    em('\tpopq\t%rbx');         % the address
+    if t == 1
+        em('\tmovb\t%al, (%rbx)');
+    else
+        em('\tmovq\t%rax, (%rbx)');
+    end
 end
 end

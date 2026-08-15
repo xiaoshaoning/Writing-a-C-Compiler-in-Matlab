@@ -528,12 +528,45 @@ else
         'cc10_cchar.c',   130;
         'cc10_cglobal.c',  20;
         'cc10_cparam.c',   15;
+        'cc11_arr.c',      65;   % 321 mod 256
+        'cc11_arrchar.c', 209;
+        'cc11_arrglobal.c', 18;
+        'cc11_arrloop.c',  30;
+        'cc11_ptr.c',       5;
+        'cc11_ptr2.c',      9;
+        'cc11_ptr3.c',      6;
+        'cc11_ptrarith.c', 230;
+        'cc11_ptrsub.c',    3;
+        'cc11_chptr.c',   104;
+        'cc11_ptrparam.c',  7;
+        'cc11_pp.c',        5;
+        'cc11_preinc.c',    6;
+        'cc11_postinc.c',   6;
+        'cc11_incval.c',   56;
+        'cc11_preval.c',   66;
+        'cc11_incptr.c',    8;
+        'cc11_dec.c',       4;
+        'cc11_tern.c',    100;
+        'cc11_tern2.c',     1;
+        'cc11_tern3.c',     3;
+        'cc11_for.c',      10;
+        'cc11_do.c',        5;
+        'cc11_break.c',     6;
+        'cc11_cont.c',      8;
+        'cc11_forstp.c',    6;
+        'cc11_comment.c',   5;
+        'cc11_swap.c',     73;
+        'cc11_strlen.c',    5;
+        'cc11_strlit.c',   99;
+        'cc11_strptr.c',    5;
     };
     for k = 1:size(cctests, 1)
         try
+            delete('tmp_cc.s');
+            delete('tmp_cc.exe');   % no stale exe can leak into this test
             cc_int(['tests/programs/' cctests{k,1}], 'tmp_cc.s');
             [st_gcc, ~] = system([gcc, ' tmp_cc.s -o tmp_cc.exe']);
-            if st_gcc == 0
+            if st_gcc == 0 && exist('tmp_cc.exe', 'file') == 2
                 [st_run, ~] = system('tmp_cc.exe');
                 if st_run < 0
                     st_run = st_run + 256;   % return -1 (0xFFFFFFFF)
