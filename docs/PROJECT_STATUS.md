@@ -8,13 +8,13 @@ lotabout's [write-a-C-interpreter](https://github.com/lotabout/write-a-C-interpr
 on-the-fly codegen → 38-opcode stack VM → syscalls. All seven planned phases
 are done, plus six post-parity features beyond the reference dialect.
 
-**Assembly track (`cc_int.m`): part 3.** Compiles `return <expr>;` to
+**Assembly track (`cc_int.m`): part 4.** Compiles `return <expr>;` to
 x86-64 COFF assembly (Norasandler series): part 1 `return <int>;`, part 2
-unary operators (`-`, `~`, `!`, unary `+`, nested), part 3 bitwise binary
-operators (`|`, `&`, `^`, `<<`, `>>` with C precedence, arithmetic `>>`),
-via a tokenizer + recursive-descent parser. Verified end-to-end through
-gcc; a gcc-gated group in the suite compiles and runs the `cc2_*.c`/
-`cc3_*.c` corpus.
+unary operators, part 3 bitwise binary operators (with C precedence,
+arithmetic `>>`), part 4 logical `||`/`&&` with short-circuit jumps and
+0/1 normalization, via a tokenizer + recursive-descent parser. Verified
+end-to-end through gcc; a gcc-gated group in the suite compiles and runs the
+`cc2_*.c`–`cc4_*.c` corpus.
 
 ## Deliverables
 
@@ -30,8 +30,8 @@ gcc; a gcc-gated group in the suite compiles and runs the `cc2_*.c`/
 
 ## Verification
 
-- **Test suite**: `tests/run_tests.m` — **168/168** on the target runtime
-  (145 interpreter checks + 23 gcc-gated assembly-track checks; the gcc group
+- **Test suite**: `tests/run_tests.m` — **185/185** on the target runtime
+  (145 interpreter checks + 40 gcc-gated assembly-track checks; the gcc group
   skips if gcc is absent).
   Groups: runtime-primitive gate (probe), 26-case VM selftest, 9-case lexer
   selftest, program corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke.
@@ -111,7 +111,7 @@ report.
 ## Running
 
 ```
-D:\...\matlab.bat tests/run_tests.m          # full suite (168 checks)
+D:\...\matlab.bat tests/run_tests.m          # full suite (185 checks)
 D:\...\matlab.bat -batch "xc('tests/programs/hello.c')"   # acceptance program
 D:\...\matlab.bat -batch "xc('-s', 'tests/programs/hello.c')"  # compile dump
 D:\...\matlab.bat -batch "xc('-d', 'tests/programs/hello.c')"  # trace

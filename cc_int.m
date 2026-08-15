@@ -5,6 +5,9 @@ function cc_int(varargin)
 %           unary plus, arbitrarily nested (`return -~!5;`).
 %   Part 3: bitwise binary operators — `|`, `&`, `^`, `<<`, `>>` with C
 %           precedence (| < ^ < & < shift), left-associative.
+%   Part 4: logical operators — `||` and `&&` with C precedence
+%           (|| < && < bitwise) and short-circuit jumps; results normalize
+%           to 0/1.
 %
 % Emits COFF assembly for MSYS2 binutils on Windows (see README for the
 % gcc invocation). Pipeline: tokenizer (next) → recursive-descent parser
@@ -14,7 +17,7 @@ function cc_int(varargin)
 %   gcc out.s -o out
 %   .\out.exe  (cmd)  /  ./out  (bash) — exit code is the returned value
 
-global src si token token_val out fname
+global src si token token_val out fname lbl
 
 if nargin ~= 2
    error('USAGE: cc_int in.c out.s');
@@ -36,6 +39,7 @@ fname = [name, ext];
 si = 1;
 token = 0;
 token_val = 0;
+lbl = 0;      % unique-label counter for short-circuit jumps
 out = '';
 
 next();
@@ -78,8 +82,8 @@ end
 
 function next()
 % next — tokenizer. Num=128, Return=130, Int=131, Main=132, Shl=140,
-% Shr=141; single-char operators/braces keep their ASCII code; 0 = EOF.
-% Skips whitespace.
+% Shr=141, Lan=142, Lor=143; single-char operators/braces keep their ASCII
+% code; 0 = EOF. Skips whitespace.
 global src si token token_val
 while si <= numel(src)
     c = src(si);
@@ -143,6 +147,24 @@ elseif c == '>'
         fail('expected >> (no > operator in part 3)');
     end
     return;
+elseif c == '&'
+    si = si + 1;
+    if si <= numel(src) && src(si) == '&'
+        si = si + 1;
+        token = 142;            % Lan
+    else
+        token = 38;             % '&'
+    end
+    return;
+elseif c == '|'
+    si = si + 1;
+    if si <= numel(src) && src(si) == '|'
+        si = si + 1;
+        token = 143;            % Lor
+    else
+        token = 124;            % '|'
+    end
+    return;
 else
     token = double(c);
     si = si + 1;
@@ -190,8 +212,59 @@ em('.LFE0:');
 end
 
 function parse_expr()
-% expression := bitwise_or
+% expression := logical_or
+parse_logical_or();
+end
+
+function parse_logical_or()
+% logical_or := logical_and ('||' logical_and)* — short-circuit: a
+% nonzero operand jumps straight to set-the-result-to-1.
+global token
+parse_logical_and();
+while token == 143           % Lor
+    next();
+    t = newlabel();
+    e = newlabel();
+    em('\tcmpl\t$0, %eax');
+    em(sprintf('\tjne\t%s', t));
+    parse_logical_and();
+    em('\tcmpl\t$0, %eax');
+    em(sprintf('\tjne\t%s', t));
+    em('\tmovl\t$0, %eax');
+    em(sprintf('\tjmp\t%s', e));
+    em(sprintf('%s:', t));
+    em('\tmovl\t$1, %eax');
+    em(sprintf('%s:', e));
+end
+end
+
+function parse_logical_and()
+% logical_and := bitwise_or ('&&' bitwise_or)* — short-circuit: a zero
+% operand jumps straight to set-the-result-to-0.
+global token
 parse_bit_or();
+while token == 142           % Lan
+    next();
+    f = newlabel();
+    e = newlabel();
+    em('\tcmpl\t$0, %eax');
+    em(sprintf('\tje\t%s', f));
+    parse_bit_or();
+    em('\tcmpl\t$0, %eax');
+    em(sprintf('\tje\t%s', f));
+    em('\tmovl\t$1, %eax');
+    em(sprintf('\tjmp\t%s', e));
+    em(sprintf('%s:', f));
+    em('\tmovl\t$0, %eax');
+    em(sprintf('%s:', e));
+end
+end
+
+function l = newlabel()
+% newlabel — a fresh unique assembly label for short-circuit jumps.
+global lbl
+lbl = lbl + 1;
+l = sprintf('.Llo%d', lbl);
 end
 
 function parse_bit_or()

@@ -378,6 +378,23 @@ else
         'cc3_prec4.c',    1;
         'cc3_shrall.c', 255;
         'cc3_mixed.c',   23;
+        'cc4_or00.c',     0;
+        'cc4_or01.c',     1;
+        'cc4_or10.c',     1;
+        'cc4_or11.c',     1;
+        'cc4_and00.c',    0;
+        'cc4_and01.c',    0;
+        'cc4_and10.c',    0;
+        'cc4_and11.c',    1;
+        'cc4_orval.c',    1;
+        'cc4_andval.c',   1;
+        'cc4_prec1.c',    1;
+        'cc4_prec2.c',    0;
+        'cc4_prec3.c',    1;
+        'cc4_mix.c',      1;
+        'cc4_notmix.c',   1;
+        'cc4_assoc.c',    1;
+        'cc4_assoc2.c',   0;
     };
     for k = 1:size(cctests, 1)
         try
