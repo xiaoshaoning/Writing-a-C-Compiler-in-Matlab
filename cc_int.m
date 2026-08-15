@@ -21,6 +21,10 @@ function cc_int(varargin)
 %           address-based so `y = x = 5` chains), locals as primaries.
 %   Part 8: control flow — `if`/`else`, `while`, blocks, and `return`
 %           anywhere (jumps to a .Lmain_ret epilogue label).
+%   Part 9: functions — multiple `int f(int a, int b) { … }` definitions,
+%           calls (args pushed left-to-right, `call`, `addq` cleanup),
+%           per-function frames (params at positive %%rbp offsets, locals
+%           negative), recursion, forward references, return in eax.
 %
 % Emits COFF assembly for MSYS2 binutils on Windows (see README for the
 % gcc invocation). Pipeline: tokenizer (next) → recursive-descent parser
@@ -30,7 +34,8 @@ function cc_int(varargin)
 %   gcc out.s -o out
 %   .\out.exe  (cmd)  /  ./out  (bash) — exit code is the returned value
 
-global src si token token_val idname out fname lbl lvars nlocals
+global src si token token_val idname out fname lbl lvars nlocals ...
+       funcs called retlbl cfn
 
 if nargin ~= 2
    error('USAGE: cc_int in.c out.s');
@@ -53,8 +58,12 @@ si = 1;
 token = 0;
 token_val = 0;
 lbl = 0;      % unique-label counter for short-circuit jumps
+cfn = 0;      % function counter (.LFBn/.LFEn/.Lretn)
 lvars = struct();   % local-variable name -> frame offset (bytes)
 nlocals = 0;        % number of local ints declared in main
+funcs = struct();   % defined function name -> param count
+called = struct();  % called function names (verified defined at the end)
+retlbl = '';        % current function's return label
 out = {};       % emitted assembly lines (cell; tabs are literal in em)
 
 next();
@@ -227,17 +236,59 @@ end
 end
 
 function parse_program()
-% parse_program — int main() { <statements> return <expr>; } — emit the .s
-% template around the parsed body, with a backpatched local-frame subq.
-global token out fname lvars nlocals
+% parse_program — file headers, then every function definition; verify at
+% the end that every called function and `main` were defined.
+global token out fname funcs called
 em(sprintf('\t.file\t"%s"', fname));
 em('\t.text');
-em('\t.globl\tmain');
-% Windows/MSYS2 binutils: ELF-style ".type main, @function" is rejected —
-% '@' starts a comment in COFF GAS. gcc emits .def/.scl/.type/.endef.
-em('\t.def\tmain;\t.scl\t2;\t.type\t32;\t.endef');
-em('main:');
-em('.LFB0:');
+while token ~= 0
+    parse_function();
+end
+names = fieldnames(called);
+for k = 1:numel(names)
+    if ~isfield(funcs, names{k})
+        fail(sprintf('call to undefined function %s', names{k}));
+    end
+end
+if ~isfield(funcs, 'main')
+    fail('no main function');
+end
+end
+
+function parse_function()
+% function := 'int' name '(' params ')' '{' <statements> return '}' — emit
+% the prologue (per-function .def/.LFBn/cfi), backpatch the frame size,
+% and the epilogue with a per-function return label.
+global token out idname lvars nlocals funcs retlbl cfn
+expect(131);                % int
+if token ~= 150
+    fail('expected a function name');
+end
+fname2 = idname;   % local name (fname is the .file basename)
+next();
+expect(40);                 % (
+% per-function scope: params + locals
+save_lvars = lvars;
+save_nlocals = nlocals;
+lvars = struct();
+nlocals = 0;
+nparams = parse_params();
+expect(41);                 % )
+expect(123);                % {
+if isfield(funcs, fname2)
+    fail(sprintf('duplicate function %s', fname2));
+end
+funcs.(fname2) = nparams;   % register before the body (recursion)
+called.(fname2) = 0;        % (calling itself is fine; this is only to
+                            %  note the name exists)
+cfn = cfn + 1;
+fn = cfn;
+retlbl = sprintf('.Lret%d', fn);
+
+em(sprintf('\t.globl\t%s', fname2));
+em(sprintf('\t.def\t%s;\t.scl\t2;\t.type\t32;\t.endef', fname2));
+em(sprintf('%s:', fname2));
+em(sprintf('.LFB%d:', fn));
 em('\t.cfi_startproc');
 em('\tpushq\t%rbp');
 em('\t.cfi_def_cfa_offset 16');
@@ -246,31 +297,54 @@ em('\tmovq\t%rsp, %rbp');
 em('\t.cfi_def_cfa_register 6');
 frame_idx = em('\tsubq\t$0, %rsp');   % local frame; size backpatched
 
-expect(131);        % int
-expect_id('main');
-expect(40);         % (
-expect(41);         % )
-expect(123);        % {
-
-% Backpatch the frame size once the locals are counted (parse_body ends
-% after the return statement). Round up to a multiple of 16 (%rsp stays
-% 16-aligned for the runtime's benefit).
 parse_body();
 frame_sz = 16 * ceil(4 * nlocals / 16);
 out{frame_idx} = sprintf('\tsubq\t$%d, %%rsp', frame_sz);
 
-expect(125);    % }
-if token ~= 0
-    fail('trailing tokens after the main body');
-end
-
-em('.Lmain_ret:');          % target of every `return`
+expect(125);                % }
+em(sprintf('%s:', retlbl));   % target of every `return`
 em('\tmovq\t%rbp, %rsp');   % discard the local frame
 em('\tpopq\t%rbp');
 em('\t.cfi_def_cfa 7, 8');
 em('\tret');
 em('\t.cfi_endproc');
-em('.LFE0:');
+em(sprintf('.LFE%d:', fn));
+
+lvars = save_lvars;
+nlocals = save_nlocals;
+end
+
+function nparams = parse_params()
+% params := (int name (',' int name)*)? — collect names first, then assign
+% rbp offsets: with args pushed left-to-right, param k (1-based) sits at
+% 8*(nparams-k+2)(%%rbp) (rbp+16 for the last param).
+global token idname lvars
+nparams = 0;
+names = {};
+while token ~= 41           % ')'
+    if token ~= 131         % int
+        fail('expected a parameter declaration');
+    end
+    next();
+    if token ~= 150
+        fail('expected a parameter name');
+    end
+    names{end+1} = idname;
+    next();
+    if token == 44          % ','
+        next();
+    elseif token ~= 41
+        fail('expected , or ) in the parameter list');
+    end
+end
+nparams = numel(names);
+for k = 1:nparams
+    nm = names{k};
+    if isfield(lvars, nm)
+        fail(sprintf('duplicate parameter %s', nm));
+    end
+    lvars.(nm) = 8 * (nparams - k + 2);
+end
 end
 
 function parse_body()
@@ -346,11 +420,13 @@ em(sprintf('%s:', e));
 end
 
 function parse_return_statement()
-% return := 'return' expr ';' — value in eax, jump to the epilogue.
+% return := 'return' expr ';' — value in eax, jump to the function's
+% epilogue label.
+global retlbl
 expect(130);
 parse_expr();
 expect(59);
-em('\tjmp\t.Lmain_ret');
+em(sprintf('\tjmp\t%s', retlbl));
 end
 
 function parse_declaration()
@@ -369,12 +445,12 @@ while true
             fail(sprintf('duplicate local %s', name));
         end
         nlocals = nlocals + 1;
-        off = 4 * nlocals;
+        off = -4 * nlocals;   % locals live below %rbp (negative offset)
         lvars.(name) = off;
         if token == 61      % '=': initializer
             next();
             parse_assignment();
-            em(sprintf('\tmovl\t%%eax, -%d(%%rbp)', off));
+            em(sprintf('\tmovl\t%%eax, %d(%%rbp)', off));
         end
         if token == 44      % ','
             next();
@@ -640,7 +716,7 @@ end
 function parse_unary()
 % unary := ('-' | '~' | '!' | '+')* primary; primary := Num | Id | '(' expr
 % ')' — a local variable loads from its frame slot (leaq + movl).
-global token token_val idname lvars
+global token token_val idname lvars funcs called
 ops = [];
 while token == 45 || token == 126 || token == 33 || token == 43   % - ~ ! +
     ops = [ops, token];
@@ -653,15 +729,42 @@ if token == 40              % '(': parenthesised expression
 elseif token == 128         % Num
     em(sprintf('\tmovl\t$%d, %%eax', double(token_val)));
     next();
-elseif token == 150         % Id: local variable
+elseif token == 150         % Id: function call or local variable
     name = idname;
     next();
-    if ~isfield(lvars, name)
-        fail(sprintf('undefined variable %s', name));
+    if token == 40          % '(': function call
+        next();
+        nargs = 0;
+        if token ~= 41      % ')'
+            while true
+                parse_assignment();
+                em('\tpushq\t%rax');
+                nargs = nargs + 1;
+                if token == 44    % ','
+                    next();
+                else
+                    break;
+                end
+            end
+        end
+        expect(41);
+        if isfield(funcs, name) && funcs.(name) ~= nargs
+            fail(sprintf('function %s called with %d args, takes %d', ...
+                name, nargs, funcs.(name)));
+        end
+        called.(name) = 1;
+        em(sprintf('\tcall\t%s', name));
+        if nargs > 0
+            em(sprintf('\taddq\t$%d, %%rsp', 8 * nargs));
+        end
+    else
+        if ~isfield(lvars, name)
+            fail(sprintf('undefined variable %s', name));
+        end
+        off = lvars.(name);
+        em(sprintf('\tleaq\t%d(%%rbp), %%rax', off));   % signed: params +
+        em('\tmovl\t(%rax), %eax');
     end
-    off = lvars.(name);
-    em(sprintf('\tleaq\t-%d(%%rbp), %%rax', off));
-    em('\tmovl\t(%rax), %eax');
 else
     fail('expected a number, variable, or parenthesised expression');
 end

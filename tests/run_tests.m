@@ -484,6 +484,22 @@ else
         'cc8_nestedif.c',  9;
         'cc8_double.c',    7;
         'cc8_sum.c',      15;
+        'cc9_call.c',     42;
+        'cc9_args.c',      7;
+        'cc9_three.c',     6;
+        'cc9_fact.c',    120;
+        'cc9_fib.c',      55;
+        'cc9_multicall.c', 81;
+        'cc9_nested.c',   10;
+        'cc9_callee.c',   15;
+        'cc9_mutual.c',   10;
+        'cc9_exprargs.c', 25;
+        'cc9_arith.c',    63;
+        'cc9_assign.c',    7;
+        'cc9_deep.c',    100;
+        'cc9_locals.c',   13;
+        'cc9_loop.c',     30;
+        'cc9_chain.c',     8;
     };
     for k = 1:size(cctests, 1)
         try
@@ -507,6 +523,17 @@ else
     end
     delete('tmp_cc.s');
     delete('tmp_cc.exe');
+
+    % function called with the wrong number of arguments errors
+    try
+        cc_int('tests/programs/cc9_badargs.c', 'tmp_cc.s');
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            'cc9_badargs.c should error');
+    catch e
+        [npass nfail] = addcheck(npass, nfail, ...
+            ~isempty(strfind(e.message, 'called with 2 args')), ...
+            'cc9_badargs.c arg-count error');
+    end
 end
 
 

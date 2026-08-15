@@ -8,12 +8,15 @@ lotabout's [write-a-C-interpreter](https://github.com/lotabout/write-a-C-interpr
 on-the-fly codegen → 38-opcode stack VM → syscalls. All seven planned phases
 are done, plus six post-parity features beyond the reference dialect.
 
-**Assembly track (`cc_int.m`): part 8.** Compiles `main` with statements,
-local variables, and control flow to x86-64 COFF assembly (Norasandler
-series): parts 1-7 expressions + statements/variables, part 8 `if`/`else`,
-`while`, blocks, and `return` anywhere (each `return` jumps to a
-`.Lmain_ret` epilogue label). Verified end-to-end through gcc; a gcc-gated
-group in the suite compiles and runs the `cc2_*.c`–`cc8_*.c` corpus.
+**Assembly track (`cc_int.m`): part 9.** Compiles multi-function programs
+to x86-64 COFF assembly (Norasandler series): parts 1-8 expressions,
+statements/variables, and control flow; part 9 `int f(int a, int b)`
+definitions with per-function frames (params at positive `%rbp` offsets,
+locals negative), calls (args pushed left-to-right, `call`/`addq`
+cleanup, return in eax), recursion, forward references, mutual recursion,
+and an arg-count check (defined functions). Verified end-to-end through
+gcc; a gcc-gated group in the suite compiles and runs the `cc2_*.c`–
+`cc9_*.c` corpus.
 
 **Fix (part 6): `cdivmod` negative-divisor bug.** Cross-checking the
 arithmetic corpus against the interpreter exposed a latent `xc.m` bug:
@@ -36,8 +39,8 @@ selftest cases (now 30) and `pp_divmod.c` (exit 89) cover it.
 
 ## Verification
 
-- **Test suite**: `tests/run_tests.m` — **274/274** on the target runtime
-  (146 interpreter checks + 128 gcc-gated assembly-track checks; the gcc
+- **Test suite**: `tests/run_tests.m` — **291/291** on the target runtime
+  (146 interpreter checks + 145 gcc-gated assembly-track checks; the gcc
   group skips if gcc is absent).
   Groups: runtime-primitive gate (probe), 30-case VM selftest, 9-case lexer
   selftest, program corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke.
@@ -117,7 +120,7 @@ report.
 ## Running
 
 ```
-D:\...\matlab.bat tests/run_tests.m          # full suite (274 checks)
+D:\...\matlab.bat tests/run_tests.m          # full suite (291 checks)
 D:\...\matlab.bat -batch "xc('tests/programs/hello.c')"   # acceptance program
 D:\...\matlab.bat -batch "xc('-s', 'tests/programs/hello.c')"  # compile dump
 D:\...\matlab.bat -batch "xc('-d', 'tests/programs/hello.c')"  # trace

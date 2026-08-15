@@ -16,7 +16,10 @@ Building compilers/interpreters in MATLAB, following two classic tutorials:
    lists), a local stack frame, expression statements, right-associative
    address-based assignment (`y = x = 5`), locals as primaries. Part 8:
    control flow — `if`/`else`, `while`, blocks, and `return` anywhere
-   (jumps to the epilogue).
+   (jumps to the epilogue). Part 9: functions — multiple `int f(int a,
+   int b)` definitions, calls (args pushed left-to-right, `call`, `addq`
+   cleanup), per-function frames, recursion and forward references, and an
+   arg-count check.
 2. **Interpreter track** (`xc.m`) — lotabout's
    [write-a-C-interpreter](https://github.com/lotabout/write-a-C-interpreter):
    a C interpreter with a custom VM, ported to MATLAB — complete: lexer,
@@ -29,12 +32,12 @@ Building compilers/interpreters in MATLAB, following two classic tutorials:
 cc_int.m              assembly compiler (return <unary>; → x86-64 .s)
 xc.m                  C interpreter (lexer → parser → VM → syscalls)
 tests/
-  run_tests.m         test harness (274 checks: probe gate, VM, lexer,
+  run_tests.m         test harness (291 checks: probe gate, VM, lexer,
                       program corpus, syscall/acceptance, cc_int/gcc)
   programs/           test C programs
     return_2.c        return 2; (part 1 of the Norasandler series)
-    cc2_*.c–cc8_*.c   unary … variables / control-flow programs
-                      (parts 2-8, gcc-gated in the suite)
+    cc2_*.c–cc9_*.c   unary … control-flow / functions programs
+                      (parts 2-9, gcc-gated in the suite)
     hello.c           fibonacci demo — xc.m acceptance program
 docs/
   2026-08-10-xc-matlab-port-plan.md        implementation plan
@@ -110,7 +113,7 @@ otherwise bleed into each other). The dialect is feature-complete against its
 documented scope; remaining C features (structs, unions, `switch`,
 `for`/`do-while`, …) are outside both the port and the reference dialect.
 
-Tests (274 checks — probe gate, VM selftest, lexer selftest, the program
+Tests (291 checks — probe gate, VM selftest, lexer selftest, the program
 corpus whose exit codes/outputs are cross-verified against the reference
 build, and a gcc-gated group that compiles and runs the assembly-track
 programs):
