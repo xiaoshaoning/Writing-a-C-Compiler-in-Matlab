@@ -589,6 +589,18 @@ else
         'cc13_mdim.c',    57;
         'cc13_mdim2.c',    6;
         'cc13_mdim3.c',    7;
+        'cc14_nested.c',   6;
+        'cc14_nested2.c', 23;
+        'cc14_fptr.c',     7;
+        'cc14_fptr2.c',   42;
+        'cc14_fptr3.c',  155;
+        'cc14_goto.c',     1;
+        'cc14_goto2.c',    3;
+        'cc14_goto3.c',    5;
+        'cc14_bv.c',       7;
+        'cc14_bv2.c',     42;
+        'cc14_bv3.c',     38;
+        'cc14_bv4.c',      9;
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
