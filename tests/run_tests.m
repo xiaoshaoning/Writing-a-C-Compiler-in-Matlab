@@ -500,6 +500,34 @@ else
         'cc9_locals.c',   13;
         'cc9_loop.c',     30;
         'cc9_chain.c',     8;
+        'cc10_charloc.c',   65;
+        'cc10_charinit.c',  65;
+        'cc10_charlit.c',   65;
+        'cc10_chartrunc.c', 44;
+        'cc10_charparam.c', 65;
+        'cc10_charparamtrunc.c', 44;
+        'cc10_charcmp.c',    1;
+        'cc10_charret.c',  121;
+        'cc10_global.c',    5;
+        'cc10_globalinit.c', 7;
+        'cc10_globalchar.c', 65;
+        'cc10_globalrw.c', 101;
+        'cc10_globalfn.c',   7;
+        'cc10_mix.c',      15;
+        'cc10_cadd.c',      8;
+        'cc10_csub.c',      2;
+        'cc10_cmul.c',     15;
+        'cc10_cdiv.c',      3;
+        'cc10_cmod.c',      1;
+        'cc10_cshl.c',     16;
+        'cc10_cshr.c',    252;
+        'cc10_cand.c',      8;
+        'cc10_cor.c',      47;
+        'cc10_cxor.c',     39;
+        'cc10_cexpr.c',    11;
+        'cc10_cchar.c',   130;
+        'cc10_cglobal.c',  20;
+        'cc10_cparam.c',   15;
     };
     for k = 1:size(cctests, 1)
         try
