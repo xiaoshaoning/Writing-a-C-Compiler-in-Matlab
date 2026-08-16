@@ -78,6 +78,68 @@ docs/
   2026-08-10-matlab-clone-bug-report.md  bugs found in the MATLAB clone (internal, gitignored)
 ```
 
+## Usage
+
+The compiler (`cc_int.m`) translates C to x86-64 assembly; you then
+assemble/link with gcc and run:
+
+```
+matlab.bat -batch "addpath('.'); cc_int('prog.c','prog.s');"
+gcc prog.s -o prog.exe
+./prog.exe            (bash)  /  prog.exe, then echo %errorlevel% (cmd)
+```
+
+**Requirements:** the custom MATLAB clone (`matlab.bat`) and MSYS2 gcc (the
+emitted assembly is COFF — it needs a Windows binutils). The `addpath('.')`
+is required in `-batch` mode; in cmd the exit code is `%errorlevel%`.
+
+**What it compiles:** the full Norasandler series (parts 1–17) — expressions
+with C precedence, `if`/`while`/`for`/`do`/`switch`, functions (recursion,
+forward references), `char`/`int`/pointers/arrays (multi-dim), structs by
+value (params, returns, assignment), function pointers (incl.
+struct-returning), `goto`/labels, `void`, casts, the comma operator,
+`sizeof`, `typedef`, `enum`, array/struct initializers, string→`char[]` —
+plus a runtime library: `printf` (full CRT formats), `malloc`, `memset`,
+`memcmp`, `exit`, and `open`/`read`/`close`.
+
+For example, recursion + `printf`:
+
+```c
+int fib(int n) { if (n <= 1) { return 1; } return fib(n-1) + fib(n-2); }
+int main() { int i; i = 0;
+    while (i <= 10) { printf("fib(%2d) = %d\n", i, fib(i)); i = i + 1; }
+    return 0; }
+```
+
+compiles to an exe that prints the fibonacci table 0..10 and exits 0, and
+structs + function pointers + `malloc`:
+
+```c
+struct Point make(int a, int b) { struct Point p; p.x = a; p.y = b; return p; }
+int add(int a, int b) { return a + b; }
+int main() {
+    struct Point p; int (*fp)(int, int); char *buf;
+    p = make(3, 4); fp = add; buf = malloc(16);
+    buf[0] = 'A'; buf[1] = 0;
+    printf("p=(%d,%d) fp=%d %s\n", p.x, p.y, fp(10, 5), buf);
+    return 0; }
+```
+
+→ `p=(3,4) fp=15 A`. Exit codes are the program's `return` value (or
+`exit(n)`), truncated to the low 8 bits.
+
+`tests/programs/cc2_*.c`–`cc17_*.c` are self-contained examples of each
+feature; `cc17_shim.c` shows `malloc`/`memset`/`memcmp`/`exit` together.
+The full 668-check suite (both tracks, cross-track parity, stdout parity):
+
+```
+matlab.bat tests/run_tests.m
+```
+
+Known limits: pointer-returning function pointers (`int *(*fp)(int)`),
+compound literals, and `unsigned`; `main` must end with a top-level
+`return`; `open()` paths are relative to the working directory.
+
 ## Running
 
 MATLAB code runs on the custom MATLAB clone:
