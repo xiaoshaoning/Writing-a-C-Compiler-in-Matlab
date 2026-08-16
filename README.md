@@ -60,14 +60,17 @@ Building compilers/interpreters in MATLAB, following two classic tutorials:
 ```
 src/
   cc_int.m              assembly compiler (C → x86-64 .s)
+  peephole_pass.m       post-codegen optimizer (dead code, constant
+                        folding, address modes, stack traffic)
   xc.m                  C interpreter (lexer → parser → VM → syscalls)
   x86sim.m              gcc-free x86-64 simulator for the .s output
 LICENSE, README.md
 
 tests/
-  run_tests.m         test harness (669 checks: probe gate, VM, lexer,
+  run_tests.m         test harness (740 checks: probe gate, VM, lexer,
                       program corpus, syscall/acceptance, cc_int/gcc,
-                      x86sim, cross-track parity)
+                      x86sim, cross-track parity, instruction-count
+                      regression, peephole-pass unit fixtures)
   programs/           test C programs
     return_2.c        return 2; (part 1 of the Norasandler series)
     cc2_*.c–cc18_*.c  unary … runtime library programs (parts 2-18,
@@ -79,6 +82,7 @@ docs/
   2026-08-15-fix-plan.md                  phased fix plan (Phases A–E)
   PROJECT_STATUS.md                      current project status
   2026-08-16-reference-cross-check.md    reference xc.c parity verification
+  2026-08-16-compiler-optimization-plan.md  optimizer phases A–F + results
   2026-08-10-matlab-clone-bug-report.md  bugs found in the MATLAB clone (internal, gitignored)
 ```
 
@@ -121,8 +125,13 @@ int main() { int i; i = 0;
     return 0; }
 ```
 
-compiles to an exe that prints the fibonacci table 0..10 and exits 0, and
-structs + function pointers + `malloc`:
+compiles to an exe that prints the fibonacci table 0..10 and exits 0. The
+emitted assembly is then optimized by `peephole_pass.m` (a post-codegen
+pass: dead-code removal, immediate/constant folding, address-mode
+simplification, and stack-traffic reduction), so `cc_int`'s straightforward
+codegen — every local load as `leaq` + `movq (%rax)`, every binary op
+spilling its left operand — comes out lean. And structs + function
+pointers + `malloc`:
 
 ```c
 struct Point make(int a, int b) { struct Point p; p.x = a; p.y = b; return p; }
@@ -138,17 +147,21 @@ int main() {
 → `p=(3,4) fp=15 A`. Exit codes are the program's `return` value (or
 `exit(n)`), truncated to the low 8 bits.
 
-`tests/programs/cc2_*.c`–`cc17_*.c` are self-contained examples of each
-feature; `cc17_shim.c` shows `malloc`/`memset`/`memcmp`/`exit` together.
-The full 668-check suite (both tracks, cross-track parity, stdout parity):
+`tests/programs/cc2_*.c`–`cc18_*.c` are self-contained examples of each
+feature; `cc17_shim.c` shows `malloc`/`memset`/`memcmp`/`exit` together,
+and `cc18_*.c` covers pointer-returning fptrs, compound literals, and
+`unsigned`. The full 740-check suite (both tracks, cross-track parity,
+stdout parity, instruction-count regression, optimizer unit fixtures):
 
 ```
 matlab.bat tests/run_tests.m
 ```
 
-Known limits: pointer-returning function pointers (`int *(*fp)(int)`),
-compound literals, and `unsigned`; `main` must end with a top-level
-`return`; `open()` paths are relative to the working directory.
+The dialect is complete against its documented scope (all three former
+gaps — pointer-returning function pointers, compound literals, and
+`unsigned` — were implemented in the cc18 round). Remaining conventions:
+`main` must end with a top-level `return`, and `open()` paths are relative
+to the working directory.
 
 ## Running
 
@@ -189,6 +202,36 @@ Windows. Exit codes are the low 8 bits of the returned value (214 for
 end-to-end: clone → `cc_int` → `gcc` (MSYS2 ucrt64 15.2.0) → exit code; the
 suite's gcc-gated group compiles and runs every `cc2_*.c` program.
 
+### Optimizer (peephole_pass.m)
+
+`cc_int` emits straightforward assembly; `peephole_pass` rewrites it after
+codegen (to a fixed point) into something much tighter. The rules
+(`docs/2026-08-16-compiler-optimization-plan.md`, phases A–F):
+
+- **dead code** — `jmp .L` straight to its own next label (every function's
+  final `return` jumps to its epilogue), and unreachable instructions after
+  any unconditional jump;
+- **constant folding** — `movq $N, %rax; imulq $M, %rax` → `movq $N*M, %rax`
+  (constant array indices), and the `cmpq; setcc; movzbl; cmpq $0; jcc`
+  normalize-then-branch chain → a single `jcc` on the original compare;
+- **address modes** — `leaq K(%rbp), %rax; movq (%rax), %rax` →
+  `movq K(%rbp), %rax`, `movq $N, %rax; movq %rax, mem` → `movq $N, mem`,
+  and `leaq K(%rbp), %rax; addq $N, %rax` → `leaq K+N(%rbp), %rax`;
+- **stack traffic** — the binary-op spill `pushq %rax; <right>;
+  movq %rax, %rbx; popq %rax; op %rbx, %rax` → `movq <right>, %rbx;
+  op %rbx, %rax` (the left survives in rax across a push), with the
+  div/mod (`cqto; idivq %rbx`) and shift (`movq %rax, %rcx; shlq %cl,
+  %rax`) tails; and the store-LHS address rides in `%r8` instead of the
+  stack (`movq %rax, %r8; <rhs>; movq %rax, (%r8)`) when the rhs makes no
+  call.
+
+Measured on the compiler corpus: **8,697 → 6,184 emitted instructions
+(−29%)**, `pushq`/`popq` **2,391 → 571 (−76%)**, hello.c **106 → 73** —
+with the 740-check suite green at every step (exit codes through gcc AND
+the gcc-free x86sim must agree). The suite's instruction-count regression
+ratchets the ceilings down per phase, and the `ppunit` fixtures keep every
+individual fold rule tested in isolation.
+
 ### Interpreter track (xc.m)
 
 ```
@@ -225,11 +268,13 @@ otherwise bleed into each other). The dialect is feature-complete against its
 documented scope; remaining C features (structs, unions, `switch`,
 `for`/`do-while`, …) are outside both the port and the reference dialect.
 
-Tests (669 checks — probe gate, VM selftest, lexer selftest, the program
+Tests (740 checks — probe gate, VM selftest, lexer selftest, the program
 corpus whose exit codes/outputs are cross-verified against the reference
 build, a gcc-gated group that compiles and runs the assembly-track
-programs, and a cross-track parity group that runs the shared corpus through
-BOTH the interpreter and the compiler and asserts they agree):
+programs, a cross-track parity group that runs the shared corpus through
+BOTH the interpreter and the compiler and asserts they agree, an
+instruction-count regression, and the optimizer's per-rule unit
+fixtures):
 
 ```
 matlab.bat tests/run_tests.m

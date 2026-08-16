@@ -211,6 +211,17 @@ regress. `cc_int`'s header documents the full pipeline (tokenizer →
 parser → codegen → peephole_pass). Suite 729 → 740, all green; the
 refactor is behavior-neutral.
 
+**Optimizer complete (2026-08-16).** The optimization effort (plan
+`docs/2026-08-16-compiler-optimization-plan.md`, phases A–F) is done:
+`peephole_pass` in its own file rewrites the emitted assembly to a fixed
+point, and the compiler corpus dropped from 8,697 to 6,184 emitted
+instructions (−29%), `pushq`/`popq` from 2,391 to 571 (−76%), hello.c
+from 106 to 73 — the 740-check suite green at every phase (gcc exit
+codes, gcc-free x86sim exits and stdout, output parity, an
+instruction-count regression that ratchets the ceilings, and per-rule
+unit fixtures). The README now documents the optimizer in its own
+section.
+
 ## Deliverables
 
 | Phase | Scope | Commit |
