@@ -8,3 +8,4 @@ docs/2026-08-10-matlab-clone-bug-report.md
 
 # probe temp file (delete() is a no-op on the runtime)
 tests/_probe_tmp.txt
+t_fixed/

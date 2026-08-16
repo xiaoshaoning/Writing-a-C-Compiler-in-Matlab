@@ -178,10 +178,10 @@ elseif m == 1            % movl / xorl (32-bit, zero-extends)
     v = mod(sim_opval(a), 4294967296);
     sim_opstore(b, v, 32);
 elseif m == 2            % movzbl
-    v = mod(sim_opval(a), 256);
+    v = sim_byteval(a);
     sim_opstore(b, v, 32);
 elseif m == 3            % movsbl
-    v = mod(sim_opval(a), 256);
+    v = sim_byteval(a);
     if v >= 128
         v = v - 256;
     end
@@ -347,6 +347,21 @@ elseif k == 3
     v = sim_load64(sim_effaddr(a));
 else
     error('x86sim: bad operand value');
+end
+end
+
+function v = sim_byteval(a)
+% sim_byteval — read ONE byte from an operand. Loading the full 8 bytes
+% and masking loses the low byte for values beyond 2^53 (doubles cannot
+% represent them), so char loads from a string with nonzero following
+% bytes (e.g. "abcd" followed by another string) returned garbage.
+global mem
+if a{1} == 3
+    v = double(mem(sim_effaddr(a) + 1));
+elseif a{1} == 2
+    v = double(mod(sim_regread(a{2}, a{3}), 256));
+else
+    v = mod(a{2}, 256);
 end
 end
 

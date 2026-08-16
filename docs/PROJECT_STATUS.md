@@ -222,6 +222,28 @@ instruction-count regression that ratchets the ceilings, and per-rule
 unit fixtures). The README now documents the optimizer in its own
 section.
 
+**Stress program + two real bugs found (2026-08-16).** A ~200-line
+`tests/programs/stress.c` (string library, sort/search, 3×3 matrix
+multiply, recursion, primes, popcount — 5467 checksum) now runs through
+all three tracks in the suite (gcc exit 91, x86sim 91, interpreter
+5467 mod 256, stdout parity). Writing it found two real bugs:
+
+1. **Clone bug (fixed in the clone source, needs a release rebuild):**
+   `interpreter.c:2959` concatenated MATLAB `['a' 'b']` strings into a
+   fixed `char buf[4096]` — the compiler's output-join overflowed it at
+   ~34 statements (valgrind: `__strcat_chk` abort). The fix grows the
+   buffer; verified under WSL valgrind (0 errors) and on Windows. The
+   user's `release/v1.3.21` still has the old binary until rebuilt.
+2. **x86sim bug (fixed here):** `movzbl`/`movsbl` loaded 8 bytes and
+   masked — for a byte inside a string whose following bytes are
+   nonzero, the 8-byte value exceeds 2^53 and the double conversion
+   loses the low byte (stress's `strlen("hello, stress!")` = 0). The
+   sim now reads a single byte (`sim_byteval`). The corpus never hit
+   this (char loads were always from small-value arrays).
+
+Suite 740 → 744 (stress in the gcc/x86sim/parity/output-parity groups;
+the instruction-count baseline rose to 7387 with stress included).
+
 ## Deliverables
 
 | Phase | Scope | Commit |
