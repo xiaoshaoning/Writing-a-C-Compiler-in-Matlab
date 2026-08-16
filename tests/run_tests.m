@@ -868,9 +868,9 @@ else
 
     % instruction-count regression: the corpus's total emitted
     % instructions must stay at or below the recorded ceiling, so a future
-    % change cannot silently bloat the generated code. (Baseline 8697 /
-    % hello.c 106, measured through this harness 2026-08-16; ratchet down
-    % per optimization phase — see
+    % change cannot silently bloat the generated code. (Ceilings ratchet
+    % down per optimization phase: Phase B peephole took 8697 -> 8271,
+    % hello.c 106 -> 103 — see
     % docs/2026-08-16-compiler-optimization-plan.md.)
     ic_total = 0;
     ic_hello = 0;
@@ -892,10 +892,10 @@ else
         [npass nfail] = addcheck(npass, nfail, false, ...
             sprintf('instr count hello.c: %s', e.message));
     end
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 8697, ...
-        sprintf('instr regression: corpus %d <= 8697', ic_total));
-    [npass nfail] = addcheck(npass, nfail, ic_hello <= 106, ...
-        sprintf('instr regression: hello.c %d <= 106', ic_hello));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 8271, ...
+        sprintf('instr regression: corpus %d <= 8271', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_hello <= 103, ...
+        sprintf('instr regression: hello.c %d <= 103', ic_hello));
 
     % function called with the wrong number of arguments errors
     try

@@ -138,6 +138,7 @@ out = {};       % emitted assembly lines (cell; tabs are literal in em)
 
 next();
 parse_program();
+out = peephole_pass(out);   % optimization plan Phase B (safe local rewrites)
 
 fid_output = fopen(destination_file, 'w+');
 if fid_output < 0
@@ -154,6 +155,189 @@ for k = 1:numel(lines)
     s = [s, lines{k}, char(10)];
 end
 end
+
+function lines2 = peephole_pass(lines)
+% peephole_pass — optimization plan Phase B: safe local rewrites on the
+% emitted instruction list (docs/2026-08-16-compiler-optimization-plan.md).
+%  1. `jmp .L` directly followed by `.L:` — the jump is a no-op (falls
+%     through to its own target): drop the jmp.
+%  2. instructions after an unconditional `jmp`, up to the next label, are
+%     unreachable: drop them.
+%  3. `movq $N, %rax` immediately followed by `addq/subq/imulq $M, %rax`
+%     — fold into `movq $N op $M, %rax` (constant-index array scaling).
+%  4. `jcc .L1; jmp .L2` where .L1 is referenced only by that jcc —
+%     invert the condition and jump to .L2 directly.
+% Runs to a fixed point (removing a jmp can expose more dead code). Only
+% instruction lines are ever touched: labels and directives are preserved.
+% Flags semantics are respected — setcc/movzbl chains are left alone (a
+% movzbl does not set flags, so a following cmpq is never redundant).
+% Every line is processed as a double code vector (the clone mangles
+% string literals matching internal names — `exit`, `sum`, … — when they
+% cross local-function boundaries); char() rebuilds them at the end.
+for k = 1:numel(lines)
+    lines{k} = double(lines{k});
+end
+for it = 1:8
+    [lines, changed] = pp_once(lines);
+    if ~changed
+        break;
+    end
+end
+lines2 = {};
+for k = 1:numel(lines)
+    lines2{end+1} = char(lines{k});
+end
+end
+
+function [lines2, changed] = pp_once(lines)
+n = numel(lines);
+changed = 0;
+del = zeros(1, n);          % 1 = drop this line
+foldmap = cell(1, n);       % index -> replacement line ([] = none)
+labat = cell(1, n);         % label name at this index ([] if not a label)
+for k = 1:n
+    ln = lines{k};
+    if ~isempty(ln) && ln(end) == 58          % ':'
+        labat{k} = ln(1:end-1);
+    end
+end
+for k = 1:n
+    if del(k), continue; end
+    ln = lines{k};
+    if ~pp_isinstr(ln)
+        continue;
+    end
+    [mnem, arg1] = pp_parts(ln);
+    % --- 3. immediate fold: movq $N, %rax ; addq/subq/imulq $M, %rax ---
+    if (pp_eq(mnem, 'addq') || pp_eq(mnem, 'subq') || pp_eq(mnem, 'imulq')) && ...
+       numel(arg1) >= 2 && arg1(1) == 36 && k > 1 && ~del(k-1)   % '$'
+        prev = lines{k-1};
+        [pmnem, parg1] = pp_parts(prev);
+        if pp_isinstr(prev) && pp_eq(pmnem, 'movq') && numel(parg1) >= 2 && ...
+           parg1(1) == 36 && numel(parg1) >= 3
+            pv = str2double(char(parg1(2:end-1)));
+            v = str2double(char(arg1(2:end-1)));
+            if ~isnan(pv) && ~isnan(v)
+                if pp_eq(mnem, 'addq'), nv = pv + v;
+                elseif pp_eq(mnem, 'subq'), nv = pv - v;
+                else nv = pv * v; end
+                if abs(nv) < 2^53
+                    del(k-1) = 1;
+                    foldmap{k} = [109 111 118 113 9 36, double(num2str(nv)), ...
+                                  44 32 37 114 97 120];   % 'movq	$NV, %rax'
+                    changed = 1;
+                    continue;
+                end
+            end
+        end
+    end
+    % --- 4. jcc .L1; jmp .L2; .L1: — collapse to the inverted condition
+    % jumping straight to .L2. The inverted jcc's fall-through then lands
+    % on .L1's code, and the intermediate jmp is unreachable. Valid only
+    % when .L1 is the very next line (the code between is empty).
+    if pp_isjcc(mnem) && k + 2 <= n && pp_isinstr(lines{k+1}) && ...
+       ~isempty(labat{k+2}) && cv_eq(labat{k+2}, arg1)
+        [m2, a2] = pp_parts(lines{k+1});
+        if pp_eq(m2, 'jmp')
+            foldmap{k} = [pp_invjcc(mnem), 9, a2];
+            del(k+1) = 1;               % the jmp becomes unreachable
+            changed = 1;
+            continue;
+        end
+    end
+    % --- 1+2. unconditional jmp: its own target as the next label, and
+    % any instructions between it and the next label are unreachable ---
+    if pp_eq(mnem, 'jmp')
+        j = k + 1;
+        while j <= n
+            if ~isempty(labat{j})
+                if cv_eq(labat{j}, arg1)
+                    del(k) = 1;         % jmp to its own next label
+                    changed = 1;
+                end
+                break;
+            end
+            if pp_isinstr(lines{j})
+                del(j) = 1;             % unreachable instruction
+                changed = 1;
+            end
+            j = j + 1;
+        end
+    end
+end
+lines2 = {};
+for k = 1:n
+    if del(k), continue; end
+    if ~isempty(foldmap{k})
+        lines2{end+1} = foldmap{k};
+    else
+        lines2{end+1} = lines{k};
+    end
+end
+end
+
+function b = pp_isinstr(ln)
+% pp_isinstr — a line is an instruction if it is tab-led (9) and its
+% second code is not '.' (46); directives are tab-led dots, labels have
+% no leading tab.
+b = numel(ln) >= 2 && ln(1) == 9 && ln(2) ~= 46;
+end
+
+function [mnem, arg1] = pp_parts(ln)
+% pp_parts — split a tab-led line into mnemonic and first argument
+% (both code vectors).
+t = find(ln == 9);
+if numel(t) >= 3
+    mnem = ln(2:t(2)-1);
+    arg1 = ln(t(2)+1:t(3)-1);
+elseif numel(t) == 2
+    mnem = ln(2:t(2)-1);
+    arg1 = ln(t(2)+1:end);
+elseif numel(t) == 1
+    mnem = ln(2:end);
+    arg1 = [];
+else
+    mnem = [];
+    arg1 = [];
+end
+end
+
+function b = pp_eq(a, s)
+% pp_eq — code-vector equality with a literal (the literal stays inside
+% this helper, so it is never mangled by the clone).
+b = numel(a) == numel(s) && all(a == double(s));
+end
+
+function b = cv_eq(a, b)
+% cv_eq — code-vector equality (clone-safe).
+b = numel(a) == numel(b) && all(a == b);
+end
+
+function b = pp_isjcc(mnem)
+% pp_isjcc — branch-condition mnemonics this pass can invert.
+b = pp_eq(mnem, 'je') || pp_eq(mnem, 'jne') || pp_eq(mnem, 'jl') || ...
+    pp_eq(mnem, 'jle') || pp_eq(mnem, 'jg') || pp_eq(mnem, 'jge') || ...
+    pp_eq(mnem, 'jb') || pp_eq(mnem, 'jbe') || pp_eq(mnem, 'ja') || ...
+    pp_eq(mnem, 'jae');
+end
+
+function s = pp_invjcc(mnem)
+% pp_invjcc — the inverted branch condition (a code vector).
+if pp_eq(mnem, 'je'), s = double('jne');
+elseif pp_eq(mnem, 'jne'), s = double('je');
+elseif pp_eq(mnem, 'jl'), s = double('jge');
+elseif pp_eq(mnem, 'jge'), s = double('jl');
+elseif pp_eq(mnem, 'jg'), s = double('jle');
+elseif pp_eq(mnem, 'jle'), s = double('jg');
+elseif pp_eq(mnem, 'jb'), s = double('jae');
+elseif pp_eq(mnem, 'jae'), s = double('jb');
+elseif pp_eq(mnem, 'ja'), s = double('jbe');
+else s = double('ja'); end
+end
+
+
+
+
 
 % ---------------------------------------------------------------------------
 % helpers

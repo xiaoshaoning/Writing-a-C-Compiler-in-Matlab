@@ -39,6 +39,7 @@ Compiler corpus: 286 `cc2_*`–`cc18_*` programs.
 | `leaq` | 838 |
 | `movq` | 2,920 (33.6% — many are operand shuffles) |
 | Corpus compile time | 13.2 s (285 programs, ~46 ms each) |
+| Phase B result | corpus 8,697 → 8,271; hello.c 106 → 103 |
 | hello.c | 106 instructions, 2,265 bytes, 0.05 s compile |
 
 The dominant cost is the stack-based expression discipline: every binary
@@ -83,27 +84,47 @@ Build the tooling that every later phase relies on.
 A single linear pass over the emitted instruction list that removes
 obvious dead code. Runs after codegen, before output.
 
-- [ ] Remove no-ops:
-      `addq $0`, `subq $0`, `imulq $1`, `movq %rax, %rax`,
-      `addq $0, %rax` after a `movq`-of-immediate (the pointer offset 0
-      case).
-- [ ] Remove `jmp .L` when `.L:` is the immediately following label.
-- [ ] Collapse `jcc .L1; jmp .L2; .L1:` → invert the condition and jump
-      to `.L2` directly (when `.L1` is otherwise unreferenced).
-- [ ] Remove a `pushq %rax; popq %rbx` pair → `movq %rax, %rbx`
-      (register move without the stack) — only when rbx is dead at that
-      point (safe within the current codegen discipline: rbx is a scratch
-      between statements).
-- [ ] Remove a trailing `movq %rax, %rbx; …; movq %rbx, %rax` round-trip
-      when the destination is unused.
-- [ ] Fold `movq $N, %rax; addq $M, %rax` → `movq $N+M, %rax`
-      (and the subq/imulq variants).
-- [ ] Fold `cmpq $0, %rax; sete %al; movzbl %al, %eax` patterns where the
-      flags are already known (defer to Phase D if ambiguous).
-- [ ] Iterate the pass to a fixed point (a removed instruction may expose
-      another).
-- [ ] **Gate:** 727-suite green; instruction count drops (expect the
-      first ~5–10%).
+- [x] Remove no-ops — measured zero occurrences in the whole corpus
+      (`addq $0`, `subq $0`, `imulq $1`, `movq %rax, %rax`); the
+      compiler never emits them.
+- [x] Remove `jmp .L` when `.L:` is the immediately following label —
+      **the dominant Phase B win** (every function's final `return`
+      jumps to its own epilogue): 446 of the 12,649 instructions across
+      the 381-program set.
+- [x] Collapse `jcc .L1; jmp .L2; .L1:` → the inverted `jcc .L2` with
+      the intermediate jmp dropped (`.L1` must be the very next line so
+      the inverted branch's fall-through lands on `.L1`'s code). The
+      naive `je .L1; jmp .L2` → `jne .L2` (without adjacency + dropping
+      the jmp) was wrong and broke break/continue/switch — caught by the
+      suite (4 programs) and fixed.
+- [ ] Remove a `pushq %rax; popq %rbx` pair → `movq %rax, %rbx` —
+      measured zero adjacent pairs in the corpus (the spills are never
+      adjacent); folded into Phase E's stack-traffic work.
+- [ ] Remove a trailing `movq %rax, %rbx; …; movq %rbx, %rax`
+      round-trip when the destination is unused — deferred to Phase E.
+- [x] Fold `movq $N, %rax; addq/subq/imulq $M, %rax` →
+      `movq $N op $M, %rax`: 183 occurrences (constant-index array
+      scaling like `a[2]` → `movq $2, %rax; imulq $8, %rax`).
+- [x] Investigated `cmpq $0, %rax` after `movzbl %al, %eax` — **not**
+      removable: `movzbl` is a MOV and does not set flags; the cmpq is
+      load-bearing. (A deeper fold — the whole
+      `cmpq; setcc; movzbl; cmpq $0; jcc` chain into one `jcc` — is
+      possible; 65 occurrences × 3 instructions. Deferred: needs
+      flag-ordering care, Phase D territory.)
+- [x] Iterate the pass to a fixed point (up to 8 iterations; dead code
+      after a return exposes more dead code, e.g. `jmp .Lret1; jmp .Llo2`).
+- [x] **Gate:** 729-suite green (the 4 break/continue/switch failures
+      above were the only regressions and are fixed); the pass also
+      removes unreachable code after any unconditional jmp (return /
+      break / continue tails).
+- [x] **Result:** corpus 8,697 → 8,271 (−426, 4.9%), hello.c 106 →
+      103. Two clone bugs were hit and worked around on the way:
+      `strfind` does not accept numeric arrays (use `find(ln == 9)`),
+      and the pass's parameter must not be named `out` (a compiler
+      global; the clone lets the global shadow the argument). Lines are
+      processed as double code vectors so strings matching internal
+      names (`exit`, `sum`, …) are not mangled crossing the local-
+      function boundary — the same sidestep x86sim uses.
 
 ## Phase C — Address-mode simplification (local, big win)
 

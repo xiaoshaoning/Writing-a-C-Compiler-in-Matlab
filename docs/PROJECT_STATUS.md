@@ -143,6 +143,22 @@ of the pp_* corpus); the 4 excluded are the intended-error tests and
 `%p` (synthetic interpreter pointers vs real addresses — inherently
 unmatchable).
 
+**Optimization Phase B (peephole, 2026-08-16).** The first
+optimization pass landed in `cc_int` (`peephole_pass`): it runs after
+codegen to a fixed point and (1) drops `jmp .L` whose target is the very
+next label (every function's final return jumps to its own epilogue —
+the dominant win), (2) drops unreachable instructions after any
+unconditional jump, (3) folds `movq $N, %rax; imulq $M, %rax` into
+`movq $N*M, %rax` (constant-index array scaling), and (4) collapses
+`jcc .L1; jmp .L2; .L1:` into the inverted condition straight to `.L2`.
+Corpus instructions 8,697 → 8,271 (−4.9%); hello.c 106 → 103; the
+729-check suite stays green and the regression ceilings were ratcheted.
+Two clone quirks hit on the way: `strfind` rejects numeric arrays (use
+`find(ln == 9)`) and a function parameter named like a caller global
+(`out`) gets shadowed — lines are processed as double code vectors so
+internal-name strings (`exit`, `sum`, …) are not mangled crossing
+local-function boundaries (the x86sim sidestep).
+
 ## Deliverables
 
 | Phase | Scope | Commit |
