@@ -8,15 +8,26 @@ lotabout's [write-a-C-interpreter](https://github.com/lotabout/write-a-C-interpr
 on-the-fly codegen → 38-opcode stack VM → syscalls. All seven planned phases
 are done, plus six post-parity features beyond the reference dialect.
 
+**Compiler track (`cc_int.m`): feature-complete + a runtime library.**
+Norasandler's [Writing a C Compiler](https://norasandler.com/2017/11/29/Write-a-Compiler.html)
+series (parts 1–13) plus structs by value, function pointers (incl.
+struct-returning), `goto`/labels, `void`, casts, the comma operator, global
+struct initializers, local structs/enums, string→char[], and a runtime
+library (`printf`/`malloc`/`memset`/`memcmp`/`exit`/`open`/`read`/`close`
+via Win64-ABI shims) — so compiled programs print, allocate, and do file I/O.
+`hello.c` compiles through `cc_int` and prints the same fibonacci table as
+the interpreter.
+
 **Cross-track parity harness (2026-08-15).** A suite group that runs the
 shared corpus through BOTH tracks — `xc` (interpreter) and `cc_int`
 (compiler) — and asserts `mod(interp_exit, 256) == compiler_exit` (the OS
-truncates the exit code to the low byte). 187 of the 233 `cc*.c` programs
-are shared and agree; the excluded ones are the documented dialect
-divergences (structs, `switch`, `typedef`, `for`/`do`/`break`/`continue`,
-`+=`, `&&`/`||` value semantics, declaration order, forward references,
-arg-count checks). Two independent implementations confirming each other
-on every suite run.
+truncates the exit code to the low byte). 187 programs are shared and agree
+on exit codes, and 53 more agree on full stdout (47/47 of the matchable
+`pp_*` corpus — the excluded ones are the intended-error tests and `%p`,
+whose synthetic interpreter pointers can never match real addresses); the
+interpreter-only programs are the documented dialect divergences (structs,
+`switch`, `typedef`, `for`/`do`/`break`/`continue`, …). Two independent
+implementations confirming each other on every suite run.
 
 **Fix (part 6): `cdivmod` negative-divisor bug.** Cross-checking the
 arithmetic corpus against the interpreter exposed a latent `xc.m` bug:
@@ -108,6 +119,19 @@ unmatchable).
 | 6–7 | All eight syscalls, hello.c acceptance, cleanup | `78cee00` |
 | post-parity | Block comments, `%s` printf, arrays, initializers, `void`, multi-read | `52c0016` |
 
+**Compiler track (`cc_int.m`)** — Norasandler parts 2–13 landed in
+individual commits (`06f4ad8`…`aa85d46`); the post-tutorial feature rounds
+and the runtime library are the changelog entries above:
+
+| Round | Scope | Commit |
+|---|---|---|
+| cc14 | nested multi-dim inits, function pointers, goto/labels, by-value struct params/returns | `a482286` |
+| cc15 | `void`, casts, comma, global function pointers, global struct inits | `199226f` |
+| cc16 | struct-returning fptrs, local structs/enums, string→char[] | `840193b` |
+| cc17 | runtime library shims (printf/malloc/memset/memcmp/exit/open/read/close) | `7813eb7` |
+| parity | cross-track exit-code parity (187) + output parity (53, 47/47 matchable `pp_*`) | `04da1b7` `57e2fae` |
+| verify | reference cross-check + ENT dump fix | `f697b72` |
+
 ## Verification
 
 - **Test suite**: `tests/run_tests.m` — **668/668** on the target runtime
@@ -162,9 +186,13 @@ unmatchable).
 
 ## Known limitations (documented dialect gaps)
 
-The port is feature-complete against its documented scope. C features outside
-the scope of both the port and the reference dialect (structs, unions,
-`switch`, `for`/`do-while` loops, preprocessor macros, …) are unsupported.
+The interpreter port is feature-complete against its documented scope. C
+features outside the scope of both the port and the reference dialect
+(structs, unions, `switch`, `for`/`do-while` loops, preprocessor macros, …)
+are unsupported. The compiler track (`cc_int.m`) supports all of those plus
+structs, but still lacks: pointer-returning function pointers
+(`int *(*fp)(int)` declarations), compound literals, and `unsigned` types;
+calls through pointers always use the interpreter-style stack convention.
 
 - The `-s` mnemonic column is padded manually to match the reference's
   `%8.4s` output (the runtime pads to width but not to string precision)

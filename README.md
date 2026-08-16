@@ -28,11 +28,27 @@ Building compilers/interpreters in MATLAB, following two classic tutorials:
    `//`/`/* */` comments. All values are 64-bit (like the interpreter) so
    addresses round-trip correctly. Part 12: structs — `struct Tag { … };`
    definitions, struct variables/arrays/pointers (`.`, `->`, nested),
-   element-scaled pointer arithmetic; params/returns are by-pointer only.
+   element-scaled pointer arithmetic; params/returns are by-value (a
+   hidden return slot at `16+8*nparams(%rbp)`, chunked 8-byte copies).
    Part 13: `switch` (case dispatch in %r10, break targets the switch end),
    `sizeof` (types and expressions), array initializers (`{1,2,3}` and
    `"str"`, local + global), `typedef`, `enum` constants, and
    multi-dimension arrays (`int a[2][3]` with per-level strides).
+   Part 14: nested-brace multi-dim initializers (row-major group
+   alignment), function pointers (bare function names give addresses,
+   calls through `call *%rax`, `int (*fp)(int,int)` declarations),
+   `goto`/labels (forward jumps backpatched), by-value struct
+   params/returns. Part 15: `void` functions (and `(void)` params, bare
+   `return;`), casts (`(int)x`, `(char*)p`, `(char)300` → 44), the comma
+   operator, global function pointers, global struct initializers
+   (`struct P gp = {5,6};`). Part 16: struct-returning function pointers
+   (the return type is encoded in the fptr type), local struct definitions
+   (incl. the compound `struct Q { … } q;` form), local `enum`s (values may
+   be constant expressions), and string→char[] assignment (`s = "hi"`
+   copies bounded by the array size). Part 17: a runtime library — calls to
+   `printf`/`malloc`/`memset`/`memcmp`/`exit`/`open`/`read`/`close` emit
+   Win64-ABI adapter shims in the generated assembly, so compiled programs
+   can print, allocate, and read files.
 2. **Interpreter track** (`xc.m`) — lotabout's
    [write-a-C-interpreter](https://github.com/lotabout/write-a-C-interpreter):
    a C interpreter with a custom VM, ported to MATLAB — complete: lexer,
@@ -50,13 +66,16 @@ tests/
                       cross-track parity)
   programs/           test C programs
     return_2.c        return 2; (part 1 of the Norasandler series)
-    cc2_*.c–cc13_*.c  unary … switch / sizeof / typedef / enum / multi-dim
-                      programs (parts 2-13, gcc-gated in the suite)
+    cc2_*.c–cc17_*.c  unary … runtime library programs (parts 2-17,
+                      gcc-gated in the suite)
     hello.c           fibonacci demo — xc.m acceptance program
 docs/
   2026-08-10-xc-matlab-port-plan.md        implementation plan
-  PROJECT_STATUS.md                        current project status
-  2026-08-10-matlab-clone-bug-report.md    bugs found in the MATLAB clone (internal)
+  2026-08-15-codebase-review.md           review + fix-plan links
+  2026-08-15-fix-plan.md                  phased fix plan (Phases A–E)
+  PROJECT_STATUS.md                      current project status
+  2026-08-16-reference-cross-check.md    reference xc.c parity verification
+  2026-08-10-matlab-clone-bug-report.md  bugs found in the MATLAB clone (internal, gitignored)
 ```
 
 ## Running
@@ -81,6 +100,13 @@ echo %errorlevel%
 (`addpath('.')` is needed in `-batch` mode: the clone does not put the working
 directory on the MATLAB path implicitly — see the bug report. In cmd, the exit
 code is `%errorlevel%` — bash's `$?` does not work there.)
+
+Compiled programs may call the runtime library (`printf`, `malloc`, `memset`,
+`memcmp`, `exit`, `open`/`read`/`close`) — the compiler emits a Win64-ABI
+adapter shim per `{function, arg-count}` used (e.g. `__cc_printf_3`) that
+re-packs the compiler's stack-arg convention into RCX/RDX/R8/R9 and calls the
+CRT symbol, so programs can print and allocate. `hello.c` compiles through
+`cc_int` and prints the same fibonacci table as the interpreter track.
 
 Expected exit code: `1` (the value of `return -~!5;` — `!5` = 0, `~0` = -1,
 `-(-1)` = 1). The emitted assembly uses COFF directives
@@ -154,7 +180,11 @@ matlab.bat -batch "run('tests/run_tests.m');"
   stdout are verified against the reference `xc.c` build, compiled ad hoc
   with `gcc xc.c -o xc_ref.exe` from the
   [lotabout/write-a-C-interpreter](https://github.com/lotabout/write-a-C-interpreter)
-  repository (gcc 15.2.0 at `C:\msys64\ucrt64\bin\gcc.exe`).
+  repository (gcc 15.2.0 at `C:\msys64\ucrt64\bin\gcc.exe`). Verified
+  2026-08-16: `hello.c` stdout byte-identical (221 bytes) and `-s` dumps
+  structurally identical — only the absolute-address operands differ, and
+  those vary between builds of the reference itself (see
+  `docs/2026-08-16-reference-cross-check.md`).
 - Known bugs in the MATLAB clone (v1.2.37, fixed across v1.2.38-v1.3.21) are
   tracked in an internal bug report (`docs/2026-08-10-matlab-clone-bug-report.md`,
   gitignored — not shipped with the repo); the port targets v1.3.21, follows
