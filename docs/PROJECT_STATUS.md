@@ -171,6 +171,18 @@ form), `movq $N, %rax; movq %rax, mem` → `movq $N, mem`, and
 ratcheted. (One bug: `ao1(2:end-1)` is an empty slice on the two-char
 `$8`.)
 
+**Optimization Phase D (constant folds, 2026-08-16).** The setcc
+normalize-then-branch chain (`cmpq A; setcc %al; movzbl %al, %eax;
+cmpq $0, %rax; je/jne .L`) folds into a single branch on the original
+compare — the chain's 0/1 value is consumed only by the branch (51
+chains × 3 instructions = 153). `je` inverts the setcc condition,
+`jne` keeps it; the unsigned setccs fold to `ja`/`jae`/`jb`/`jbe`,
+which the x86sim did not support — the simulator grew those four
+branches (the suite caught the gap). Constant-constant arithmetic
+(`2 + 3`) measures zero occurrences in the corpus. Corpus instructions
+7,835 → 7,686, hello.c 96 → 90; suite 729/729 green; ceilings
+ratcheted.
+
 ## Deliverables
 
 | Phase | Scope | Commit |

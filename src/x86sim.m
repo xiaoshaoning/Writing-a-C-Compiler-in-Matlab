@@ -263,6 +263,14 @@ elseif m >= 28 && m <= 36   % jmp je jne jl jle jg jge jz jnz
     if m == 28 || sim_jcc(m - 29)
         next = sim_target(a);
     end
+elseif m >= 46 && m <= 49   % ja jb jae jbe (unsigned branches)
+    if m == 46, k = 9;
+    elseif m == 47, k = 8;
+    elseif m == 48, k = 11;
+    else k = 10; end
+    if sim_jcc(k)
+        next = sim_target(a);
+    end
 elseif m == 37           % call
     tgt = sim_target(a);
     if tgt >= 0
@@ -966,6 +974,8 @@ p35 = cv_of('jz');    p36 = cv_of('jnz'); p37 = cv_of('call');
 p38 = cv_of('ret');   px  = cv_of('xorl');
 p40 = cv_of('setb');  p41 = cv_of('seta'); p42 = cv_of('setbe');
 p43 = cv_of('setae'); p44 = cv_of('shrq'); p45 = cv_of('divq');
+p46 = cv_of('ja');    p47 = cv_of('jb');   p48 = cv_of('jae');
+p49 = cv_of('jbe');
 if cv_eq(d, p8)
     m = 0;
 elseif cv_eq(d, p1) || cv_eq(d, px)
@@ -1058,6 +1068,14 @@ elseif cv_eq(d, p44)
     m = 44;
 elseif cv_eq(d, p45)
     m = 45;
+elseif cv_eq(d, p46)
+    m = 46;
+elseif cv_eq(d, p47)
+    m = 47;
+elseif cv_eq(d, p48)
+    m = 48;
+elseif cv_eq(d, p49)
+    m = 49;
 end
 end
 

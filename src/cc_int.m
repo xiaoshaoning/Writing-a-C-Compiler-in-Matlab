@@ -173,6 +173,12 @@ function lines2 = peephole_pass(lines)
 %  6. `movq $N, %rax; movq %rax, mem` — fold to `movq $N, mem`.
 %  7. `leaq K(%rbp), %rax; addq $N, %rax` — fold N into the displacement:
 %     `leaq K+N(%rbp), %rax` (constant-index array addressing).
+%  8. `cmpq A; setcc %al; movzbl %al, %eax; cmpq $0, %rax; je/jne .L` —
+%     the normalize-then-test chain is dead (the 0/1 value is consumed
+%     only by the branch): keep the first cmpq and branch directly with
+%     the mapped condition (je inverts, jne keeps the sense). The movzbl
+%     does not set flags, so the second cmpq was load-bearing — this is
+%     the fold that makes it removable.
 % Runs to a fixed point (removing a jmp can expose more dead code). Only
 % instruction lines are ever touched: labels and directives are preserved.
 % Flags semantics are respected — setcc/movzbl chains are left alone (a
@@ -263,6 +269,25 @@ for k = 1:n
                     changed = 1;
                     continue;
                 end
+            end
+        end
+    end
+    % --- 8. setcc-normalize-then-branch fold ---
+    if pp_eq(mnem, 'cmpq') && k + 4 <= n
+        [s8, so1, so2] = pp_ops(lines{k+1});
+        if pp_issetcc(s8) && pp_eq(so1, '%al')
+            [z8, zo1, zo2] = pp_ops(lines{k+2});
+            [q8, qo1, qo2] = pp_ops(lines{k+3});
+            [j8, jo1, jo2] = pp_ops(lines{k+4});
+            if pp_eq(z8, 'movzbl') && pp_eq(zo1, '%al') && pp_eq(zo2, '%eax') && ...
+               pp_eq(q8, 'cmpq') && pp_eq(qo1, '$0') && pp_eq(qo2, '%rax') && ...
+               (pp_eq(j8, 'je') || pp_eq(j8, 'jne')) && numel(jo1) >= 1
+                foldmap{k+1} = [pp_setcc2jcc(s8, j8), 9, jo1];
+                del(k+2) = 1;
+                del(k+3) = 1;
+                del(k+4) = 1;
+                changed = 1;
+                continue;
             end
         end
     end
@@ -416,6 +441,43 @@ if p == 1
     v = 0;
 else
     v = str2double(char(op(1:p-1)));
+end
+end
+
+function b = pp_issetcc(mnem)
+% pp_issetcc — setcc mnemonics this pass can fold into a branch.
+b = pp_eq(mnem, 'setl') || pp_eq(mnem, 'setg') || pp_eq(mnem, 'setle') || ...
+    pp_eq(mnem, 'setge') || pp_eq(mnem, 'sete') || pp_eq(mnem, 'setne') || ...
+    pp_eq(mnem, 'seta') || pp_eq(mnem, 'setae') || pp_eq(mnem, 'setb') || ...
+    pp_eq(mnem, 'setbe');
+end
+
+function s = pp_setcc2jcc(cc, br)
+% pp_setcc2jcc — the branch that replaces a setcc+test+branch chain.
+% `je` branches when the tested value is zero, i.e. when the setcc
+% condition is FALSE — so it inverts; `jne` keeps the condition's sense.
+if pp_eq(br, 'je')
+    if pp_eq(cc, 'setl'), s = double('jge');
+    elseif pp_eq(cc, 'setg'), s = double('jle');
+    elseif pp_eq(cc, 'setle'), s = double('jg');
+    elseif pp_eq(cc, 'setge'), s = double('jl');
+    elseif pp_eq(cc, 'sete'), s = double('jne');
+    elseif pp_eq(cc, 'setne'), s = double('je');
+    elseif pp_eq(cc, 'seta'), s = double('jbe');
+    elseif pp_eq(cc, 'setae'), s = double('jb');
+    elseif pp_eq(cc, 'setb'), s = double('jae');
+    else s = double('ja'); end               % setbe
+else
+    if pp_eq(cc, 'setl'), s = double('jl');
+    elseif pp_eq(cc, 'setg'), s = double('jg');
+    elseif pp_eq(cc, 'setle'), s = double('jle');
+    elseif pp_eq(cc, 'setge'), s = double('jge');
+    elseif pp_eq(cc, 'sete'), s = double('je');
+    elseif pp_eq(cc, 'setne'), s = double('jne');
+    elseif pp_eq(cc, 'seta'), s = double('ja');
+    elseif pp_eq(cc, 'setae'), s = double('jae');
+    elseif pp_eq(cc, 'setb'), s = double('jb');
+    else s = double('jbe'); end              % setbe
 end
 end
 

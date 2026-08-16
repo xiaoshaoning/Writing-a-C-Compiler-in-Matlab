@@ -41,6 +41,7 @@ Compiler corpus: 286 `cc2_*`–`cc18_*` programs.
 | Corpus compile time | 13.2 s (285 programs, ~46 ms each) |
 | Phase B result | corpus 8,697 → 8,271; hello.c 106 → 103 |
 | Phase C result | corpus 8,271 → 7,835; hello.c 103 → 96; `leaq` 837 → 481 |
+| Phase D result | corpus 7,835 → 7,686; hello.c 96 → 90; +x86sim `ja`/`jb`/`jae`/`jbe` |
 | hello.c | 106 instructions, 2,265 bytes, 0.05 s compile |
 
 The dominant cost is the stack-based expression discipline: every binary
@@ -164,19 +165,24 @@ This is `load X` — the `leaq` is pure overhead.
 Fold constant subexpressions so the emitted code computes them at compile
 time.
 
-- [ ] Fold binary ops on two immediates: `2 + 3`, `10 * 4`, `1 << 2`,
-      `7 % 3`, `-5 / 2` (C truncation) → a single `movq $N`.
-- [ ] Fold immediate ops into the preceding `movq $N`:
-      `movq $5, %rax; addq $3, %rax` → `movq $8, %rax`
-      (already listed in Phase B; make it complete for `-`, `*`, `&`,
-      `|`, `^`, `<<`, `>>`).
-- [ ] Fold `movq $N, %rax; cmpq $M, %rax` → `cmpq $M, $N`-style — only
-      when it reduces instructions (compare against the immediate:
-      `cmpq $M, %rax` stays; the fold is in the setcc value).
-- [ ] `0 * x`, `x * 0`, `0 + x` → the other operand (when the non-folded
-      operand is a simple load — safe only when no side effects).
-- [ ] **Gate:** 727-suite green; count drops (expect a few %; the corpus
-      is small but constant-heavy).
+- [x] Fold binary ops on two immediates — measured **zero** value-flow
+      patterns (`movq $A; pushq; movq $B; movq %rax,%rbx; popq %rax;
+      op %rbx,%rax`) in the corpus; no program computes `2 + 3` with
+      both operands constant. The immediate-into-`movq` fold (Phase B
+      step 3) already covers the one-constant cases.
+- [x] **The deferred setcc-chain fold** (the real Phase D win):
+      `cmpq A; setcc %al; movzbl %al, %eax; cmpq $0, %rax; je/jne .L` →
+      `cmpq A; jcc .L` — 51 chains × 3 instructions = 153. The chain's
+      0/1 value is consumed only by the branch, so the setcc/movzbl/
+      cmpq are dead; `je` inverts the condition, `jne` keeps it. The
+      unsigned setccs (`seta`/`setae`/`setb`/`setbe`) fold to
+      `ja`/`jae`/`jb`/`jbe` — which the x86sim did not know yet, so the
+      simulator grew those four branches (Phase G in miniature; the
+      suite caught the gap immediately).
+- [ ] Fold `movq $N, %rax; cmpq $M, %rax` — measured zero constant
+      comparisons in the corpus (comparisons are always variable-driven).
+- [ ] `0 * x`, `x * 0`, `0 + x` — measured zero occurrences.
+- [x] **Gate:** 729-suite green; corpus 7,835 → 7,686, hello.c 96 → 90.
 
 ## Phase E — Structural: stack-traffic reduction (the big win)
 
