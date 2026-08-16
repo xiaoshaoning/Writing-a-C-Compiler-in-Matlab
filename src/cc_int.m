@@ -165,8 +165,14 @@ function lines2 = peephole_pass(lines)
 %     unreachable: drop them.
 %  3. `movq $N, %rax` immediately followed by `addq/subq/imulq $M, %rax`
 %     — fold into `movq $N op $M, %rax` (constant-index array scaling).
-%  4. `jcc .L1; jmp .L2` where .L1 is referenced only by that jcc —
-%     invert the condition and jump to .L2 directly.
+%  4. `jcc .L1; jmp .L2; .L1:` — invert the condition and jump to .L2
+%     directly (the intermediate jmp becomes unreachable).
+%  5. `leaq K(%rbp), %rax; movq (%rax), %rax` (also movzbl/movsbl and the
+%     `name(%rip)` global form) — the address is pure overhead: fold to
+%     `movq K(%rbp), %rax`.
+%  6. `movq $N, %rax; movq %rax, mem` — fold to `movq $N, mem`.
+%  7. `leaq K(%rbp), %rax; addq $N, %rax` — fold N into the displacement:
+%     `leaq K+N(%rbp), %rax` (constant-index array addressing).
 % Runs to a fixed point (removing a jmp can expose more dead code). Only
 % instruction lines are ever touched: labels and directives are preserved.
 % Flags semantics are respected — setcc/movzbl chains are left alone (a
@@ -208,6 +214,58 @@ for k = 1:n
         continue;
     end
     [mnem, arg1] = pp_parts(ln);
+    % --- 5. load-side address fold: leaq X, %rax ; movq (%rax), %rax ---
+    if pp_eq(mnem, 'leaq')
+        [m5, o1, o2] = pp_ops(ln);
+        if pp_eq(o2, '%rax') && (pp_memrbp(o1) || pp_memrip(o1)) && ...
+           k < n && pp_isinstr(lines{k+1})
+            [lm, lo1, lo2] = pp_ops(lines{k+1});
+            if (pp_eq(lm, 'movq') || pp_eq(lm, 'movzbl') || pp_eq(lm, 'movsbl')) && ...
+               pp_eq(lo1, '(%rax)') && (pp_eq(lo2, '%rax') || pp_eq(lo2, '%eax'))
+                foldmap{k} = [double(lm), 9, o1, 44, 32, double(lo2)]; % ', '
+                del(k+1) = 1;
+                changed = 1;
+                continue;
+            end
+        end
+    end
+    % --- 6. immediate store: movq $N, %rax ; movq %rax, mem ---
+    if pp_eq(mnem, 'movq') && k < n && pp_isinstr(lines{k+1})
+        [m6, o1, o2] = pp_ops(ln);
+        if numel(o1) >= 2 && o1(1) == 36 && pp_eq(o2, '%rax')   % '$'
+            [s6, so1, so2] = pp_ops(lines{k+1});
+            if pp_eq(s6, 'movq') && pp_eq(so1, '%rax') && ...
+               (pp_memrbp(so2) || pp_memrip(so2))
+                foldmap{k} = [double('movq'), 9, o1, 44, 32, double(so2)];
+                del(k+1) = 1;
+                changed = 1;
+                continue;
+            end
+        end
+    end
+    % --- 7. constant-offset fold: leaq K(%rbp), %rax ; addq $N, %rax ---
+    if pp_eq(mnem, 'leaq') && k < n && pp_isinstr(lines{k+1})
+        [m7, o1, o2] = pp_ops(ln);
+        if pp_eq(o2, '%rax') && pp_memrbp(o1)
+            [a7, ao1, ao2] = pp_ops(lines{k+1});
+            if pp_eq(a7, 'addq') && numel(ao1) >= 2 && ao1(1) == 36 && pp_eq(ao2, '%rax')
+                kdisp = pp_disp(o1);
+                nv = str2double(char(ao1(2:end)));
+                if ~isnan(kdisp) && ~isnan(nv) && abs(kdisp + nv) < 2^31
+                    nd = kdisp + nv;
+                    if nd == 0
+                        disp2 = double('(%rbp)');
+                    else
+                        disp2 = [double(num2str(nd)), double('(%rbp)')];
+                    end
+                    foldmap{k} = [double('leaq'), 9, disp2, 44, 32, double('%rax')];
+                    del(k+1) = 1;
+                    changed = 1;
+                    continue;
+                end
+            end
+        end
+    end
     % --- 3. immediate fold: movq $N, %rax ; addq/subq/imulq $M, %rax ---
     if (pp_eq(mnem, 'addq') || pp_eq(mnem, 'subq') || pp_eq(mnem, 'imulq')) && ...
        numel(arg1) >= 2 && arg1(1) == 36 && k > 1 && ~del(k-1)   % '$'
@@ -299,6 +357,65 @@ elseif numel(t) == 1
 else
     mnem = [];
     arg1 = [];
+end
+end
+
+function [mnem, op1, op2] = pp_ops(ln)
+% pp_ops — split a tab-led instruction line into mnemonic, first operand
+% and second operand (code vectors; op2 = [] when there is no second
+% operand). Operands are comma-separated in the emitted assembly.
+[mnem, rest] = pp_parts2(ln);
+if isempty(rest)
+    op1 = [];
+    op2 = [];
+    return;
+end
+c = find(rest == 44);                       % ','
+if isempty(c)
+    op1 = rest;
+    op2 = [];
+else
+    op1 = rest(1:c-1);
+    op2 = rest(c+2:end);                    % skip ', '
+end
+end
+
+function [mnem, rest] = pp_parts2(ln)
+% pp_parts2 — mnemonic and the remainder of the line after it.
+t = find(ln == 9);
+if numel(t) >= 2
+    mnem = ln(2:t(2)-1);
+    rest = ln(t(2)+1:end);
+elseif numel(t) == 1
+    mnem = ln(2:end);
+    rest = [];
+else
+    mnem = [];
+    rest = [];
+end
+end
+
+function b = pp_memrbp(op)
+% pp_memrbp — does the operand end with '(%rbp)' (a frame slot)?
+b = numel(op) >= 6 && cv_eq(op(end-5:end), double('(%rbp)'));
+end
+
+function b = pp_memrip(op)
+% pp_memrip — does the operand reference name(%rip) (a global)?
+b = ~isempty(strfind(op, double('%rip')));
+end
+
+function v = pp_disp(op)
+% pp_disp — the displacement of a K(%rbp) operand (0 for '(%rbp)').
+p = find(op == 40);                         % '('
+if isempty(p)
+    v = NaN;
+    return;
+end
+if p == 1
+    v = 0;
+else
+    v = str2double(char(op(1:p-1)));
 end
 end
 

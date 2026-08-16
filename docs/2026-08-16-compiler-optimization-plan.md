@@ -40,6 +40,7 @@ Compiler corpus: 286 `cc2_*`–`cc18_*` programs.
 | `movq` | 2,920 (33.6% — many are operand shuffles) |
 | Corpus compile time | 13.2 s (285 programs, ~46 ms each) |
 | Phase B result | corpus 8,697 → 8,271; hello.c 106 → 103 |
+| Phase C result | corpus 8,271 → 7,835; hello.c 103 → 96; `leaq` 837 → 481 |
 | hello.c | 106 instructions, 2,265 bytes, 0.05 s compile |
 
 The dominant cost is the stack-based expression discipline: every binary
@@ -137,25 +138,26 @@ movq (%rax), %rax        ; / movzbl (%rax), %eax
 
 This is `load X` — the `leaq` is pure overhead.
 
-- [ ] Peephole: `leaq K(%rbp), %rax` immediately followed by
-      `movq (%rax), %rax` → `movq K(%rbp), %rax`.
-      Same for `movzbl`/`movsbl` (byte loads) and the global form
+- [x] Peephole: `leaq K(%rbp), %rax` immediately followed by
+      `movq (%rax), %rax` → `movq K(%rbp), %rax` (365 frame-slot pairs).
+      Same for `movzbl`/`movsbl` (byte loads; 16) and the global form
       `leaq name(%rip), %rax; movq (%rax), %rax` →
-      `movq name(%rip), %rax`.
-- [ ] Peephole: the assignment-store side:
-      `leaq K(%rbp), %rax; pushq %rax; <rhs>; popq %rbx; movq %rax, (%rbx)`
-      → `<rhs>; movq %rax, K(%rbp)` (the LHS address push/pop eliminated
-      when the RHS doesn't need the LHS — verify the `x = x + 1` case
-      where the RHS reads the same variable!).
-- [ ] The `a[i]` indexing: `leaq base, %rax; pushq %rax; <idx>; …;
-      popq %rax; addq %rbx, %rax` — keep (the base must be preserved
-      across the index eval) but fold the `leaq`+`addq` when the index is
-      a constant: `leaq K(%rbp), %rax; … imulq $8; addq %rbx, %rax` →
-      the constant offset folded into the address.
+      `movq name(%rip), %rax` (14).
+- [x] Peephole: the assignment-store side — **already emitted directly**
+      (`movq %rax, K(%rbp)`); the `leaq; pushq; <rhs>; popq %rbx; movq
+      %rax, (%rbx)` pattern measured zero occurrences in the corpus (the
+      codegen grew past it). `x = x + 1` therefore needs no special care.
+- [x] The `a[i]` indexing — fold the constant-index path:
+      `leaq K(%rbp), %rax; addq $N, %rax` → `leaq K+N(%rbp), %rax`
+      (72 occurrences: `p + 1` on structs, constant index scaling). The
+      register-based index path (`addq %rbx, %rax`) stays (Phase E).
+- [x] `movq $N, %rax; movq %rax, mem` → `movq $N, mem` (20 occurrences).
 - [ ] The row-decay case and the struct-member case
-      (`leaq 8(%rax), %rax` — fold into the following load if any).
-- [ ] **Gate:** 727-suite green; `leaq` count drops sharply (838 → ~500);
-      instruction count drops (expect another ~10%).
+      (`leaq 8(%rax), %rax` — fold into the following load if any) —
+      deferred; measured rare in the corpus.
+- [x] **Gate:** 729-suite green; `leaq` 837 → 481; corpus 8,271 → 7,835.
+      One fold bug caught on the way: `ao1(2:end-1)` on a two-char `$8`
+      is an empty slice (nv = NaN) — use `ao1(2:end)`.
 
 ## Phase D — Constant folding (local)
 

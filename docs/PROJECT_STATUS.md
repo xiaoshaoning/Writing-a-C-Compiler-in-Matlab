@@ -159,6 +159,18 @@ Two clone quirks hit on the way: `strfind` rejects numeric arrays (use
 internal-name strings (`exit`, `sum`, …) are not mangled crossing
 local-function boundaries (the x86sim sidestep).
 
+**Optimization Phase C (address modes, 2026-08-16).** The peephole
+pass grew three folds: `leaq K(%rbp), %rax; movq (%rax), %rax` →
+`movq K(%rbp), %rax` (also movzbl/movsbl and the `name(%rip)` global
+form), `movq $N, %rax; movq %rax, mem` → `movq $N, mem`, and
+`leaq K(%rbp), %rax; addq $N, %rax` → `leaq K+N(%rbp), %rax`
+(constant-index array addressing). The `leaq; pushq; …; popq %rbx; movq
+%rax, (%rbx)` store pattern no longer occurs (the codegen emits direct
+`movq %rax, K(%rbp)` stores). Corpus instructions 8,271 → 7,835,
+`leaq` 837 → 481, hello.c 103 → 96; suite 729/729 green; ceilings
+ratcheted. (One bug: `ao1(2:end-1)` is an empty slice on the two-char
+`$8`.)
+
 ## Deliverables
 
 | Phase | Scope | Commit |
