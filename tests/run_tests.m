@@ -866,6 +866,37 @@ else
         end
     end
 
+    % instruction-count regression: the corpus's total emitted
+    % instructions must stay at or below the recorded ceiling, so a future
+    % change cannot silently bloat the generated code. (Baseline 8697 /
+    % hello.c 106, measured through this harness 2026-08-16; ratchet down
+    % per optimization phase — see
+    % docs/2026-08-16-compiler-optimization-plan.md.)
+    ic_total = 0;
+    ic_hello = 0;
+    for ick = 1:size(cctests, 1)
+        try
+            delete('tmp_cc.s');
+            cc_int(['tests/programs/' cctests{ick,1}], 'tmp_cc.s');
+            ic_total = ic_total + count_instr('tmp_cc.s');
+        catch e
+            [npass nfail] = addcheck(npass, nfail, false, ...
+                sprintf('instr count %s: %s', cctests{ick,1}, e.message));
+        end
+    end
+    try
+        delete('tmp_cc.s');
+        cc_int('tests/programs/hello.c', 'tmp_cc.s');
+        ic_hello = count_instr('tmp_cc.s');
+    catch e
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            sprintf('instr count hello.c: %s', e.message));
+    end
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 8697, ...
+        sprintf('instr regression: corpus %d <= 8697', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_hello <= 106, ...
+        sprintf('instr regression: hello.c %d <= 106', ic_hello));
+
     % function called with the wrong number of arguments errors
     try
         cc_int('tests/programs/cc9_badargs.c', 'tmp_cc.s');
@@ -903,6 +934,27 @@ for k = 1:numel(list)
     if strcmp(list{k}, s)
         b = 1;
         return;
+    end
+end
+end
+
+function n = count_instr(fname)
+% count_instr — count the instruction lines in a .s file emitted by
+% cc_int: tab-led mnemonics (directives start with '.', labels contain
+% ':' and are excluded). -1 on an unreadable file.
+fid = fopen(fname, 'r');
+if fid < 0
+    n = -1;
+    return;
+end
+txt = char(fread(fid, inf, 'uint8')');
+fclose(fid);
+n = 0;
+lines = strsplit(txt, char(10));
+for k = 1:numel(lines)
+    L = strtrim(lines{k});
+    if numel(L) >= 2 && L(1) ~= '.' && isempty(strfind(L, ':'))
+        n = n + 1;
     end
 end
 end

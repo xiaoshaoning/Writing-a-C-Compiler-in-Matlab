@@ -115,7 +115,7 @@ instructions). Phases: measurement harness (permanent instruction-count
 regression group) → peephole → address-mode simplification → constant
 folding → structural stack-traffic reduction (a small register
 allocator) → clarity refactor → x86sim extension. Every phase gates on
-the 727-check suite staying green.
+the 729-check suite staying green.
 
 **x86sim stdout parity + compiler leftovers (2026-08-15).** The gcc-free
 track now also asserts stdout: the 53 printing programs must produce the

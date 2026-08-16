@@ -65,19 +65,18 @@ incremental foundation.
 
 Build the tooling that every later phase relies on.
 
-- [ ] Add a `count_instr()` helper (parse a `.s`, count tab-led
-      mnemonic lines, per-mnemonic breakdown) to the suite or as a small
-      standalone script.
-- [ ] Add the **instruction-count regression** group to `run_tests.m`:
-      compile the `cc*.c` corpus, sum instructions, assert ≤ the recorded
-      ceiling (start at 8,689, ratchet down per phase).
-- [ ] Add a per-program spot check: assert specific programs stay under
-      instruction budgets (e.g., hello.c ≤ 106 initially, tightened per
-      phase).
+- [x] Add a `count_instr()` helper (parse a `.s`, count tab-led
+      mnemonic lines; directives/labels excluded) as a `run_tests.m`
+      local function.
+- [x] Add the **instruction-count regression** group to `run_tests.m`:
+      compile the `cctests` corpus (287 programs), sum instructions,
+      assert ≤ the recorded ceiling (8,697 through the harness; ratchet
+      down per phase).
+- [x] Add a per-program spot check: hello.c ≤ 106 instructions.
 - [ ] Add the corpus compile-time measurement (optional group: `SKIP`
-      if slow).
-- [ ] Verify the harness itself is cheap (the corpus compile is ~13 s —
-      the count adds little).
+      if slow) — deferred; the compile is already timed manually.
+- [x] Verify the harness is cheap: the corpus re-compile adds ~13 s to
+      the suite (acceptable; the suite now runs 729 checks).
 
 ## Phase B — Peephole pass (safe local, first big easy win)
 
