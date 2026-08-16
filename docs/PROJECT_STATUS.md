@@ -92,6 +92,21 @@ both tracks, the interpreter's trailing `exit(N)` trace stripped) and the
 cc17 corpus. Also: `#` preprocessor lines are skipped by the lexer, and the
 harness retries gcc once for the documented transient flakes.
 
+**x86sim: a gcc-free mini x86-64 simulator (2026-08-15).** `x86sim.m`
+interprets the assembly emitted by `cc_int` directly — no assembler,
+linker, or gcc. It parses the COFF-ish directives, lays out
+`.comm`/`.data`/`.string` in a byte memory, executes the instruction stream
+(registers, flags, stack, `call`/`ret`), emulates the CRT entry (the exit
+code = `main`'s return value), and implements the runtime library the shims
+forward to (`printf` with the corpus formats, `malloc`, `memset`, `memcmp`,
+`exit`, `_open`/`_read`/`_close`). All 281 compiler-corpus programs produce
+the same exit codes through the simulator as through gcc, and hello.c
+prints the same fibonacci table; the suite gained a gcc-free corpus group.
+Clone quirks worked around along the way: string literals matching internal
+names (`sum`, `count`, `set`) are mangled when they cross local-function
+boundaries (so all text is handled as double code vectors and compared with
+`cv_eq`), and the emitted `r8..r15` indices were off by one.
+
 **Compiler: parity completion (2026-08-15) — 47/47 of the matchable
 interpreter corpus agrees through both tracks.** Three compiler gaps
 closed: the emitted `.comm` used the byte size as the COFF alignment,
@@ -134,9 +149,11 @@ and the runtime library are the changelog entries above:
 
 ## Verification
 
-- **Test suite**: `tests/run_tests.m` — **668/668** on the target runtime
+- **Test suite**: `tests/run_tests.m` — **669/669** on the target runtime
   (146 interpreter checks + 282 gcc-gated assembly-track checks + 187
-  cross-track parity checks + 53 cross-track output-parity checks; the gcc group skips if gcc is absent).
+  cross-track parity checks + 53 cross-track output-parity checks + 1
+  gcc-free simulator corpus group — `x86sim.m` runs all 281 compiler
+  programs without gcc; the gcc group skips if gcc is absent).
   Groups: runtime-primitive gate (probe), 30-case VM selftest, 9-case lexer
   selftest, program corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke.
 - **Reference cross-check**: the reference `xc.c` built with gcc 15.2.0
@@ -222,7 +239,7 @@ report.
 ## Running
 
 ```
-D:\...\matlab.bat tests/run_tests.m          # full suite (668 checks)
+D:\...\matlab.bat tests/run_tests.m          # full suite (669 checks)
 D:\...\matlab.bat -batch "xc('tests/programs/hello.c')"   # acceptance program
 D:\...\matlab.bat -batch "xc('-s', 'tests/programs/hello.c')"  # compile dump
 D:\...\matlab.bat -batch "xc('-d', 'tests/programs/hello.c')"  # trace

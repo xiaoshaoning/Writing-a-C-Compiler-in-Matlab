@@ -809,6 +809,30 @@ else
                 sprintf('output parity %s: %s', ostests{ok}, e.message));
         end
     end
+    % gcc-free track: every compiler corpus program must produce the same
+    % exit code through the x86sim interpreter (x86sim.m) as through gcc.
+    simok = 0;
+    simtot = 0;
+    for sk = 1:size(cctests, 1)
+        try
+            delete('tmp_cc.s');
+            cc_int(['tests/programs/' cctests{sk,1}], 'tmp_cc.s');
+            got = mod(x86sim('tmp_cc.s'), 256);
+            simtot = simtot + 1;
+            if got == cctests{sk,2}
+                simok = simok + 1;
+            else
+                [npass nfail] = addcheck(npass, nfail, false, ...
+                    sprintf('x86sim %s: sim=%d expect=%d', ...
+                        cctests{sk,1}, got, cctests{sk,2}));
+            end
+        catch e
+            [npass nfail] = addcheck(npass, nfail, false, ...
+                sprintf('x86sim %s: %s', cctests{sk,1}, e.message));
+        end
+    end
+    [npass nfail] = addcheck(npass, nfail, simok == simtot, ...
+        sprintf('x86sim corpus: %d/%d exit codes match gcc', simok, simtot));
 
     % function called with the wrong number of arguments errors
     try
