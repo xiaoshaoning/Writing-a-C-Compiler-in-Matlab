@@ -267,6 +267,15 @@ stdout parity). Writing it found:
 Suite 744 → 748; the instruction-count baseline rose to 10,898 with
 stress2 included.
 
+**One more fold (2026-08-17).** An audit of the remaining corpus
+found 173 dead `subq $0, %rsp` instructions — the frame allocation of
+functions with no locals (missed in Phase B, which only checked the
+value-register forms). The peephole now drops them (rule 10, with a
+ppunit fixture). Corpus 6,177 → 6,004 (−173); hello.c 73 → 72; suite
+749/749. The remaining irreducible items: prologue `pushq %rbp` (342),
+call-arg pushes + param loads (~200 — would need a register-arg calling
+convention), and store-spills whose RHS calls a shim (73).
+
 ## Deliverables
 
 | Phase | Scope | Commit |

@@ -26,6 +26,8 @@ function lines2 = peephole_pass(lines)
 %     pushq (a push does not clobber it), so the spill/restore round-trip
 %     is dead: `movq $N, %rbx; op %rbx, %rax` (also the mem loads and
 %     movzbl/movsbl byte rights). 5 instructions become 2.
+% 10. `subq $0, %rsp` — the frame allocation of a function with no
+%     locals is a no-op (the rsp already equals rbp).
 % Runs to a fixed point (removing a jmp can expose more dead code). Only
 % instruction lines are ever touched: labels and directives are preserved.
 % Flags semantics are respected — setcc/movzbl chains are left alone (a
@@ -281,6 +283,12 @@ for k = 1:n
             changed = 1;
             continue;
         end
+    end
+    % --- 10. empty-frame no-op: subq $0, %rsp ---
+    if pp_eq(mnem, 'subq') && pp_eq(arg1, '$0, %rsp')
+        del(k) = 1;
+        changed = 1;
+        continue;
     end
     % --- 1+2. unconditional jmp: its own target as the next label, and
     % any instructions between it and the next label are unreachable ---
