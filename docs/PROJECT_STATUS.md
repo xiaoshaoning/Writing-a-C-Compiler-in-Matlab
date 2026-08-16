@@ -201,6 +201,16 @@ folds had been silently dead). Corpus instructions 7,686 → 6,184,
 `pushq` 2,391 → 571, hello.c 90 → 73; suite 729/729 green; ceilings
 ratcheted.
 
+**Optimization Phase F (clarity, 2026-08-16).** The optimizer moved
+out of the compiler: `peephole_pass` and its 14 helpers now live in
+`src/peephole_pass.m` (496 lines), called by `cc_int` after codegen —
+making the pass directly unit-testable. A suite group (`ppunit`, 11
+checks) feeds one synthetic fixture per fold rule and asserts each
+rewrite fires, plus the nested-assignment guard, so no rule can silently
+regress. `cc_int`'s header documents the full pipeline (tokenizer →
+parser → codegen → peephole_pass). Suite 729 → 740, all green; the
+refactor is behavior-neutral.
+
 ## Deliverables
 
 | Phase | Scope | Commit |

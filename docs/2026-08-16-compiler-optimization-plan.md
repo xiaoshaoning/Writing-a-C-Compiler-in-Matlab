@@ -43,6 +43,7 @@ Compiler corpus: 286 `cc2_*`–`cc18_*` programs.
 | Phase C result | corpus 8,271 → 7,835; hello.c 103 → 96; `leaq` 837 → 481 |
 | Phase D result | corpus 7,835 → 7,686; hello.c 96 → 90; +x86sim `ja`/`jb`/`jae`/`jbe` |
 | Phase E result | corpus 7,686 → 6,184; hello.c 90 → 73; `pushq` 2,391 → 571 |
+| Phase F result | pass extracted to `src/peephole_pass.m`; 11 unit fixtures; suite 729 → 740 |
 | hello.c | 106 instructions, 2,265 bytes, 0.05 s compile |
 
 The dominant cost is the stack-based expression discipline: every binary
@@ -254,20 +255,24 @@ The compiler is a 2,600-line single file; the passes should be extracted
 into well-named, isolated local functions with doc comments, and the main
 `parse_*` chain should stay readable.
 
-- [ ] Extract the peephole/const-fold/address-mode passes into named
-      functions (`peephole_pass`, `fold_constants`,
-      `simplify_addresses`, `alloc_registers`) with a one-line contract
-      and a comment on what each pattern rewrites.
-- [ ] Group the parse functions into sections with a header comment
-      (already partially done — tighten it).
-- [ ] Add a top-of-file "pipeline" comment: parse → codegen →
-      optimize → emit.
-- [ ] Add unit-ish checks for each pass: a tiny `.s` fixture with the
-      pattern, assert the rewritten output (a new suite group or the
-      existing harness).
-- [ ] **Gate:** the suite still passes after the refactor (no behavior
-      change — pure moves); keep `git` history granular so each rename is
-      reviewable.
+- [x] **Extracted `peephole_pass` + its 14 helpers into their own file**
+      (`src/peephole_pass.m`, 496 lines): the optimizer is now a
+      self-contained, directly testable unit; `cc_int` calls it as a
+      plain function after codegen. (The first truncation attempt cut the
+      parser — the pass sat between the header and the parser — recovered
+      from git and re-split correctly.)
+- [x] Group the parse functions into sections with a header comment —
+      already in place (`% ---` section separators).
+- [x] Top-of-file "pipeline" comment added to `cc_int`: tokenizer →
+      recursive-descent parser → codegen → peephole_pass.
+- [x] **Unit fixtures for every fold rule** (suite group `ppunit`, 11
+      checks): one synthetic input per rule (jmp-to-next, dead-after-jmp,
+      imm-fold, jcc-collapse, load-fold, imm-store, offset-fold,
+      setcc-fold, juggle-fold, store-spill) plus the nested-assignment
+      guard — each asserts the rewrite fires and its forbidden line
+      disappears, so a rule can never silently regress again.
+- [x] **Gate:** suite 729 → 740 checks, all green (pure refactor —
+      no behavior change).
 
 ## Phase G — x86sim extension
 
