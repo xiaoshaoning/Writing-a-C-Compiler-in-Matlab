@@ -233,7 +233,11 @@ all three tracks in the suite (gcc exit 91, x86sim 91, interpreter
    fixed `char buf[4096]` — the compiler's output-join overflowed it at
    ~34 statements (valgrind: `__strcat_chk` abort). The fix grows the
    buffer; verified under WSL valgrind (0 errors) and on Windows. The
-   user's `release/v1.3.21` still has the old binary until rebuilt.
+   user's `release/v1.3.21` still has the old binary until rebuilt. —
+   **rebuilt 2026-08-17**: `build_gcc.bat` → `matlab.exe` copied over
+   the release binary (old one kept as `matlab.exe.bak`); the full
+   744-check suite passes against the official `matlab.bat`, and the
+   temporary `t_fixed/` binary was removed.
 2. **x86sim bug (fixed here):** `movzbl`/`movsbl` loaded 8 bytes and
    masked — for a byte inside a string whose following bytes are
    nonzero, the 8-byte value exceeds 2^53 and the double conversion
