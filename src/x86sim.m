@@ -728,10 +728,10 @@ end
 function t = fmt_int(v, w, prec, left, zero)
 sgn = [];
 if v < 0
-    s = cv_of(num2str(-v, '%.0f'));
+    s = sim_decstr(-v);
     sgn = 45;                  % '-'
 else
-    s = cv_of(num2str(v, '%.0f'));
+    s = sim_decstr(v);
 end
 if prec >= 0
     while numel(s) < prec
@@ -756,6 +756,29 @@ else
         t = [32 * ones(1, w - numel(s)), s];
     end
 end
+end
+
+function t = sim_decstr(v)
+% sim_decstr — the full decimal digits of a value. (The clone's
+% num2str(v, '%.0f') ignores the format and prints %g — scientific past
+% ~1e5 — so large %d/%u values came out as e.g. 9.8765e+08.)
+v = double(v);
+if v < 0
+    sgn = 45;                  % '-'
+    v = -v;
+else
+    sgn = [];
+end
+if v == 0
+    t = [sgn, 48];
+    return;
+end
+digits = [];
+while v > 0
+    digits = [mod(v, 10), digits];
+    v = floor(v / 10);
+end
+t = [sgn, digits + 48];
 end
 
 function t = strip0c(s)

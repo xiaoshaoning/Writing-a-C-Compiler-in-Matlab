@@ -248,6 +248,25 @@ all three tracks in the suite (gcc exit 91, x86sim 91, interpreter
 Suite 740 → 744 (stress in the gcc/x86sim/parity/output-parity groups;
 the instruction-count baseline rose to 7387 with stress included).
 
+**Second stress program + one more sim fix (2026-08-17).**
+`tests/programs/stress2.c` (~450 lines: string library, five sorts
+(bubble/insertion/selection/quicksort/mergesort) + searches, 3×3
+matrix algebra, number theory (gcd/lcm/factorial/fib/powmod/divisors/
+totient/prime sieve), bit tricks, string analysis, a parallel-array
+database — checksum 988156804) runs through all three tracks and is
+registered in the suite (gcc exit 132, x86sim 132, interpreter parity,
+stdout parity). Writing it found:
+
+- **x86sim `%d` formatting bug (fixed here):** `fmt_int` used
+  `num2str(v, '%.0f')` — the clone ignores the format and prints %g, so
+  values past ~1e5 came out scientific (`9.8765e+08`). The corpus never
+  printed values that large. Fixed with a manual `sim_decstr`.
+- **compiler dialect note:** `cc_int` has no hex literals (`0xAAAA` is a
+  parse error) — stress2 uses the decimal value; a documented gap.
+
+Suite 744 → 748; the instruction-count baseline rose to 10,898 with
+stress2 included.
+
 ## Deliverables
 
 | Phase | Scope | Commit |

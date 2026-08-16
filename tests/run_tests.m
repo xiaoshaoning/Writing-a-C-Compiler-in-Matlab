@@ -643,6 +643,7 @@ else
         'cc18_unsigned.c', 6;
         'cc18_unsigned2.c', 111;
         'stress.c',       91;   % 5467 mod 256 — needs the fixed clone
+        'stress2.c',     132;   % 988156804 mod 256
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
@@ -650,6 +651,7 @@ else
     % for/do/break/continue, +=, &&/|| value semantics, declaration order).
     pshared = {
         'stress.c',
+        'stress2.c',
         'cc10_charcmp.c', 'cc10_charinit.c', 'cc10_charlit.c', 'cc10_charloc.c', 'cc10_charparam.c', 'cc10_charparamtrunc.c',
         'cc10_chartrunc.c', 'cc10_global.c', 'cc10_globalchar.c', 'cc10_globalfn.c', 'cc10_globalinit.c', 'cc10_globalrw.c',
         'cc10_mix.c', 'cc11_arr.c', 'cc11_arrchar.c', 'cc11_arrglobal.c', 'cc11_arrloop.c', 'cc11_chptr.c',
@@ -777,6 +779,7 @@ else
         'pp_void.c';
         'pp_voidparam.c';
         'stress.c';
+        'stress2.c';
     };
     for ok = 1:numel(ostests)
         try
@@ -871,10 +874,10 @@ else
 
     % instruction-count regression: the corpus's total emitted
     % instructions must stay at or below the recorded ceiling, so a future
-    % change cannot silently bloat the generated code. (The stress program
-    % joined the corpus: its ~1200 instructions raise the baseline to
-    % 7387. Before that the ceilings ratcheted down per optimization
-    % phase: 8697 -> 8271 -> 7835 -> 7686 -> 6184 — see
+    % change cannot silently bloat the generated code. (stress.c raised
+    % the baseline to 7387 and stress2.c to 10898. Before that the
+    % ceilings ratcheted down per optimization phase: 8697 -> 8271 ->
+    % 7835 -> 7686 -> 6184 — see
     % docs/2026-08-16-compiler-optimization-plan.md.)
     ic_total = 0;
     ic_hello = 0;
@@ -896,8 +899,8 @@ else
         [npass nfail] = addcheck(npass, nfail, false, ...
             sprintf('instr count hello.c: %s', e.message));
     end
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 7387, ...
-        sprintf('instr regression: corpus %d <= 7387', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 10898, ...
+        sprintf('instr regression: corpus %d <= 10898', ic_total));
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 73, ...
         sprintf('instr regression: hello.c %d <= 73', ic_hello));
 
