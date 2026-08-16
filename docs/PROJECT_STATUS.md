@@ -107,6 +107,16 @@ names (`sum`, `count`, `set`) are mangled when they cross local-function
 boundaries (so all text is handled as double code vectors and compared with
 `cv_eq`), and the emitted `r8..r15` indices were off by one.
 
+**Optimization plan (2026-08-16).** A detailed phased plan for
+generated-code quality (primary) and compiler clarity (secondary):
+`docs/2026-08-16-compiler-optimization-plan.md`. Baseline: 8,689 corpus
+instructions / 220,726 bytes with 2,391 push/pop (27.5% of all
+instructions). Phases: measurement harness (permanent instruction-count
+regression group) → peephole → address-mode simplification → constant
+folding → structural stack-traffic reduction (a small register
+allocator) → clarity refactor → x86sim extension. Every phase gates on
+the 727-check suite staying green.
+
 **x86sim stdout parity + compiler leftovers (2026-08-15).** The gcc-free
 track now also asserts stdout: the 53 printing programs must produce the
 same output through `x86sim` as through the interpreter (53 new checks).
