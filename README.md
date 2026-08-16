@@ -70,7 +70,7 @@ tests/
                       x86sim, cross-track parity)
   programs/           test C programs
     return_2.c        return 2; (part 1 of the Norasandler series)
-    cc2_*.c–cc17_*.c  unary … runtime library programs (parts 2-17,
+    cc2_*.c–cc18_*.c  unary … runtime library programs (parts 2-18,
                       gcc-gated in the suite)
     hello.c           fibonacci demo — xc.m acceptance program
 docs/
@@ -107,7 +107,10 @@ value (params, returns, assignment), function pointers (incl.
 struct-returning), `goto`/labels, `void`, casts, the comma operator,
 `sizeof`, `typedef`, `enum`, array/struct initializers, string→`char[]` —
 plus a runtime library: `printf` (full CRT formats), `malloc`, `memset`,
-`memcmp`, `exit`, and `open`/`read`/`close`.
+`memcmp`, `exit`, and `open`/`read`/`close` — and pointer-returning
+function pointers (`int *(*fp)(int *)`), C99 compound literals
+(`(struct P){…}`, `(int[]){…}`), and `unsigned` types (unsigned division,
+comparisons, and `>>`).
 
 For example, recursion + `printf`:
 

@@ -216,9 +216,13 @@ elseif m == 16           % incq
 elseif m == 17           % shlq
     c = mod(sim_opval(a), 64);
     sim_opstore(b, bitshift(sim_opval(b), c, 'int64'), 64);
-elseif m == 39           % sarq
+elseif m == 39           % sarq (arithmetic)
     c = mod(sim_opval(a), 64);
     sim_opstore(b, bitshift(sim_opval(b), -c, 'int64'), 64);
+elseif m == 44           % shrq (logical, unsigned)
+    c = mod(sim_opval(a), 64);
+    u = mod(double(sim_opval(b)), 18446744073709551616);
+    sim_opstore(b, int64(floor(u / 2^c)), 64);
 elseif m == 18           % cmpq
     sim_setflags_cmp(sim_opval(b), sim_opval(a));
 elseif m == 19           % testb
@@ -230,7 +234,7 @@ elseif m == 20           % cqto
     else
         regs(3) = int64(0);
     end
-elseif m == 21           % idivq
+elseif m == 21           % idivq (signed)
     dv = sim_opval(a);
     if dv == 0
         error('x86sim: division by zero');
@@ -239,8 +243,22 @@ elseif m == 21           % idivq
     r = double(regs(1)) - q * double(dv);
     regs(1) = int64(q);
     regs(3) = int64(r);
-elseif m >= 22 && m <= 27   % sete setne setl setle setg setge
-    sim_opstore(a, sim_jcc(m - 22), 8);
+elseif m == 45           % divq (unsigned): rdx:rax / src
+    dv = mod(double(sim_opval(a)), 18446744073709551616);
+    if dv == 0
+        error('x86sim: division by zero');
+    end
+    ua = mod(double(regs(1)), 18446744073709551616);
+    q = floor(ua / dv);
+    r = ua - q * dv;
+    regs(1) = int64(mod(q, 18446744073709551616));
+    regs(3) = int64(mod(r, 18446744073709551616));
+elseif (m >= 22 && m <= 27) || (m >= 40 && m <= 43)   % setcc family
+    k = m - 22;
+    if m >= 40
+        k = m - 32;              % setb(40)..setae(43) -> k 8..11
+    end
+    sim_opstore(a, sim_jcc(k), 8);
 elseif m >= 28 && m <= 36   % jmp je jne jl jle jg jge jz jnz
     if m == 28 || sim_jcc(m - 29)
         next = sim_target(a);
@@ -269,8 +287,8 @@ end
 
 function t = sim_jcc(k)
 % k: 0 sete/je/jz, 1 setne/jne/jnz, 2 setl/jl, 3 setle/jle, 4 setg/jg,
-% 5 setge/jge, 6 jz, 7 jnz
-global zf sf of
+% 5 setge/jge, 6 jz, 7 jnz, 8 setb, 9 seta, 10 setbe, 11 setae
+global zf sf of cf
 if k == 0 || k == 6
     t = (zf == 1);
 elseif k == 1 || k == 7
@@ -281,8 +299,14 @@ elseif k == 3
     t = (zf == 1) || (sf ~= of);
 elseif k == 4
     t = (zf == 0) && (sf == of);
+elseif k == 5
+    t = (sf == of);                          % setge/jge
+elseif k == 8 || k == 10
+    t = (cf == 1) || (k == 10 && zf == 1);   % setb / setbe
+elseif k == 11
+    t = (cf == 0);                           % setae
 else
-    t = (sf == of);            % setge/jge
+    t = (cf == 0) && (zf == 0);              % seta
 end
 end
 
@@ -940,6 +964,8 @@ p29 = cv_of('je');    p30 = cv_of('jne'); p31 = cv_of('jl');
 p32 = cv_of('jle');   p33 = cv_of('jg');  p34 = cv_of('jge');
 p35 = cv_of('jz');    p36 = cv_of('jnz'); p37 = cv_of('call');
 p38 = cv_of('ret');   px  = cv_of('xorl');
+p40 = cv_of('setb');  p41 = cv_of('seta'); p42 = cv_of('setbe');
+p43 = cv_of('setae'); p44 = cv_of('shrq'); p45 = cv_of('divq');
 if cv_eq(d, p8)
     m = 0;
 elseif cv_eq(d, p1) || cv_eq(d, px)
@@ -1020,6 +1046,18 @@ elseif cv_eq(d, p37)
     m = 37;
 elseif cv_eq(d, p38)
     m = 38;
+elseif cv_eq(d, p40)
+    m = 40;
+elseif cv_eq(d, p41)
+    m = 41;
+elseif cv_eq(d, p42)
+    m = 42;
+elseif cv_eq(d, p43)
+    m = 43;
+elseif cv_eq(d, p44)
+    m = 44;
+elseif cv_eq(d, p45)
+    m = 45;
 end
 end
 

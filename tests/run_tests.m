@@ -637,6 +637,11 @@ else
         'cc16_strarray3.c', 241;
         'cc17_shim.c',   42;
         'cc17_fileio.c',  0;
+        'cc18_fptrptr.c', 6;
+        'cc18_comp.c',   91;   % 347 mod 256
+        'cc18_comp2.c',  98;
+        'cc18_unsigned.c', 6;
+        'cc18_unsigned2.c', 111;
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
@@ -833,6 +838,33 @@ else
     end
     [npass nfail] = addcheck(npass, nfail, simok == simtot, ...
         sprintf('x86sim corpus: %d/%d exit codes match gcc', simok, simtot));
+
+    % x86sim stdout parity: the same printing programs must produce the same
+    % stdout through the gcc-free simulator as through the interpreter.
+    so2 = 0;
+    for s2k = 1:numel(ostests)
+        try
+            delete('tmp_cc.s');
+            cc_int(['tests/programs/' ostests{s2k}], 'tmp_cc.s');
+            so2o = evalc('s2r = x86sim(''tmp_cc.s'')');
+            so2x = evalc(sprintf('s2x = xc(''tests/programs/%s'')', ostests{s2k}));
+            s2p = strfind(so2x, 'exit(');
+            if ~isempty(s2p)
+                so2x = so2x(1:s2p(end)-1);
+            end
+            so2 = so2 + 1;
+            if strcmp(so2o, so2x)
+                [npass nfail] = addcheck(npass, nfail, true, ...
+                    sprintf('x86sim output parity %s', ostests{s2k}));
+            else
+                [npass nfail] = addcheck(npass, nfail, false, ...
+                    sprintf('x86sim output parity %s', ostests{s2k}));
+            end
+        catch e
+            [npass nfail] = addcheck(npass, nfail, false, ...
+                sprintf('x86sim output parity %s: %s', ostests{s2k}, e.message));
+        end
+    end
 
     % function called with the wrong number of arguments errors
     try

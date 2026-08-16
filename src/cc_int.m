@@ -278,6 +278,8 @@ elseif (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
         token = 186;            % Goto
     elseif strcmp(id, 'void')
         token = 187;            % Void
+    elseif strcmp(id, 'unsigned')
+        token = 188;            % Unsigned
     else
         token = 150;            % Id (incl. 'main'); text in idname
         idname = id;
@@ -575,7 +577,7 @@ if token == 40              % '(': function pointer `(*name)(params)`
     next();
     expect(41);
     skip_prototype();       % (params): parsed and discarded
-    parse_globals(name, base, 1, 1);   % fptrflag = 1 (base = return type)
+    parse_globals(name, base, depth, 1);   % fptrflag = 1 (rettype = base+2*depth)
     return;
 end
 if token ~= 150
@@ -583,11 +585,8 @@ if token ~= 150
 end
 name = idname;
 next();
-if token == 40              % '(': function
-    if depth > 0
-        fail('pointer-returning functions are not supported');
-    end
-    parse_function_tail(name, base == 1, base);
+if token == 40              % '(': function (return type = base+2*depth)
+    parse_function_tail(name, base == 1, base + 2 * depth);
 else
     parse_globals(name, base, depth, 0);
 end
@@ -683,6 +682,12 @@ elseif token == 134         % char
 elseif token == 187         % void (only valid as a return type or (void))
     base = 4;
     next();
+elseif token == 188         % unsigned (int): a 64-bit unsigned type
+    base = 5;
+    next();
+    if token == 131         % 'unsigned int'
+        next();
+    end
 elseif token == 178         % struct
     next();
     if token ~= 150
@@ -923,7 +928,7 @@ if isfield(funcs, fname2)
     fail(sprintf('duplicate function %s', fname2));
 end
 funcs.(fname2) = nparams;   % register before the body (recursion)
-fret.(fname2) = ischarfn;   % return type for call sites
+fret.(fname2) = rettype;    % full return type for call sites
 frettype.(fname2) = rettype;
 cret = ischarfn;
 cvoid = (rettype == 4);     % void-returning (no value in rax)
@@ -1007,7 +1012,7 @@ while true
     end
     globals.(name) = 1;
     if fptr
-        gtype.(name) = 2000 + base;
+        gtype.(name) = 2000 + base + 2 * depth;
         garr.(name) = 0;
         gstruct.(name) = 0;
         glist{end+1} = {name, 2002, 0, [], [], 0};
@@ -1465,7 +1470,7 @@ function parse_statement()
 % statement := declaration | '{' statement* '}' | if | while | for | do |
 % break | continue | return | expr ';'
 global token idname typedefs src si
-if token == 131 || token == 134 || token == 178 || ...   % int/char/struct: decl
+if token == 131 || token == 134 || token == 178 || token == 188 || ...  % int/char/struct/unsigned
    (token == 150 && isfield(typedefs, idname))            % typedef'd type
     parse_declaration();
 elseif token == 123         % '{': block
@@ -1827,6 +1832,10 @@ end
 while true
     depth = 0;
     is_fptr = 0;
+    while token == 42       % '*': return-type pointers (`int *(*fp)…`)
+        depth = depth + 1;
+        next();
+    end
     if token == 40          % '(': function pointer `(*name)(params)`
         next();
         if token ~= 42
@@ -1834,11 +1843,6 @@ while true
         end
         next();
         is_fptr = 1;
-    else
-        while token == 42       % '*'
-            depth = depth + 1;
-            next();
-        end
     end
     if token ~= 150
         fail('expected a variable name');
@@ -1848,13 +1852,12 @@ while true
     if is_fptr
         expect(41);             % ')'
         skip_prototype();       % (params): parsed and discarded
-        depth = 1;              % a function pointer is one pointer level
     end
     if isfield(lvars, name)
         fail(sprintf('duplicate local %s', name));
     end
     if is_fptr
-        t = 2000 + base;        % a function pointer: 2000 + return type
+        t = 2000 + base + 2 * depth;   % 2000 + the full return type
     else
         t = base + 2 * depth;
     end
@@ -1895,7 +1898,7 @@ while true
         lvararr.(name) = 0;
         lvarstruct.(name) = 0;
         lvararrsz.(name) = 0;
-    elseif base >= 1000 && depth == 0
+    elseif ~is_fptr && base >= 1000 && depth == 0
         nbytes = ssize_of(base);    % a struct value
         lvartype.(name) = t;
         lvararr.(name) = 0;
@@ -2244,6 +2247,7 @@ global token etype
 parse_shift();
 while token == 144 || token == 145 || token == 146 || token == 147  % Lt Gt Le Ge
     op = token;
+    sav_etype = etype;
     next();
     em('\tpushq\t%rax');
     parse_shift();
@@ -2251,13 +2255,29 @@ while token == 144 || token == 145 || token == 146 || token == 147  % Lt Gt Le G
     em('\tpopq\t%rax');
     em('\tcmpq\t%rbx, %rax');
     if op == 144        % Lt
-        em('\tsetl\t%al');
+        if sav_etype == 5
+            em('\tsetb\t%al');     % unsigned: below
+        else
+            em('\tsetl\t%al');
+        end
     elseif op == 145    % Gt
-        em('\tsetg\t%al');
+        if sav_etype == 5
+            em('\tseta\t%al');     % unsigned: above
+        else
+            em('\tsetg\t%al');
+        end
     elseif op == 146    % Le
-        em('\tsetle\t%al');
+        if sav_etype == 5
+            em('\tsetbe\t%al');    % unsigned: below-or-equal
+        else
+            em('\tsetle\t%al');
+        end
     else                % Ge
-        em('\tsetge\t%al');
+        if sav_etype == 5
+            em('\tsetae\t%al');    % unsigned: above-or-equal
+        else
+            em('\tsetge\t%al');
+        end
     end
     em('\tmovzbl\t%al, %eax');
     etype = 0;
@@ -2271,6 +2291,7 @@ global token etype
 parse_additive();
 while token == 140 || token == 141   % Shl Shr
     op = token;
+    sav_etype = etype;
     next();
     em('\tpushq\t%rax');        % save the left operand
     parse_additive();
@@ -2278,8 +2299,10 @@ while token == 140 || token == 141   % Shl Shr
     em('\tpopq\t%rax');
     if op == 140
         em('\tshlq\t%cl, %rax');
+    elseif sav_etype == 5
+        em('\tshrq\t%cl, %rax');   % logical (unsigned)
     else
-        em('\tsarq\t%cl, %rax');
+        em('\tsarq\t%cl, %rax');   % arithmetic (signed)
     end
     etype = 0;
 end
@@ -2337,10 +2360,11 @@ function parse_term()
 % use cqto/idivq: the 64-bit signed quotient is in eax, remainder in edx
 % (C semantics: truncation toward zero, remainder takes the dividend's
 % sign).
-global token
+global token etype
 parse_unary();
 while token == 42 || token == 47 || token == 37   % '*' '/' '%'
     op = token;
+    sav_etype = etype;      % the dividend's type (unsigned -> divq)
     next();
     em('\tpushq\t%rax');
     parse_unary();
@@ -2348,6 +2372,12 @@ while token == 42 || token == 47 || token == 37   % '*' '/' '%'
     em('\tpopq\t%rax');
     if op == 42
         em('\timulq\t%rbx, %rax');
+    elseif sav_etype == 5
+        em('\txorq\t%rdx, %rdx');
+        em('\tdivq\t%rbx');        % unsigned 128/64 division
+        if op == 37
+            em('\tmovq\t%rdx, %rax');
+        end
     else
         em('\tcqto');
         em('\tidivq\t%rbx');
@@ -2366,7 +2396,7 @@ function parse_unary()
 % decay (no load, estruc = 1 for struct values).
 global token token_val idname strtext lvars lvartype lvararr lvarstruct ...
        globals gtype garr gstruct funcs fret frettype fparams called ltype libfns libcalls ...
-       etype estruc lvarstride gstride bstride lvararrsz gvararrsz curarrsz si typedefs
+       etype estruc lvarstride gstride bstride lvararrsz gvararrsz curarrsz si typedefs fbytes
 ops = [];
 while token == 45 || token == 126 || token == 33 || token == 43 || ...   % - ~ ! +
       token == 38 || token == 42 || token == 170 || token == 171          % & * ++ --
@@ -2394,13 +2424,125 @@ if token == 40              % '(': a cast (type)unary or parenthesised expr
             cdepth = cdepth + 1;
             next();
         end
-        expect(41);
-        parse_unary();      % the operand (cast-expression = unary)
-        if cbase == 1 && cdepth == 0
-            em('\tmovsbl\t%al, %eax');   % truncate to a signed char
+        cl_dims = [];
+        cl_isarr = 0;
+        if token == 91      % '[': a compound-literal array size
+            while token == 91
+                next();
+                if token == 128
+                    cl_dims(end+1) = double(token_val);
+                    next();
+                end
+                expect(93);
+            end
+            cl_isarr = 1;
         end
-        etype = cbase + 2 * cdepth;
-        estruc = 0;
+        expect(41);         % ')'
+        if token == 123     % '{': a compound literal
+            % a stack temp initialized from the constant elements; the
+            % value is the temp's address (an lvalue, like C99)
+            if cdepth > 0
+                fail('pointer compound literals are not supported');
+            end
+            if cbase >= 1000 && ~cl_isarr
+                % (struct P){…}: a struct value
+                vals = parse_struct_init(cbase);
+                bytes = struct_bytes(vals, cbase);
+                nbytes = numel(bytes);
+                off = -(fbytes + nbytes);
+                fbytes = fbytes + nbytes;
+                for k = 1:numel(bytes)
+                    em(sprintf('\tmovb\t$%d, %d(%%rbp)', bytes(k), off + k - 1));
+                end
+                em(sprintf('\tleaq\t%d(%%rbp), %%rax', off));
+                etype = cbase;
+                estruc = 1;
+            elseif cl_isarr || cbase == 0 || cbase == 1
+                % (int[3]){…} / (int[]){…} / (char[..]){…}: an array
+                elem = 8;
+                if cbase == 1
+                    elem = 1;
+                end
+                if isempty(cl_dims)
+                    % unsized: count the top-level elements (peek)
+                    cs_si = si; cs_tok = token; cs_tv = token_val; cs_id = idname;
+                    next();
+                    cnt = 0;
+                    while token ~= 125
+                        if token == 123
+                            d2 = 1;
+                            next();
+                            while d2 > 0
+                                if token == 123
+                                    d2 = d2 + 1;
+                                elseif token == 125
+                                    d2 = d2 - 1;
+                                end
+                                next();
+                            end
+                        else
+                            next();
+                        end
+                        cnt = cnt + 1;
+                        if token == 44
+                            next();
+                        end
+                    end
+                    si = cs_si; token = cs_tok; token_val = cs_tv; idname = cs_id;
+                    cl_dims = [cnt];
+                end
+                vals = parse_arr_init(cl_dims, 1);
+                nbytes = prod(cl_dims) * elem;
+                off = -(fbytes + nbytes);
+                fbytes = fbytes + nbytes;
+                for k = 1:numel(vals)
+                    if elem == 1
+                        em(sprintf('\tmovb\t$%d, %d(%%rbp)', vals(k), off + k - 1));
+                    else
+                        em(sprintf('\tmovq\t$%d, %d(%%rbp)', vals(k), off + 8 * (k - 1)));
+                    end
+                end
+                em(sprintf('\tleaq\t%d(%%rbp), %%rax', off));
+                etype = cbase + 2;
+                estruc = 0;
+            else
+                % (int){5}: a scalar compound literal
+                next();
+                neg = 0;
+                if token == 45
+                    neg = 1;
+                    next();
+                end
+                if token ~= 128
+                    fail('expected a constant compound literal');
+                end
+                v = double(token_val);
+                next();
+                if neg
+                    v = -v;
+                end
+                if cbase == 1
+                    em(sprintf('\tmovb\t$%d, -1(%%rbp)', mod(v, 256)));
+                    fbytes = max(fbytes, 1);
+                    em('\tleaq\t-1(%rbp), %rax');
+                    etype = 1;
+                else
+                    off = -(fbytes + 8);
+                    fbytes = fbytes + 8;
+                    em(sprintf('\tmovq\t$%d, %d(%%rbp)', v, off));
+                    em(sprintf('\tleaq\t%d(%%rbp), %%rax', off));
+                    etype = 0;
+                end
+                estruc = 0;
+            end
+        else
+            parse_unary();      % the operand (cast-expression = unary)
+            if cbase == 1 && cdepth == 0
+                em('\tmovsbl\t%al, %eax');   % truncate to a signed char
+            end
+            etype = cbase + 2 * cdepth;
+            estruc = 0;
+        end
     else
         next();
         parse_expr();       % parenthesised expression (may contain ',')

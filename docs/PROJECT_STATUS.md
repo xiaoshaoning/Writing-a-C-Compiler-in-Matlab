@@ -107,6 +107,17 @@ names (`sum`, `count`, `set`) are mangled when they cross local-function
 boundaries (so all text is handled as double code vectors and compared with
 `cv_eq`), and the emitted `r8..r15` indices were off by one.
 
+**x86sim stdout parity + compiler leftovers (2026-08-15).** The gcc-free
+track now also asserts stdout: the 53 printing programs must produce the
+same output through `x86sim` as through the interpreter (53 new checks).
+The compiler gained the last three dialect gaps: pointer-returning
+function pointers (`int *(*fp)(int *)` — and pointer-returning functions),
+C99 compound literals (`(struct P){…}` allocated as a stack temp,
+`(int[]){…}` incl. unsized, `(char[]){…}`, scalar `(int){…}`), and
+`unsigned` types (64-bit; unsigned `divq`/`shrq` and the `setb`/`seta`/
+`setbe`/`setae` comparison family; the simulator learned the same
+instructions). Test corpus: `cc18_*` (5 programs).
+
 **Compiler: parity completion (2026-08-15) — 47/47 of the matchable
 interpreter corpus agrees through both tracks.** Three compiler gaps
 closed: the emitted `.comm` used the byte size as the COFF alignment,
@@ -144,13 +155,14 @@ and the runtime library are the changelog entries above:
 | cc15 | `void`, casts, comma, global function pointers, global struct inits | `199226f` |
 | cc16 | struct-returning fptrs, local structs/enums, string→char[] | `840193b` |
 | cc17 | runtime library shims (printf/malloc/memset/memcmp/exit/open/read/close) | `7813eb7` |
+| cc18 | pointer-returning fptrs, compound literals, `unsigned` | *this round* |
 | parity | cross-track exit-code parity (187) + output parity (53, 47/47 matchable `pp_*`) | `04da1b7` `57e2fae` |
 | verify | reference cross-check + ENT dump fix | `f697b72` |
 
 ## Verification
 
 - **Test suite**: `tests/run_tests.m` — **669/669** on the target runtime
-  (146 interpreter checks + 282 gcc-gated assembly-track checks + 187
+  (146 interpreter checks + 287 gcc-gated assembly-track checks + 187
   cross-track parity checks + 53 cross-track output-parity checks + 1
   gcc-free simulator corpus group — `x86sim.m` runs all 281 compiler
   programs without gcc; the gcc group skips if gcc is absent).
