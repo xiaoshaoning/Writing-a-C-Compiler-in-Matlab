@@ -240,9 +240,9 @@ report.
 
 ```
 D:\...\matlab.bat tests/run_tests.m          # full suite (669 checks)
-D:\...\matlab.bat -batch "xc('tests/programs/hello.c')"   # acceptance program
-D:\...\matlab.bat -batch "xc('-s', 'tests/programs/hello.c')"  # compile dump
-D:\...\matlab.bat -batch "xc('-d', 'tests/programs/hello.c')"  # trace
+D:\...\matlab.bat -batch "addpath('src'); xc('tests/programs/hello.c')"   # acceptance program
+D:\...\matlab.bat -batch "addpath('src'); xc('-s', 'tests/programs/hello.c')"  # compile dump
+D:\...\matlab.bat -batch "addpath('src'); xc('-d', 'tests/programs/hello.c')"  # trace
 ```
 
 See `README.md` for both tracks and the layout.

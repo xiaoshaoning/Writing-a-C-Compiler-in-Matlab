@@ -8,7 +8,7 @@
 %
 % Exits non-zero if any test fails.
 
-addpath('.');
+addpath('src');
 addpath('tests');
 
 npass = 0;

@@ -58,12 +58,16 @@ Building compilers/interpreters in MATLAB, following two classic tutorials:
 ## Layout
 
 ```
-cc_int.m              assembly compiler (return <unary>; → x86-64 .s)
-xc.m                  C interpreter (lexer → parser → VM → syscalls)
+src/
+  cc_int.m              assembly compiler (C → x86-64 .s)
+  xc.m                  C interpreter (lexer → parser → VM → syscalls)
+  x86sim.m              gcc-free x86-64 simulator for the .s output
+LICENSE, README.md
+
 tests/
   run_tests.m         test harness (669 checks: probe gate, VM, lexer,
                       program corpus, syscall/acceptance, cc_int/gcc,
-                      cross-track parity)
+                      x86sim, cross-track parity)
   programs/           test C programs
     return_2.c        return 2; (part 1 of the Norasandler series)
     cc2_*.c–cc17_*.c  unary … runtime library programs (parts 2-17,
@@ -80,17 +84,20 @@ docs/
 
 ## Usage
 
-The compiler (`cc_int.m`) translates C to x86-64 assembly; you then
-assemble/link with gcc and run:
+The compiler (`src/cc_int.m`) translates C to x86-64 assembly; you then
+assemble/link with gcc and run, **or** execute the assembly with the
+built-in gcc-free simulator (`src/x86sim.m`):
 
 ```
-matlab.bat -batch "addpath('.'); cc_int('prog.c','prog.s');"
+matlab.bat -batch "addpath('src'); cc_int('prog.c','prog.s');"
+matlab.bat -batch "addpath('src'); rc = x86sim('prog.s')"   # no gcc
+
 gcc prog.s -o prog.exe
 ./prog.exe            (bash)  /  prog.exe, then echo %errorlevel% (cmd)
 ```
 
 **Requirements:** the custom MATLAB clone (`matlab.bat`) and MSYS2 gcc (the
-emitted assembly is COFF — it needs a Windows binutils). The `addpath('.')`
+emitted assembly is COFF — it needs a Windows binutils). The `addpath('src')`
 is required in `-batch` mode; in cmd the exit code is `%errorlevel%`.
 
 **What it compiles:** the full Norasandler series (parts 1–17) — expressions
@@ -153,13 +160,13 @@ D:\Projects\codes\MATLAB_in_c\release\v1.3.21\matlab.bat
 Windows cmd:
 
 ```
-matlab.bat -batch "addpath('.'); cc_int('tests/programs/cc2_nested.c','cc2_nested.s')"
+matlab.bat -batch "addpath('src'); cc_int('tests/programs/cc2_nested.c','cc2_nested.s')"
 gcc cc2_nested.s -o cc2_nested
 .\cc2_nested.exe
 echo %errorlevel%
 ```
 
-(`addpath('.')` is needed in `-batch` mode: the clone does not put the working
+(`addpath('src')` is needed in `-batch` mode: the clone does not put the working
 directory on the MATLAB path implicitly — see the bug report. In cmd, the exit
 code is `%errorlevel%` — bash's `$?` does not work there.)
 
@@ -182,9 +189,9 @@ suite's gcc-gated group compiles and runs every `cc2_*.c` program.
 ### Interpreter track (xc.m)
 
 ```
-matlab.bat -batch "xc('tests/programs/hello.c')"
-matlab.bat -batch "xc('-s', 'tests/programs/hello.c')"   # source + instruction dump
-matlab.bat -batch "xc('-d', 'tests/programs/hello.c')"   # execution trace
+matlab.bat -batch "addpath('src'); xc('tests/programs/hello.c')"
+matlab.bat -batch "addpath('src'); xc('-s', 'tests/programs/hello.c')"   # source + instruction dump
+matlab.bat -batch "addpath('src'); xc('-d', 'tests/programs/hello.c')"   # execution trace
 ```
 
 `hello.c` prints the fibonacci table 0..10 and exits 0; the output is
