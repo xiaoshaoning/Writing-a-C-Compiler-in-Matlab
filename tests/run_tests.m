@@ -780,7 +780,14 @@ else
             delete('tmp_cc.s');
             delete('tmp_cc.exe');
             cc_int(['tests/programs/' ostests{ok}], 'tmp_cc.s');
-            st_gcc = system([gcc, ' tmp_cc.s -o tmp_cc.exe']);
+            st_gcc = -1;
+            for attempt = 1:2   % retry: the runtime's system()/gcc flake
+                delete('tmp_cc.exe');
+                st_gcc = system([gcc, ' tmp_cc.s -o tmp_cc.exe']);
+                if st_gcc == 0 && exist('tmp_cc.exe', 'file') == 2
+                    break;
+                end
+            end
             if st_gcc ~= 0
                 error('gcc failed');
             end
