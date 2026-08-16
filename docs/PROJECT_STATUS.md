@@ -183,6 +183,24 @@ branches (the suite caught the gap). Constant-constant arithmetic
 7,835 → 7,686, hello.c 96 → 90; suite 729/729 green; ceilings
 ratcheted.
 
+**Optimization Phase E (stack traffic, 2026-08-16).** The operand
+juggle folds: `pushq %rax; <simple right>; movq %rax, %rbx; popq %rax;
+op %rbx, %rax` becomes `movq <right>, %rbx; op %rbx, %rax` (the left
+survives in rax across a push), with the div/mod (`cqto; idivq %rbx`)
+and shift (`movq %rax, %rcx; shlq %cl, %rax`) tails. A small
+register-allocation fold keeps the store-LHS address in r8
+(`pushq %rax; <rhs>; popq %rbx; movq %rax, (%rbx)` →
+`movq %rax, %r8; <rhs>; movq %rax, (%r8)`), guarded by a call/push/
+store/r8 barrier — nested assignments (`y = x = 10`) required the r8
+guard and were caught by the suite. A hidden bug was found and fixed:
+every foldmap replacement was missing its leading tab, so folded lines
+were invisible to the next pass iteration — the fix unlocked cascading
+composition. Also: the clone's `strfind` rejects numeric code vectors,
+so a manual `pp_contains` substring helper replaced it (the `name(%rip)`
+folds had been silently dead). Corpus instructions 7,686 → 6,184,
+`pushq` 2,391 → 571, hello.c 90 → 73; suite 729/729 green; ceilings
+ratcheted.
+
 ## Deliverables
 
 | Phase | Scope | Commit |

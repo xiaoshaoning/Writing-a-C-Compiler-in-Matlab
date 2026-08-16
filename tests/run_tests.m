@@ -870,8 +870,8 @@ else
     % instructions must stay at or below the recorded ceiling, so a future
     % change cannot silently bloat the generated code. (Ceilings ratchet
     % down per optimization phase: Phase B peephole 8697 -> 8271; Phase C
-    % address modes 8271 -> 7835; Phase D constant folds 7835 -> 7686,
-    % hello.c 106 -> 90 — see
+    % address modes 8271 -> 7835; Phase D constant folds 7835 -> 7686;
+    % Phase E stack traffic 7686 -> 6184, hello.c 106 -> 73 — see
     % docs/2026-08-16-compiler-optimization-plan.md.)
     ic_total = 0;
     ic_hello = 0;
@@ -893,10 +893,10 @@ else
         [npass nfail] = addcheck(npass, nfail, false, ...
             sprintf('instr count hello.c: %s', e.message));
     end
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 7686, ...
-        sprintf('instr regression: corpus %d <= 7686', ic_total));
-    [npass nfail] = addcheck(npass, nfail, ic_hello <= 90, ...
-        sprintf('instr regression: hello.c %d <= 90', ic_hello));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 6184, ...
+        sprintf('instr regression: corpus %d <= 6184', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_hello <= 73, ...
+        sprintf('instr regression: hello.c %d <= 73', ic_hello));
 
     % function called with the wrong number of arguments errors
     try

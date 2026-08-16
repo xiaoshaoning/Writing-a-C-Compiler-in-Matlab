@@ -42,6 +42,7 @@ Compiler corpus: 286 `cc2_*`–`cc18_*` programs.
 | Phase B result | corpus 8,697 → 8,271; hello.c 106 → 103 |
 | Phase C result | corpus 8,271 → 7,835; hello.c 103 → 96; `leaq` 837 → 481 |
 | Phase D result | corpus 7,835 → 7,686; hello.c 96 → 90; +x86sim `ja`/`jb`/`jae`/`jbe` |
+| Phase E result | corpus 7,686 → 6,184; hello.c 90 → 73; `pushq` 2,391 → 571 |
 | hello.c | 106 instructions, 2,265 bytes, 0.05 s compile |
 
 The dominant cost is the stack-based expression discipline: every binary
@@ -202,15 +203,21 @@ movq $2, %rax; pushq %rax; movq $3, %rax; movq %rax, %rbx; popq %rax; addq %rbx,
 → movq $2, %rbx; movq $3, %rax; addq %rbx, %rax
 ```
 
-- [ ] In `parse_term`/`parse_additive`/`parse_shift`/bitwise/logical:
-      when the right parse is known-simple, emit the left into rbx
-      directly and skip the push/pop.
-- [ ] Same for the comparisons (`cmpq %rbx, %rax` — the left in rbx, no
-      push/pop when the right is simple).
-- [ ] The assignment RHS `popq %rbx` patterns (the LHS address) — fold
-      per Phase C.
-- [ ] **Gate:** 727-suite green; `pushq`+`popq` drops (expect 2,391 →
-      ~1,500). x86sim untouched (same instructions, fewer of them).
+- [x] Implemented as a peephole (pass step 9), not a codegen change:
+      `pushq %rax; <simple right>; movq %rax, %rbx; popq %rax;
+      op %rbx, %rax` → `movq <right>, %rbx; op %rbx, %rax` — the left
+      survives in rax (a push does not clobber it). 344 candidates
+      (addq/imulq/cmpq/subq/andq/orq/xorq).
+- [x] The div/mod tail: `…; cqto; idivq %rbx` (and `xorq %rdx,%rdx;
+      divq %rbx`) folds the same way (20).
+- [x] The shift tail: `movq %rax, %rcx; popq %rax; shlq %cl, %rax`
+      folds with the count landing in %rcx (9).
+- [x] **The key bug found here:** every foldmap replacement was missing
+      its leading tab, so folded lines were invisible to the next pass
+      iteration (pp_isinstr requires the tab) and composed folds never
+      fired — the tab fixes unlocked cascading folding (the corpus drop
+      overshot the 344-candidate estimate).
+- [x] **Gate:** suite green; `pushq`+`popq` 2,391 → 571.
 
 ### E2 — A small register allocator (structural, the largest change)
 
@@ -219,20 +226,27 @@ free registers (rcx, rdx, r8–r11 — rax is the value register, rbx the
 scratch, rbp/rsp the frame) instead of the stack, only when the value's
 live range doesn't cross a call.
 
-- [ ] Identify push/pop pairs that frame a live value; replace with a
-      register home when one is free at that point.
-- [ ] Handle the call barrier: values live across a `call` stay on the
-      stack (or the callee-saved set — the compiler's own functions
-      clobber rbx/r8–r11; the shims preserve rbx — document the ABI).
-- [ ] Reuse r8–r11 for the operand shuffles
-      (`movq %rax, %r8; <right>; addq %r8, %rax`).
-- [ ] The `movq %rax, %rbx; popq %rax; op %rbx, %rax` sequences →
-      register-based equivalents.
-- [ ] Keep the emitted set within what x86sim understands, or extend
-      x86sim in Phase G.
-- [ ] **Gate:** 727-suite green (the real gate: the gcc-gated exits and
-      the x86sim parity both rerun); `pushq`+`popq` → ~1,200; total →
-      ~6,000.
+- [x] The one register allocated: the **store-address spill** (pass step
+      10). `pushq %rax; <rhs>; popq %rbx; movq %rax, (%rbx)` →
+      `movq %rax, %r8; <rhs>; movq %rax, (%r8)` — r8 is dead in the
+      expression codegen (only the shims touch it), so the LHS address
+      rides there instead of the stack. 213 candidates.
+- [x] **Call barrier:** the fold only fires when the RHS makes no call
+      and contains no pushq, no `(%rbx)` store, and no %r8 reference —
+      the last guard was the tricky one: nested assignments
+      (`y = x = 10`) fold the inner spill to r8 first, so the outer
+      fold must see the inner's *folded* r8 use and back off. The
+      original naive fold broke `cc7_chain`/`cc11_preval`/`cc15_*`
+      (caught by the suite).
+- [ ] Reuse r8–r11 for the operand shuffles of the *non-commutative*
+      complex-right ops — measured **zero** remaining juggles; the
+      corpus's pushq is now only prologue (`pushq %rbp`, 342),
+      call-arg pushes (89) and the remaining store spills whose RHS
+      contains a call — all irreducible without changing the ABI.
+- [ ] Keep the emitted set within what x86sim understands — new
+      instructions were only `movq %rax, %r8` / `movq %rax, (%r8)`,
+      which the sim already handled (281/281 corpus parity passes).
+- [x] **Gate:** 729-suite green; `pushq`+`popq` → 571; total → ~6,200.
 
 ## Phase F — Code clarity
 

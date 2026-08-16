@@ -179,6 +179,11 @@ function lines2 = peephole_pass(lines)
 %     the mapped condition (je inverts, jne keeps the sense). The movzbl
 %     does not set flags, so the second cmpq was load-bearing — this is
 %     the fold that makes it removable.
+%  9. the operand juggle: `pushq %rax; <simple right>; movq %rax, %rbx;
+%     popq %rax; op %rbx, %rax` — the left is still in rax after the
+%     pushq (a push does not clobber it), so the spill/restore round-trip
+%     is dead: `movq $N, %rbx; op %rbx, %rax` (also the mem loads and
+%     movzbl/movsbl byte rights). 5 instructions become 2.
 % Runs to a fixed point (removing a jmp can expose more dead code). Only
 % instruction lines are ever touched: labels and directives are preserved.
 % Flags semantics are respected — setcc/movzbl chains are left alone (a
@@ -228,7 +233,7 @@ for k = 1:n
             [lm, lo1, lo2] = pp_ops(lines{k+1});
             if (pp_eq(lm, 'movq') || pp_eq(lm, 'movzbl') || pp_eq(lm, 'movsbl')) && ...
                pp_eq(lo1, '(%rax)') && (pp_eq(lo2, '%rax') || pp_eq(lo2, '%eax'))
-                foldmap{k} = [double(lm), 9, o1, 44, 32, double(lo2)]; % ', '
+                foldmap{k} = [9, double(lm), 9, o1, 44, 32, double(lo2)]; % ', '
                 del(k+1) = 1;
                 changed = 1;
                 continue;
@@ -242,7 +247,7 @@ for k = 1:n
             [s6, so1, so2] = pp_ops(lines{k+1});
             if pp_eq(s6, 'movq') && pp_eq(so1, '%rax') && ...
                (pp_memrbp(so2) || pp_memrip(so2))
-                foldmap{k} = [double('movq'), 9, o1, 44, 32, double(so2)];
+                foldmap{k} = [9, double('movq'), 9, o1, 44, 32, double(so2)];
                 del(k+1) = 1;
                 changed = 1;
                 continue;
@@ -264,11 +269,118 @@ for k = 1:n
                     else
                         disp2 = [double(num2str(nd)), double('(%rbp)')];
                     end
-                    foldmap{k} = [double('leaq'), 9, disp2, 44, 32, double('%rax')];
+                    foldmap{k} = [9, double('leaq'), 9, disp2, 44, 32, double('%rax')];
                     del(k+1) = 1;
                     changed = 1;
                     continue;
                 end
+            end
+        end
+    end
+    % --- 9. operand-juggle fold (E1: keep the left in rax, right in rbx) ---
+    if pp_eq(mnem, 'pushq') && pp_eq(arg1, '%rax') && k + 4 <= n
+        [r9, ro1, ro2] = pp_ops(lines{k+1});
+        [m9, mo1, mo2] = pp_ops(lines{k+2});
+        [p9, po1, po2] = pp_ops(lines{k+3});
+        [o9, oo1, oo2] = pp_ops(lines{k+4});
+        simple = (pp_eq(r9, 'movq') && pp_eq(ro2, '%rax')) || ...
+                 ((pp_eq(r9, 'movzbl') || pp_eq(r9, 'movsbl')) && pp_eq(ro2, '%eax'));
+        if simple && pp_eq(m9, 'movq') && pp_eq(mo1, '%rax') && pp_eq(p9, 'popq') && ...
+           pp_eq(po1, '%rax') && (pp_eq(mo2, '%rbx') || pp_eq(mo2, '%rcx'))
+            if pp_eq(ro2, '%rax')
+                ndest = double('%rbx');
+            else
+                ndest = double('%ebx');
+            end
+            tailok = 0;
+            if pp_eq(mo2, '%rbx')
+                % arithmetic / compare tail: op %rbx, %rax, or the div/mod
+                % tail: cqto; idivq %rbx (or xorq %rdx,%rdx; divq %rbx)
+                if pp_isop(o9) && pp_eq(oo1, '%rbx') && pp_eq(oo2, '%rax')
+                    tailok = 1;
+                elseif k + 5 <= n
+                    [d5, do1, do2] = pp_ops(lines{k+5});
+                    if (pp_eq(o9, 'cqto') && pp_eq(d5, 'idivq')) || ...
+                       (pp_eq(o9, 'xorq') && pp_eq(d5, 'divq'))
+                        tailok = 2;
+                    end
+                end
+            elseif pp_eq(mo2, '%rcx')
+                % shift tail: shlq/sarq/shrq %cl, %rax
+                if pp_eq(o9, 'shlq') || pp_eq(o9, 'sarq') || pp_eq(o9, 'shrq')
+                    if pp_eq(oo1, '%cl') && pp_eq(oo2, '%rax')
+                        tailok = 1;
+                        ndest = double('%rcx');
+                    end
+                end
+            end
+            if tailok == 1
+                foldmap{k} = [9, double(r9), 9, ro1, 44, 32, ndest];
+                del(k+1) = 1;
+                del(k+2) = 1;
+                del(k+3) = 1;
+                changed = 1;
+                continue;
+            elseif tailok == 2
+                % div/mod: the juggle lines die; cqto/idivq stay as-is
+                foldmap{k} = [9, double(r9), 9, ro1, 44, 32, ndest];
+                del(k+1) = 1;
+                del(k+2) = 1;
+                del(k+3) = 1;
+                changed = 1;
+                continue;
+            end
+        end
+    end
+    % --- 10. store-address spill: pushq %rax; <rhs>; popq %rbx;
+    % movq %rax, (%rbx)  ->  movq %rax, %r8; <rhs>; movq %rax, (%r8)
+    % r8 is dead in the expression codegen (only the shims touch it), so
+    % the lhs address can ride there instead of the stack — but only when
+    % the rhs makes no call (a shim call would clobber r8).
+    if pp_eq(mnem, 'pushq') && pp_eq(arg1, '%rax') && k < n
+        j = k + 1;
+        depth = 1;
+        hascall = 0;
+        anypush = 0;
+        hasstore = 0;
+        popat = -1;
+        while j <= n
+            if ~isempty(labat{j})
+                break;
+            end
+            if pp_isinstr(lines{j})
+                [jm, jo1, jo2] = pp_ops(lines{j});
+                if pp_eq(jm, 'movq') && (pp_eq(jo2, '(%rbx)') || pp_eq(jo1, '(%rbx)'))
+                    hasstore = 1;       % a nested spill store: r8 is taken
+                end
+                if pp_hasr8(jo1) || pp_hasr8(jo2)
+                    hasstore = 1;       % r8 already in use below: bail
+                end
+                if pp_eq(jm, 'pushq')
+                    anypush = 1;        % a nested spill or call arg: bail
+                    depth = depth + 1;
+                elseif pp_eq(jm, 'popq')
+                    depth = depth - 1;
+                    if depth == 0
+                        popat = j;
+                        break;
+                    end
+                elseif pp_eq(jm, 'addq') && numel(jo1) >= 2 && jo1(1) == 36
+                    depth = depth - floor(str2double(char(jo1(2:end))) / 8);
+                elseif pp_eq(jm, 'call')
+                    hascall = 1;
+                end
+            end
+            j = j + 1;
+        end
+        if popat > 0 && popat + 1 <= n && ~hascall && ~anypush && ~hasstore
+            [st, sto1, sto2] = pp_ops(lines{popat+1});
+            if pp_eq(st, 'movq') && pp_eq(sto1, '%rax') && pp_eq(sto2, '(%rbx)')
+                foldmap{k} = [9, double('movq'), 9, double('%rax, %r8')];
+                del(popat) = 1;
+                foldmap{popat+1} = [9, double('movq'), 9, double('%rax, (%r8)')];
+                changed = 1;
+                continue;
             end
         end
     end
@@ -282,7 +394,7 @@ for k = 1:n
             if pp_eq(z8, 'movzbl') && pp_eq(zo1, '%al') && pp_eq(zo2, '%eax') && ...
                pp_eq(q8, 'cmpq') && pp_eq(qo1, '$0') && pp_eq(qo2, '%rax') && ...
                (pp_eq(j8, 'je') || pp_eq(j8, 'jne')) && numel(jo1) >= 1
-                foldmap{k+1} = [pp_setcc2jcc(s8, j8), 9, jo1];
+                foldmap{k+1} = [9, pp_setcc2jcc(s8, j8), 9, jo1];
                 del(k+2) = 1;
                 del(k+3) = 1;
                 del(k+4) = 1;
@@ -306,7 +418,7 @@ for k = 1:n
                 else nv = pv * v; end
                 if abs(nv) < 2^53
                     del(k-1) = 1;
-                    foldmap{k} = [109 111 118 113 9 36, double(num2str(nv)), ...
+                    foldmap{k} = [9, 109 111 118 113 9 36, double(num2str(nv)), ...
                                   44 32 37 114 97 120];   % 'movq	$NV, %rax'
                     changed = 1;
                     continue;
@@ -322,7 +434,7 @@ for k = 1:n
        ~isempty(labat{k+2}) && cv_eq(labat{k+2}, arg1)
         [m2, a2] = pp_parts(lines{k+1});
         if pp_eq(m2, 'jmp')
-            foldmap{k} = [pp_invjcc(mnem), 9, a2];
+            foldmap{k} = [9, pp_invjcc(mnem), 9, a2];
             del(k+1) = 1;               % the jmp becomes unreachable
             changed = 1;
             continue;
@@ -425,9 +537,29 @@ function b = pp_memrbp(op)
 b = numel(op) >= 6 && cv_eq(op(end-5:end), double('(%rbp)'));
 end
 
+function b = pp_hasr8(op)
+% pp_hasr8 — does the operand reference %r8 (the store-spill register)?
+b = pp_contains(op, double('%r8'));
+end
+
 function b = pp_memrip(op)
 % pp_memrip — does the operand reference name(%rip) (a global)?
-b = ~isempty(strfind(op, double('%rip')));
+b = pp_contains(op, double('%rip'));
+end
+
+function b = pp_contains(hay, needle)
+% pp_contains — code-vector substring test. (The clone's strfind rejects
+% numeric arrays, so search manually.)
+b = 0;
+if numel(needle) > numel(hay)
+    return;
+end
+for k = 1:numel(hay) - numel(needle) + 1
+    if cv_eq(hay(k:k+numel(needle)-1), needle)
+        b = 1;
+        return;
+    end
+end
 end
 
 function v = pp_disp(op)
@@ -450,6 +582,13 @@ b = pp_eq(mnem, 'setl') || pp_eq(mnem, 'setg') || pp_eq(mnem, 'setle') || ...
     pp_eq(mnem, 'setge') || pp_eq(mnem, 'sete') || pp_eq(mnem, 'setne') || ...
     pp_eq(mnem, 'seta') || pp_eq(mnem, 'setae') || pp_eq(mnem, 'setb') || ...
     pp_eq(mnem, 'setbe');
+end
+
+function b = pp_isop(mnem)
+% pp_isop — binary ops emitted as `op %rbx, %rax` on the juggled operands.
+b = pp_eq(mnem, 'addq') || pp_eq(mnem, 'subq') || pp_eq(mnem, 'imulq') || ...
+    pp_eq(mnem, 'andq') || pp_eq(mnem, 'orq') || pp_eq(mnem, 'xorq') || ...
+    pp_eq(mnem, 'cmpq');
 end
 
 function s = pp_setcc2jcc(cc, br)
