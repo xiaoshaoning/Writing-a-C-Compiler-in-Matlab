@@ -186,6 +186,9 @@ report.
    attribution updated.
 2. **Reference-build reproducibility** — DONE (2026-08-15): the ad hoc
    `gcc xc.c -o xc_ref.exe` cross-check command is documented in the README
+   (verified 2026-08-16: hello.c stdout byte-identical, `-s` dumps
+   identical modulo the absolute-address operands — see
+   `docs/2026-08-16-reference-cross-check.md`).
    Notes.
 
 ## Running

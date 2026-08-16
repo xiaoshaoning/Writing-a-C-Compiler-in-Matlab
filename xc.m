@@ -1795,10 +1795,11 @@ LEA=0; IMM=1; PUSH=13; SI=11; SC=12; ADD=25;
 
 pos_local = index_of_bp;
 
-% frame first: ENT with a placeholder size, backpatched below
-emit(ENT);
-emit(0);
-ent_slot = ti;      % slot holding the size operand (0-based)
+% locals are parsed first (declaration code is buffered in text), then the
+% ENT frame is emitted with the final size — matching the reference's -s
+% dump — and any initializer code is spliced back in after it, so the
+% frame exists at runtime for the initializers.
+n0 = ti;
 
 while token == Int || token == Char
     if token == Int
@@ -1924,8 +1925,16 @@ while token == Int || token == Char
     match(59);                      % ';'
 end
 
-% backpatch the ENT frame size now that all locals are counted
-text(ent_slot + 1) = int64(pos_local - index_of_bp);
+% move the initializer code after the ENT, then close the function
+init_seg = text(n0+2 : ti+1);   % slots (n0+1)..ti live at text(n0+2..ti+1)
+init_n = ti - n0;
+ti = n0;
+emit(ENT);
+emit(pos_local - index_of_bp);
+for k = 1:init_n
+    text(ti + 1 + k) = init_seg(k);   % after the ENT + its operand
+end
+ti = ti + init_n;
 
 while token ~= 125                  % '}'
     statement();
