@@ -80,7 +80,8 @@ fname = [name, ext];
 si = 1;
 token = 0;
 token_val = 0;
-strtext = '';   % text of the last string literal
+strtext = [];   % last string literal as DOUBLE codes (the clone mangles
+                % backslash-bearing char strings crossing globals)
 lbl = 0;      % unique-label counter for short-circuit jumps
 cfn = 0;      % function counter (.LFBn/.LFEn/.Lretn)
 loopctx = {};   % stack of {break_label, continue_label} for break/continue
@@ -291,7 +292,7 @@ elseif (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
     return;
 elseif c == 34                  % '"': string literal
     si = si + 1;
-    strtext = '';
+    strtext = [];
     while si <= numel(src)
         v = src(si);
         if v == 34              % closing quote
@@ -307,7 +308,7 @@ elseif c == 34                  % '"': string literal
                 end
             end
         end
-        strtext = [strtext, v];
+        strtext = [strtext, double(v)];
     end
     if si > numel(src)
         fail('unterminated string literal');
@@ -463,6 +464,13 @@ names = fieldnames(called);
 for k = 1:numel(names)
     if ~isfield(funcs, names{k}) && ~isfield(libfns, names{k})
         fail(sprintf('call to undefined function %s', names{k}));
+    end
+    if isfield(funcs, names{k})
+        bad = find(called.(names{k}) ~= funcs.(names{k}), 1);
+        if ~isempty(bad)
+            fail(sprintf('function %s called with %d args, takes %d', ...
+                names{k}, called.(names{k})(bad), funcs.(names{k})));
+        end
     end
 end
 if ~isfield(funcs, 'main')
@@ -1081,7 +1089,7 @@ while true
                 end
             end
         elseif token == 172     % string literal: pointer init
-            initv = ['S', strtext];
+            initv = [double('S'), strtext];
             next();
         elseif ~isarr && base >= 1000 && depth == 0
             % struct-value initializer: { m1, m2, … } -> byte layout
@@ -1167,7 +1175,7 @@ for k = 1:numel(glist)
         end
         em(sprintf('	.globl	%s', nm));
         em(sprintf('%s:', nm));
-        if ischar(v) && v(1) == 'S'
+        if ~ischar(v) && numel(v) >= 1 && v(1) == double('S')
             % string-literal pointer initializer (marker 'S' + text)
             em(sprintf('	.quad	%s', new_str(v(2:end))));
         elseif iscell(v) && strcmp(v{1}, 'B')
@@ -1204,11 +1212,19 @@ end
 for k = 1:numel(strs)
     s = strs{k};
     em(sprintf('%s:', s{1}));
-    txt = s{2};
-    txt = strrep(txt, '', '\\');
-    txt = strrep(txt, '"', '\\"');
-    txt = strrep(txt, char(10), '\n');
-    em(sprintf('	.string	"%s"', txt));
+    txt = s{2};              % double code vector
+    esc = [];
+    for k = 1:numel(txt)
+        c = txt(k);
+        if c == 92 || c == 34     % escape backslash and quote for GAS
+            esc = [esc, 92, c];
+        elseif c == 10            % newline -> \n
+            esc = [esc, 92, 110];
+        else
+            esc = [esc, c];
+        end
+    end
+    em(sprintf('	.string	"%s"', char(esc)));
 end
 end
 
@@ -1317,7 +1333,7 @@ function lab = new_str(text)
 global strs nstr
 lab = sprintf('.Lstr%d', nstr);
 nstr = nstr + 1;
-strs{end+1} = {lab, norm_fmt(text)};
+strs{end+1} = {lab, double(norm_fmt(char(text)))};   % stored as codes
 end
 
 function t = norm_fmt(fmt)
@@ -2084,8 +2100,10 @@ while token == 61 || (token >= 160 && token <= 169)
             em('\tpopq\t%rax');
             if op == 165
                 em('\tshlq\t%cl, %rax');
+            elseif sav_ltype == 5
+                em('\tshrq\t%cl, %rax');   % logical (unsigned lvalue)
             else
-                em('\tsarq\t%cl, %rax');
+                em('\tsarq\t%cl, %rax');   % arithmetic (signed)
             end
         else
             em('\tmovq\t%rax, %rbx');   % rhs
@@ -2649,7 +2667,11 @@ elseif token == 150         % Id: function call or variable
             fail(sprintf('function %s called with %d args, takes %d', ...
                 name, nargs, funcs.(name)));
         end
-        called.(name) = 1;
+        if isfield(called, name)
+            called.(name) = [called.(name), nargs];   % per-call-site counts
+        else
+            called.(name) = nargs;
+        end
         if isfield(libfns, name)
             % runtime-library call: go through the Win64-ABI shim
             libcalls.(sprintf('%s_%d', name, nargs)) = 1;

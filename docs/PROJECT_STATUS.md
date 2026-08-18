@@ -276,6 +276,56 @@ ppunit fixture). Corpus 6,177 → 6,004 (−173); hello.c 73 → 72; suite
 call-arg pushes + param loads (~200 — would need a register-arg calling
 convention), and store-spills whose RHS calls a shim (73).
 
+**2026-08-18 fix round (suite 749 → 764, all green).** A full review of
+the codebase (four parallel reviewers, every finding empirically
+cross-checked) produced one round of fixes:
+
+- **cc_int**: backslash escapes in string literals now survive to the
+  `.string` data — `strtext` became a DOUBLE code vector (the clone
+  mangles backslash-bearing char strings crossing globals, which had
+  silently eaten `"a\\b"` → `"ab"`), and the emission escapes `\\`, `\"`,
+  and `\n` numerically; `unsigned >>=` now emits `shrq` (it used to
+  always emit `sarq`); forward calls validate their arg counts after the
+  parse completes (`called` accumulates per-call-site counts — before,
+  only already-parsed callees were checked).
+- **x86sim**: `mem` now covers `[0, CODE_BASE + code length + slack)`
+  (the stack used to live past the array end — out-of-bounds reads/writes
+  the clone tolerated; real MATLAB would error); CF from the full 64-bit
+  borrow (unsigned comparisons of values ≥ 2^32 were wrong); `%X` prints
+  uppercase (the conversion was an arithmetic no-op); `%05d` puts zeros
+  between the sign and the digits (`"000-7"` → `"-0007"`); `testb` sets SF
+  from bit 7; dead code removed.
+- **xc**: nested-brace array initializers enforce the same too-many guard
+  as flat ones (`{{1,2,3},{4,5,6},{7,8,9}}` on `int[2][3]` used to
+  overflow the array silently); global constant-expression initializers
+  (`int x = 1 + 2;`) evaluate at compile time via a full-precedence
+  constant evaluator (the cryptic `bad global declaration` is gone); the
+  lvalue checks for `&`, assignment, and pre/post-increment use a new
+  parse-level `unit_was_lvalue` flag — the old check read the emitted
+  load slot, which COLLIDES with IMM operand values 9/10 (the LI/LC
+  opcode numbers), so `&(9)`, `&(10)`, and `(9) = 5` were silently
+  accepted as fake lvalues.
+- **peephole**: rule 9's shift tail puts byte-width shift counts in
+  `%ecx` (it emitted `movzbl RO, %rcx` — invalid AT&T); the rule-10
+  barrier's depth counter only counts `addq $imm, %rsp` (a rhs `addq`
+  used to hide the r8 store-spill fold); the header now lists the
+  store-spill as rule 10 and the empty-frame fold as rule 11.
+- **harness**: the gcc-free groups (x86sim corpus, output parity, the
+  instruction-count regression, ppunit fixtures, error checks) moved OUT
+  of the gcc gate — a gcc-less machine previously lost ~600 checks
+  including the gcc-free track; the compiled exe is invoked as
+  `.\tmp_cc.exe` (cmd's CWD-relative lookup breaks under
+  `NoDefaultCurrentDirectoryInExePath`); new ppunit fixtures cover the
+  shift tails (byte/word), the store-spill-with-addq rhs, and the
+  nested-guard fixture now asserts the r8 rewrite it claims to guard.
+- New corpus: `cc18_strbslash.c` (92), `cc18_ushr.c` (0), `cc18_ucmp.c`
+  (1), `cc18_printfX.c` (0), `cc18_printf05.c` (0), `pp_globalcexpr.c`
+  (3), plus the intended-error programs `pp_badnestedinit.c`,
+  `pp_badaddrof2.c`, `pp_badassign.c`, `cc9_badargs2.c`, and two direct
+  x86sim stdout checks (`%X`, `%05d`). Instruction-count baseline
+  10,715 → 10,822 with the new programs. Verified end-to-end on the
+  v1.3.25 release build.
+
 ## Deliverables
 
 | Phase | Scope | Commit |
@@ -304,13 +354,17 @@ and the runtime library are the changelog entries above:
 
 ## Verification
 
-- **Test suite**: `tests/run_tests.m` — **669/669** on the target runtime
-  (146 interpreter checks + 287 gcc-gated assembly-track checks + 187
-  cross-track parity checks + 53 cross-track output-parity checks + 1
-  gcc-free simulator corpus group — `x86sim.m` runs all 281 compiler
-  programs without gcc; the gcc group skips if gcc is absent).
-  Groups: runtime-primitive gate (probe), 30-case VM selftest, 9-case lexer
-  selftest, program corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke.
+- **Test suite**: `tests/run_tests.m` — **764/764** on the target runtime
+  (the full group set: runtime-primitive gate (probe), 30-case VM selftest,
+  9-case lexer selftest, program corpus (p3–p6, pp), syscall/acceptance,
+  `-s`/`-d` smoke, the gcc-gated assembly-track group + cross-track parity
+  + output parity, the gcc-free x86sim corpus group — `x86sim.m` runs all
+  293 compiler programs without gcc — the instruction-count regression,
+  and the peephole-pass unit fixtures). Since the 2026-08-18 fix round the
+  gcc-free groups run even when gcc is absent (they no longer sit inside
+  the gcc gate), and the harness invokes the compiled exe as `.\tmp_cc.exe`
+  so cmd's current-directory exe lookup works even under
+  `NoDefaultCurrentDirectoryInExePath`.
 - **Reference cross-check**: the reference `xc.c` built with gcc 15.2.0
   (`C:\msys64\ucrt64\bin\gcc.exe`). Every corpus program's exit code is
   identical to the reference; `-s` instruction dumps are byte-identical
@@ -362,9 +416,9 @@ The interpreter port is feature-complete against its documented scope. C
 features outside the scope of both the port and the reference dialect
 (structs, unions, `switch`, `for`/`do-while` loops, preprocessor macros, …)
 are unsupported. The compiler track (`cc_int.m`) supports all of those plus
-structs, but still lacks: pointer-returning function pointers
-(`int *(*fp)(int)` declarations), compound literals, and `unsigned` types;
-calls through pointers always use the interpreter-style stack convention.
+structs; the cc18 round closed its last three documented gaps
+(pointer-returning function pointers, compound literals, `unsigned` types).
+Calls through pointers always use the interpreter-style stack convention.
 
 - The `-s` mnemonic column is padded manually to match the reference's
   `%8.4s` output (the runtime pads to width but not to string precision)
@@ -394,7 +448,7 @@ report.
 ## Running
 
 ```
-D:\...\matlab.bat tests/run_tests.m          # full suite (669 checks)
+D:\...\matlab.bat tests/run_tests.m          # full suite (764 checks)
 D:\...\matlab.bat -batch "addpath('src'); xc('tests/programs/hello.c')"   # acceptance program
 D:\...\matlab.bat -batch "addpath('src'); xc('-s', 'tests/programs/hello.c')"  # compile dump
 D:\...\matlab.bat -batch "addpath('src'); xc('-d', 'tests/programs/hello.c')"  # trace

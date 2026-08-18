@@ -245,6 +245,7 @@ ptests9 = {
     'pp_sizeofrow.c',   33;
     'pp_ptrrow.c',      22;
     'pp_divmod.c',      89;
+    'pp_globalcexpr.c',  3;
 };
 for k = 1:size(ptests9, 1)
     try
@@ -340,6 +341,40 @@ catch e
         'pp_badarrinit2.c string-too-long error');
 end
 
+% nested-brace initializers enforce the same too-many guard as flat ones
+try
+    out = evalc('rc = xc(''tests/programs/pp_badnestedinit.c'')');
+    [npass nfail] = addcheck(npass, nfail, false, ...
+        'pp_badnestedinit.c should error');
+catch e
+    [npass nfail] = addcheck(npass, nfail, ...
+        ~isempty(strfind(e.message, 'too many array initializer')), ...
+        'pp_badnestedinit.c nested-brace too-many error');
+end
+
+% & on a bare literal errors (the literal's VALUE used to collide with
+% the LI/LC opcode numbers, silently accepting &(9) and &(10))
+try
+    out = evalc('rc = xc(''tests/programs/pp_badaddrof2.c'')');
+    [npass nfail] = addcheck(npass, nfail, false, ...
+        'pp_badaddrof2.c should error');
+catch e
+    [npass nfail] = addcheck(npass, nfail, ...
+        ~isempty(strfind(e.message, 'bad address of')), ...
+        'pp_badaddrof2.c & on literal errors');
+end
+
+% a non-lvalue on the left of '=' errors (same collision let (9) = 5 pass)
+try
+    out = evalc('rc = xc(''tests/programs/pp_badassign.c'')');
+    [npass nfail] = addcheck(npass, nfail, false, ...
+        'pp_badassign.c should error');
+catch e
+    [npass nfail] = addcheck(npass, nfail, ...
+        ~isempty(strfind(e.message, 'bad lvalue in assignment')), ...
+        'pp_badassign.c non-lvalue assignment errors');
+end
+
 % --- group 10: assembly track (cc_int, gcc-gated) ---
 % Norasandler parts 2-3 (unary + bitwise binary operators). Only runs when
 % gcc is available; the check compiles the generated .s, runs the .exe,
@@ -352,10 +387,10 @@ if exist(gcc, 'file') ~= 2
     gcc = 'gcc';
 end
 [gcc_ok, ~] = system([gcc, ' --version']);
-if gcc_ok ~= 0
-    fprintf('SKIP  cc_int group (gcc not found)\n');
-else
-    cctests = {
+% the corpus tables live OUTSIDE the gate: the gcc-free groups (x86sim,
+% instruction-count regression, ppunit fixtures, error checks) need them
+% even when gcc is absent
+cctests = {
         'return_2.c',     2;
         'cc2_neg.c',    214;
         'cc2_not.c',    213;
@@ -644,6 +679,11 @@ else
         'cc18_unsigned2.c', 111;
         'stress.c',       91;   % 5467 mod 256 — needs the fixed clone
         'stress2.c',     132;   % 988156804 mod 256
+        'cc18_strbslash.c', 92;   % backslash escapes survive to .string
+        'cc18_ushr.c',      0;   % unsigned >>= is a logical shift
+        'cc18_ucmp.c',      1;   % unsigned compare >= 2^32 (64-bit borrow)
+        'cc18_printfX.c',   0;   % %X uppercase (stdout checked in the sim group)
+        'cc18_printf05.c',  0;   % %05d sign placement (stdout checked in the sim group)
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
@@ -685,45 +725,8 @@ else
         'cc9_exprargs.c', 'cc9_fact.c', 'cc9_fib.c', 'cc9_loop.c', 'cc9_multicall.c', 'cc9_nested.c',
         'cc9_three.c',
     };
-    for k = 1:size(cctests, 1)
-        try
-            got = -999;
-            for attempt = 1:2   % retry: the runtime's system()/gcc flake
-                delete('tmp_cc.s');
-                delete('tmp_cc.exe');   % no stale exe can leak into this test
-                cc_int(['tests/programs/' cctests{k,1}], 'tmp_cc.s');
-                [st_gcc, ~] = system([gcc, ' tmp_cc.s -o tmp_cc.exe']);
-                if st_gcc == 0 && exist('tmp_cc.exe', 'file') == 2
-                    [st_run, ~] = system('tmp_cc.exe');
-                    if st_run < 0
-                        st_run = st_run + 256;   % return -1 (0xFFFFFFFF)
-                    end
-                    got = st_run;
-                    break;
-                end
-            end
-            [npass nfail] = addcheck(npass, nfail, got == cctests{k,2}, ...
-                sprintf('cc_int %s -> exit %d', cctests{k,1}, cctests{k,2}));
-            % cross-track parity: for the shared subset, the interpreter and
-            % the compiler must agree (the OS truncates the exit code to the
-            % low byte)
-            if ~isempty(pshared) && isin(pshared, cctests{k,1})
-                ri = xc(['tests/programs/' cctests{k,1}]);
-                [npass nfail] = addcheck(npass, nfail, ...
-                    mod(double(ri), 256) == got, ...
-                    sprintf('parity %s (interp %d == cc %d)', ...
-                        cctests{k,1}, mod(double(ri), 256), got));
-            end
-        catch e
-            [npass nfail] = addcheck(npass, nfail, false, ...
-                sprintf('cc_int %s: %s', cctests{k,1}, e.message));
-        end
-    end
-    delete('tmp_cc.s');
-    delete('tmp_cc.exe');
-    % cross-track output parity: programs that print (via the compiler's
-    % runtime shims) must produce the SAME stdout through both tracks (the
-    % interpreter's trailing 'exit(N)' trace is stripped first).
+    % programs whose stdout both tracks must agree on (used by the
+    % gcc-gated output parity AND the gcc-free x86sim output parity)
     ostests = {
         'hello.c';
         'p6_printf.c';
@@ -781,6 +784,50 @@ else
         'stress.c';
         'stress2.c';
     };
+    % gcc-dependent groups: the compile-and-run exit-code loop and the two
+    % parity groups. Everything after their `end` runs without gcc.
+    if gcc_ok ~= 0
+        fprintf('SKIP  gcc-dependent groups (gcc not found)\n');
+    else
+    for k = 1:size(cctests, 1)
+        try
+            got = -999;
+            for attempt = 1:2   % retry: the runtime's system()/gcc flake
+                delete('tmp_cc.s');
+                delete('tmp_cc.exe');   % no stale exe can leak into this test
+                cc_int(['tests/programs/' cctests{k,1}], 'tmp_cc.s');
+                [st_gcc, ~] = system([gcc, ' tmp_cc.s -o tmp_cc.exe']);
+                if st_gcc == 0 && exist('tmp_cc.exe', 'file') == 2
+                    [st_run, ~] = system('.\tmp_cc.exe');
+                    if st_run < 0
+                        st_run = st_run + 256;   % return -1 (0xFFFFFFFF)
+                    end
+                    got = st_run;
+                    break;
+                end
+            end
+            [npass nfail] = addcheck(npass, nfail, got == cctests{k,2}, ...
+                sprintf('cc_int %s -> exit %d', cctests{k,1}, cctests{k,2}));
+            % cross-track parity: for the shared subset, the interpreter and
+            % the compiler must agree (the OS truncates the exit code to the
+            % low byte)
+            if ~isempty(pshared) && isin(pshared, cctests{k,1})
+                ri = xc(['tests/programs/' cctests{k,1}]);
+                [npass nfail] = addcheck(npass, nfail, ...
+                    mod(double(ri), 256) == got, ...
+                    sprintf('parity %s (interp %d == cc %d)', ...
+                        cctests{k,1}, mod(double(ri), 256), got));
+            end
+        catch e
+            [npass nfail] = addcheck(npass, nfail, false, ...
+                sprintf('cc_int %s: %s', cctests{k,1}, e.message));
+        end
+    end
+    delete('tmp_cc.s');
+    delete('tmp_cc.exe');
+    % cross-track output parity: programs that print (via the compiler's
+    % runtime shims) must produce the SAME stdout through both tracks (the
+    % interpreter's trailing 'exit(N)' trace is stripped first).
     for ok = 1:numel(ostests)
         try
             oo = evalc(sprintf('rcx = xc(''tests/programs/%s'')', ostests{ok}));
@@ -802,7 +849,7 @@ else
             if st_gcc ~= 0
                 error('gcc failed');
             end
-            st_run = system('tmp_cc.exe > tmp_cc_out.txt');
+            st_run = system('.\tmp_cc.exe > tmp_cc_out.txt');
             if st_run < 0
                 st_run = st_run + 256;
             end
@@ -820,6 +867,8 @@ else
                 sprintf('output parity %s: %s', ostests{ok}, e.message));
         end
     end
+    end
+
     % gcc-free track: every compiler corpus program must produce the same
     % exit code through the x86sim interpreter (x86sim.m) as through gcc.
     simok = 0;
@@ -844,6 +893,29 @@ else
     end
     [npass nfail] = addcheck(npass, nfail, simok == simtot, ...
         sprintf('x86sim corpus: %d/%d exit codes match gcc', simok, simtot));
+
+    % x86sim printf edge cases (no interpreter counterpart): %X must be
+    % uppercase, and %05d of a negative puts zeros between sign and digits.
+    try
+        delete('tmp_cc.s');
+        cc_int('tests/programs/cc18_printfX.c', 'tmp_cc.s');
+        pxo = evalc('pxr = x86sim(''tmp_cc.s'')');
+        [npass nfail] = addcheck(npass, nfail, strcmp(pxo, 'FF'), ...
+            'x86sim %%X uppercase');
+    catch e
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            sprintf('x86sim %%X: %s', e.message));
+    end
+    try
+        delete('tmp_cc.s');
+        cc_int('tests/programs/cc18_printf05.c', 'tmp_cc.s');
+        p5o = evalc('p5r = x86sim(''tmp_cc.s'')');
+        [npass nfail] = addcheck(npass, nfail, strcmp(p5o, '-0007'), ...
+            'x86sim %%05d sign placement');
+    catch e
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            sprintf('x86sim %%05d: %s', e.message));
+    end
 
     % x86sim stdout parity: the same printing programs must produce the same
     % stdout through the gcc-free simulator as through the interpreter.
@@ -876,8 +948,9 @@ else
     % instructions must stay at or below the recorded ceiling, so a future
     % change cannot silently bloat the generated code. (stress.c raised
     % the baseline to 7387 and stress2.c to 10898; the empty-frame no-op
-    % fold then took it to 10715. Before that the ceilings ratcheted down
-    % per optimization phase: 8697 -> 8271 -> 7835 -> 7686 -> 6184 — see
+    % fold then took it to 10715; the 2026-08-18 fix-round programs
+    % raised it to 10822. Before that the ceilings ratcheted down per
+    % optimization phase: 8697 -> 8271 -> 7835 -> 7686 -> 6184 — see
     % docs/2026-08-16-compiler-optimization-plan.md.)
     ic_total = 0;
     ic_hello = 0;
@@ -899,8 +972,8 @@ else
         [npass nfail] = addcheck(npass, nfail, false, ...
             sprintf('instr count hello.c: %s', e.message));
     end
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 10715, ...
-        sprintf('instr regression: corpus %d <= 10715', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 10822, ...
+        sprintf('instr regression: corpus %d <= 10822', ic_total));
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 72, ...
         sprintf('instr regression: hello.c %d <= 72', ic_hello));
 
@@ -953,7 +1026,25 @@ else
          '\tleaq\t-8(%rbp), %rax', '\tpushq\t%rax', ...
          '\tmovq\t$10, %rax', '\tpopq\t%rbx', '\tmovq\t%rax, (%rbx)', ...
          '\tpopq\t%rbx', '\tmovq\t%rax, (%rbx)'}, ...
-        {'\tpushq\t%rax'}, {}, 'ppunit nested-spill-guard');
+        {'\tpushq\t%rax', '\tmovq\t%rax, %r8'}, {}, ...
+        'ppunit nested-spill-guard');
+    % rule 9's shift tail: byte-width shift counts land in %ecx (%rcx is
+    % not a valid movzbl/movsbl destination), word counts in %rcx
+    [npass nfail] = ppunit(npass, nfail, ...
+        {'\tpushq\t%rax', '\tmovzbl\t-8(%rbp), %eax', '\tmovq\t%rax, %rcx', ...
+         '\tpopq\t%rax', '\tshlq\t%cl, %rax'}, ...
+        {'\tmovzbl\t-8(%rbp), %ecx'}, {'\tpushq'}, 'ppunit juggle-shift-byte');
+    [npass nfail] = ppunit(npass, nfail, ...
+        {'\tpushq\t%rax', '\tmovq\t$4, %rax', '\tmovq\t%rax, %rcx', ...
+         '\tpopq\t%rax', '\tshlq\t%cl, %rax'}, ...
+        {'\tmovq\t$4, %rcx'}, {'\tpushq'}, 'ppunit juggle-shift-word');
+    % the r8 store-spill folds when the rhs contains a non-%rsp addq
+    % (the depth counter once treated any addq as a stack pop)
+    [npass nfail] = ppunit(npass, nfail, ...
+        {'\tpushq\t%rax', '\tmovq\t-8(%rbp), %rax', '\taddq\t$16, %rax', ...
+         '\tpopq\t%rbx', '\tmovq\t%rax, (%rbx)'}, ...
+        {'\tmovq\t%rax, %r8', '\tmovq\t%rax, (%r8)'}, {'\tpopq\t%rbx'}, ...
+        'ppunit store-spill-addq');
 
     % function called with the wrong number of arguments errors
     try
@@ -965,7 +1056,17 @@ else
             ~isempty(strfind(e.message, 'called with 2 args')), ...
             'cc9_badargs.c arg-count error');
     end
-end
+    % a FORWARD call with the wrong arg count errors once the parse
+    % completes (the at-call check only fires for already-parsed callees)
+    try
+        cc_int('tests/programs/cc9_badargs2.c', 'tmp_cc.s');
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            'cc9_badargs2.c should error');
+    catch e
+        [npass nfail] = addcheck(npass, nfail, ...
+            ~isempty(strfind(e.message, 'called with 2 args')), ...
+            'cc9_badargs2.c forward arg-count error');
+    end
 
 
 fprintf('run_tests: %d tests, %d passed, %d failed\n', npass + nfail, npass, nfail);

@@ -26,7 +26,11 @@ function lines2 = peephole_pass(lines)
 %     pushq (a push does not clobber it), so the spill/restore round-trip
 %     is dead: `movq $N, %rbx; op %rbx, %rax` (also the mem loads and
 %     movzbl/movsbl byte rights). 5 instructions become 2.
-% 10. `subq $0, %rsp` — the frame allocation of a function with no
+% 10. store-address spill: `pushq %rax; <rhs>; popq %rbx; movq %rax,
+%     (%rbx)` — the store-LHS address rides in %r8 instead of the stack
+%     (`movq %rax, %r8; <rhs>; movq %rax, (%r8)`), guarded by a call/
+%     push/store/r8 barrier (nested assignments keep the outer spill).
+% 11. `subq $0, %rsp` — the frame allocation of a function with no
 %     locals is a no-op (the rsp already equals rbp).
 % Runs to a fixed point (removing a jmp can expose more dead code). Only
 % instruction lines are ever touched: labels and directives are preserved.
@@ -150,11 +154,18 @@ for k = 1:n
                     end
                 end
             elseif pp_eq(mo2, '%rcx')
-                % shift tail: shlq/sarq/shrq %cl, %rax
+                % shift tail: shlq/sarq/shrq %cl, %rax — the count
+                % destination follows the right operand's width: %ecx for
+                % byte loads (movzbl/movsbl need a 32-bit dest), %rcx for
+                % word loads
                 if pp_eq(o9, 'shlq') || pp_eq(o9, 'sarq') || pp_eq(o9, 'shrq')
                     if pp_eq(oo1, '%cl') && pp_eq(oo2, '%rax')
                         tailok = 1;
-                        ndest = double('%rcx');
+                        if pp_eq(ro2, '%rax')
+                            ndest = double('%rcx');
+                        else
+                            ndest = double('%ecx');
+                        end
                     end
                 end
             end
@@ -209,7 +220,8 @@ for k = 1:n
                         popat = j;
                         break;
                     end
-                elseif pp_eq(jm, 'addq') && numel(jo1) >= 2 && jo1(1) == 36
+                elseif pp_eq(jm, 'addq') && numel(jo1) >= 2 && jo1(1) == 36 && ...
+                       pp_eq(jo2, '%rsp')
                     depth = depth - floor(str2double(char(jo1(2:end))) / 8);
                 elseif pp_eq(jm, 'call')
                     hascall = 1;
@@ -284,7 +296,7 @@ for k = 1:n
             continue;
         end
     end
-    % --- 10. empty-frame no-op: subq $0, %rsp ---
+    % --- 11. empty-frame no-op: subq $0, %rsp ---
     if pp_eq(mnem, 'subq') && pp_eq(arg1, '$0, %rsp')
         del(k) = 1;
         changed = 1;

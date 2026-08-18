@@ -36,7 +36,7 @@ global text ti pc bp sp ax cycle            % VM + text segment
 global symbols symbol_names current_id idmain array_strides  % symbol table
 global ginit ginit_n                                % global runtime inits
 global mem data hp stack_base      % memory segments
-global expr_type basetype index_of_bp unit_was_array bstrides barr_size barr  % parser state
+global expr_type basetype index_of_bp unit_was_array unit_was_lvalue bstrides barr_size barr  % parser state
 global fidv                                 % syscall fd registry
 global poolsize assembly debug              % configuration
 
@@ -1061,6 +1061,9 @@ while token ~= 125          % '}'
         end
         sub = parse_braces(dims, lvl + 1);
         match(125);
+        if i + extent > S
+            fail(sprintf('%d: too many array initializers', line));
+        end
         vals(i+1 : i+extent) = sub(1:extent);
         i = i + extent;
     else
@@ -1088,23 +1091,170 @@ ti = ti + 1;
 end
 
 function v = const_expr()
-% const_expr — evaluate a compile-time constant initializer (post-parity):
-% a number literal (optionally sign-flipped), a char literal (lexed as Num),
-% a string literal's data address, or an enum constant. Advances the lexer.
+% const_expr — evaluate a compile-time constant expression (post-parity):
+% full C precedence over number literals (char literals lex as Num),
+% string-literal data addresses, enum constants, and parentheses — used
+% for global initializers and array-initializer elements. Advances the
+% lexer. Precedence: lor < lan < or < xor < and < eq < rel < shift <
+% add < mul < unar < primary.
+v = const_lor();
+end
+
+function v = const_lor()
+global token
+v = const_lan();
+while token == 144                 % ||
+    match(144);
+    r = const_lan();
+    v = (v ~= 0) || (r ~= 0);
+end
+end
+
+function v = const_lan()
+global token
+v = const_or();
+while token == 145                 % &&
+    match(145);
+    r = const_or();
+    v = (v ~= 0) && (r ~= 0);
+end
+end
+
+function v = const_or()
+global token
+v = const_xor();
+while token == 146                 % |
+    match(146);
+    v = bitor(int64(v), int64(const_xor()));
+end
+end
+
+function v = const_xor()
+global token
+v = const_and();
+while token == 147                 % ^
+    match(147);
+    v = bitxor(int64(v), int64(const_and()));
+end
+end
+
+function v = const_and()
+global token
+v = const_eq();
+while token == 148                 % &
+    match(148);
+    v = bitand(int64(v), int64(const_eq()));
+end
+end
+
+function v = const_eq()
+global token
+v = const_rel();
+while token == 149 || token == 150 % == !=
+    op = token;
+    match(op);
+    r = const_rel();
+    if op == 149
+        v = (v == r);
+    else
+        v = (v ~= r);
+    end
+end
+end
+
+function v = const_rel()
+global token
+v = const_shift();
+while token == 151 || token == 152 || token == 153 || token == 154  % < > <= >=
+    op = token;
+    match(op);
+    r = const_shift();
+    if op == 151
+        v = (v < r);
+    elseif op == 152
+        v = (v > r);
+    elseif op == 153
+        v = (v <= r);
+    else
+        v = (v >= r);
+    end
+end
+end
+
+function v = const_shift()
+global token
+v = const_add();
+while token == 155 || token == 156 % << >>
+    op = token;
+    match(op);
+    r = double(const_add());
+    if r < 0 || r >= 64
+        fail('bad constant shift count');
+    end
+    if op == 155
+        v = bitshift(int64(v), r, 'int64');
+    else
+        v = bitshift(int64(v), -r, 'int64');
+    end
+end
+end
+
+function v = const_add()
+global token
+v = const_mul();
+while token == 157 || token == 158 % + -
+    op = token;
+    match(op);
+    if op == 157
+        v = v + const_mul();
+    else
+        v = v - const_mul();
+    end
+end
+end
+
+function v = const_mul()
+global token
+v = const_unar();
+while token == 159 || token == 160 || token == 161   % * / %
+    op = token;
+    match(op);
+    r = const_unar();
+    if op == 159
+        v = v * r;
+    else
+        if r == 0
+            fail('division by zero in constant expression');
+        end
+        if op == 160
+            v = fix(double(v) / double(r));   % C truncation
+        else
+            v = v - fix(double(v) / double(r)) * r;
+        end
+    end
+end
+end
+
+function v = const_unar()
+global token
+if token == 158                  % '-'
+    match(158);
+    v = -const_unar();
+elseif token == 126               % '~'
+    match(126);
+    v = bitxor(int64(const_unar()), int64(-1));
+elseif token == 33                % '!'
+    match(33);
+    v = (const_unar() == 0);
+else
+    v = const_prim();
+end
+end
+
+function v = const_prim()
 global token token_val current_id symbols
-Num=128; Id=133; Sub=158; Add=157;
-if token == Sub || token == Add
-    neg = (token == Sub);
-    match(token);
-    if token ~= Num
-        fail('bad constant initializer');
-    end
-    v = token_val;
-    if neg
-        v = -v;
-    end
-    next();
-elseif token == Num
+Num=128; Id=133;
+if token == Num
     v = token_val;
     next();
 elseif token == 34          % '"': string literal -> its data address
@@ -1113,6 +1263,10 @@ elseif token == 34          % '"': string literal -> its data address
 elseif token == Id && symbols(current_id,5) == 128   % enum constant
     v = symbols(current_id,6);
     next();
+elseif token == 40          % '('
+    match(40);
+    v = const_lor();
+    match(41);
 else
     fail(sprintf('bad constant initializer (token %d)', token));
 end
@@ -1166,7 +1320,7 @@ function expression(level)
 % levels). Emits VM instructions; expr_type tracks the C type (0=char,
 % 1=int, 2+=pointer).
 global token token_val line current_id symbols expr_type index_of_bp ...
-       text ti data unit_was_array bstrides barr_size barr array_strides
+       text ti data unit_was_array unit_was_lvalue bstrides barr_size barr array_strides
 
 % tokens (xc.c enum)
 Num=128; Id=133; Int=138; Sizeof=140;
@@ -1187,6 +1341,9 @@ end
 
 % ---- unit / unary ----
 unit_was_array = 0;   % set only when the unit is a bare array name (C2)
+unit_was_lvalue = 0;  % set only when the unit ends in an LC/LI load
+                      % (the load slot check collides with IMM operand
+                      % values 9/10 = LI/LC, so the flag disambiguates)
 bstrides = [];        % set only by an array-name unit (multi-dim strides)
 barr_size = [];       % byte size of the current array-typed expression
 barr = 0;             % 1 = the expression is an array VALUE (not a pointer)
@@ -1304,6 +1461,7 @@ elseif token == Id
             end
             expr_type = double(idtype);
             emit(pick(expr_type == CHAR, LC, LI));
+            unit_was_lvalue = 1;
         end
     end
 elseif token == 40                  % '(': cast or parenthesis
@@ -1333,13 +1491,15 @@ elseif token == Mul                 % dereference *addr
         fail(sprintf('%d: bad dereference', line));
     end
     emit(pick(expr_type == CHAR, LC, LI));
+    unit_was_lvalue = 1;
     bstrides = []; barr_size = []; barr = 0;
 elseif token == And                 % address-of
     match(And);
     expression(Inc);
-    if text(ti+1) == LC || text(ti+1) == LI
+    if unit_was_lvalue && (text(ti+1) == LC || text(ti+1) == LI)
         ti = ti - 1;                % drop the load; ax holds the address
         expr_type = expr_type + PTR;
+        unit_was_lvalue = 0;
         bstrides = []; barr_size = []; barr = 0;
     elseif ~unit_was_array && isempty(bstrides)
         fail(sprintf('%d: bad address of', line));
@@ -1393,10 +1553,10 @@ elseif token == Inc || token == Dec % pre-increment/decrement
     tmp = token;
     match(token);
     expression(Inc);
-    if text(ti+1) == LC
+    if unit_was_lvalue && text(ti+1) == LC
         text(ti+1) = PUSH;          % duplicate the address
         emit(LC);
-    elseif text(ti+1) == LI
+    elseif unit_was_lvalue && text(ti+1) == LI
         text(ti+1) = PUSH;
         emit(LI);
     else
@@ -1420,8 +1580,9 @@ while token >= level
     tmp = expr_type;
     if token == Assign
         match(Assign);
-        if text(ti+1) == LC || text(ti+1) == LI
+        if unit_was_lvalue && (text(ti+1) == LC || text(ti+1) == LI)
             text(ti+1) = PUSH;      % save the lvalue address
+            unit_was_lvalue = 0;
         else
             fail(sprintf('%d: bad lvalue in assignment', line));
         end
@@ -1566,10 +1727,10 @@ while token >= level
         emit(PUSH); expression(Inc); emit(MOD);
         expr_type = tmp;
     elseif token == Inc || token == Dec   % postfix
-        if text(ti+1) == LI
+        if unit_was_lvalue && text(ti+1) == LI
             text(ti+1) = PUSH;
             emit(LI);
-        elseif text(ti+1) == LC
+        elseif unit_was_lvalue && text(ti+1) == LC
             text(ti+1) = PUSH;
             emit(LC);
         else
@@ -1616,6 +1777,7 @@ while token >= level
             bstrides = []; barr_size = []; barr = 0;
             expr_type = tmp - PTR;
             emit(pick(expr_type == CHAR, LC, LI));
+            unit_was_lvalue = 1;
         end
     else
         fail(sprintf('%d: compiler error, token = %d', line, token));

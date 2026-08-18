@@ -9,7 +9,8 @@ function exit_code = x86sim(sfile)
 % runtime-library symbols the shims forward to (printf, malloc, memset,
 % memcmp, exit, _open, _read, _close).
 %
-%   exit_code = x86sim('out.s')     % the program's exit code (low byte)
+%   exit_code = x86sim('out.s')     % the program's exit code (full rax;
+%                                   % callers truncate to the low byte)
 %
 % All text is processed as double code vectors: the clone mangles certain
 % string literals (e.g. 'sum', 'count', 'set') when they cross local-
@@ -22,7 +23,9 @@ DATA_BASE = 4096;
 CODE_BASE = DATA_BASE + MEMSZ;
 STACK_TOP = DATA_BASE + MEMSZ - 16;
 MHEAP = DATA_BASE + MEMSZ / 2;
-mem = zeros(1, MEMSZ, 'uint8');
+% mem is allocated after pass 1: the stack starts at DATA_BASE+MEMSZ-16
+% and call pushes return addresses above CODE_BASE, so the array must
+% cover [0, CODE_BASE + <code length> + slack).
 symnames = {};  symvals = [];    % data symbol code-vectors -> byte address
 clnames = {};   clvals = [];     % code label code-vectors -> instruction index
 code = {};
@@ -129,6 +132,9 @@ for li = 1:numel(lines)
         code{end+1} = sim_parse_insn(L);
     end
 end
+% ---- mem: [0, CODE_BASE) plus room for call return-address pushes ----
+mem = zeros(1, CODE_BASE + numel(code) + 64, 'uint8');
+
 % ---- pass 2: emit the data bytes (resolve label references) ----
 for k = 1:numel(pending)
     e = pending{k};
@@ -227,7 +233,7 @@ elseif m == 18           % cmpq
     sim_setflags_cmp(sim_opval(b), sim_opval(a));
 elseif m == 19           % testb
     r = bitand(mod(sim_opval(b), 256), mod(sim_opval(a), 256), 'int64');
-    sim_setflags_alu(r);
+    sim_setflags_test(r);
 elseif m == 20           % cqto
     if regs(1) < 0
         regs(3) = int64(-1);
@@ -390,10 +396,6 @@ if numel(a) >= 7 && ~isempty(a{7})
     end
     return;
 end
-if a{4} > 0                      % a resolved symbol address
-    ad = a{4};
-    return;
-end
 ad = a{2};
 if a{3} > 0
     ad = ad + double(regs(a{3}));
@@ -412,13 +414,22 @@ sf = (r < 0);
 cf = 0; of = 0;
 end
 
+function sim_setflags_test(r)
+% testb flags: ZF from zero, SF from bit 7 (the operand is a byte), CF/OF
+% clear. sim_setflags_alu would never set SF (0..255 is never negative).
+global zf sf cf of
+zf = (r == 0);
+sf = (r >= 128);
+cf = 0; of = 0;
+end
+
 function sim_setflags_cmp(d, s)
 global zf sf cf of
 d = double(d); s = double(s);
 r = d - s;
 zf = (r == 0);
 sf = (r < 0);
-cf = (mod(d, 4294967296) < mod(s, 4294967296));
+cf = (mod(d, 18446744073709551616) < mod(s, 18446744073709551616));
 of = 0;
 if (d < 0 && s >= 0 && r >= 0) || (d >= 0 && s < 0 && r < 0)
     of = 1;
@@ -692,7 +703,7 @@ while i <= nf
     elseif conv == 120 || conv == 88     % x X
         txt = sim_hex(mod(double(av), 18446744073709551616), 16);
         if conv == 88
-            txt = txt + 32 * (txt >= 97) - 32 * (txt >= 97);
+            txt = txt - 32 * (txt >= 97);   % uppercase
         end
         txt = strip0c(txt);
         txt = pad_cv(txt, w, left, zero);
@@ -736,6 +747,12 @@ end
 if prec >= 0
     while numel(s) < prec
         s = [48, s];
+    end
+    zero = 0;
+end
+if zero && ~left
+    while numel(s) + numel(sgn) < w
+        s = [48, s];           % zeros BETWEEN the sign and the digits
     end
     zero = 0;
 end
@@ -1150,8 +1167,6 @@ end
 function op = sim_parse_mem(s, p1)
 % mem forms: imm(%rbp) | (%rax) | (%rsi,%rcx) | imm(%rsi,%rcx) | name(%rip)
 p2 = sim_find(s, 41);
-if isempty(p2)
-end
 inside = s(p1+1:p2(1)-1);
 parts = sim_split_commas(inside);
 op = {3, 0, 0, 0, 0, 0, []};

@@ -67,7 +67,7 @@ src/
 LICENSE, README.md
 
 tests/
-  run_tests.m         test harness (740 checks: probe gate, VM, lexer,
+  run_tests.m         test harness (764 checks: probe gate, VM, lexer,
                       program corpus, syscall/acceptance, cc_int/gcc,
                       x86sim, cross-track parity, instruction-count
                       regression, peephole-pass unit fixtures)
@@ -225,12 +225,13 @@ codegen (to a fixed point) into something much tighter. The rules
   stack (`movq %rax, %r8; <rhs>; movq %rax, (%r8)`) when the rhs makes no
   call.
 
-Measured on the compiler corpus: **8,697 → 6,184 emitted instructions
-(−29%)**, `pushq`/`popq` **2,391 → 571 (−76%)**, hello.c **106 → 73** —
-with the 740-check suite green at every step (exit codes through gcc AND
-the gcc-free x86sim must agree). The suite's instruction-count regression
-ratchets the ceilings down per phase, and the `ppunit` fixtures keep every
-individual fold rule tested in isolation.
+Measured on the compiler corpus: **8,697 → 6,004 emitted instructions
+(−31%)**, `pushq`/`popq` **2,391 → 571 (−76%)**, hello.c **106 → 72** —
+with the suite green at every step (exit codes through gcc AND the
+gcc-free x86sim must agree). The suite's instruction-count regression
+ratchets the ceilings down per phase (and up when the corpus grows), and
+the `ppunit` fixtures keep every individual fold rule tested in
+isolation.
 
 ### Interpreter track (xc.m)
 
@@ -268,7 +269,7 @@ otherwise bleed into each other). The dialect is feature-complete against its
 documented scope; remaining C features (structs, unions, `switch`,
 `for`/`do-while`, …) are outside both the port and the reference dialect.
 
-Tests (740 checks — probe gate, VM selftest, lexer selftest, the program
+Tests (764 checks — probe gate, VM selftest, lexer selftest, the program
 corpus whose exit codes/outputs are cross-verified against the reference
 build, a gcc-gated group that compiles and runs the assembly-track
 programs, a cross-track parity group that runs the shared corpus through

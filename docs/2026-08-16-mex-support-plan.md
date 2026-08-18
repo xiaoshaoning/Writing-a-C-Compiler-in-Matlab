@@ -72,8 +72,9 @@ emulates. The `mx*` API extends exactly this pattern.
   storage, no `float` keyword initially (a `float` is a `double` with
   rounding on store — out of scope for M1).
 - **Class-id constants match real `mex.h`** (`mxDOUBLE_CLASS=6`,
-  `mxINT32_CLASS=7`, `mxUINT32_CLASS=8`, `mxCHAR_CLASS=9`, `mxLOGICAL_CLASS=3`)
-  so real-world MEX sources compile unchanged against the project's `mx.h`.
+  `mxINT32_CLASS=12`, `mxUINT32_CLASS=13`, `mxCHAR_CLASS=4`,
+  `mxLOGICAL_CLASS=3`; note `mxSINGLE_CLASS=7`) so real-world MEX
+  sources compile unchanged against the project's `mx.h`.
 - **The `mxArray` layout is this project's own documented ABI** (it only
   needs to be *self-consistent* across the three tracks and the MATLAB
   host's loader; see §5).
@@ -152,7 +153,7 @@ emulates. The `mx*` API extends exactly this pattern.
 
 ```
 offset 0:  magic          (0x4D584152 'MXAR', sanity check)
-offset 8:  class_id       (mxDOUBLE_CLASS=6, mxINT32_CLASS=7, ...)
+offset 8:  class_id       (mxDOUBLE_CLASS=6, mxINT32_CLASS=12, ...)
 offset 16: flags          (logical / complex / global bits)
 offset 24: rank           (ndims, 1..3 initially)
 offset 32: dims[3]        (inline, 8 bytes each)
