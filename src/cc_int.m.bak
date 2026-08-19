@@ -221,7 +221,7 @@ function next()
 % operators/braces keep their ASCII code; 0 = EOF. Skips whitespace and
 % `//`/`/* */` comments. Identifier text goes into idname; char literals
 % ('A', '\n') become Num; string literals become Str (text in strtext).
-global src si token token_val token_dval token_isflt idname strtext
+global src si token token_val idname strtext
 while si <= numel(src)
     c = src(si);
     if c == ' ' || c == char(9) || c == char(10) || c == char(13)
@@ -250,6 +250,7 @@ if si > numel(src)
 end
 c = src(si);
 if c >= '0' && c <= '9'
+    % integer or float literal: digits [. digits] [(e|E) [+|-] digits]
     isflt = 0;
     sstart = si;
     while si <= numel(src) && src(si) >= '0' && src(si) <= '9'
@@ -993,7 +994,7 @@ function parse_function_tail(fname2, ischarfn, rettype)
 % after 'type name': '(' params ')' '{' <statements> return '}' — emit the
 % per-function prologue, backpatch the frame size, and the epilogue.
 global token out idname lvars lvartype lvararr lvarstruct fbytes funcs fret ...
-       retlbl cfn cret cvoid glabels fparams frettype sret sretsize sretbase ginit fptypes
+       retlbl cfn cret cvoid glabels fparams frettype sret sretsize sretbase ginit
 % ischarfn: 0/1 (char return); rettype: the full return type code (0 int,
 % 1 char, 1000+2*stid struct). A struct return uses a hidden return pointer.
 expect(40);                 % (
@@ -1180,11 +1181,11 @@ while true
             if token == 128
                 if token_isflt
                     % float literal: keep the exact IEEE pattern.  Stored
-                    % as {'F', int64} so emit_globals can print exact hex.
-                    pat = cc_d2bits(token_dval);
+                    % as {'F', uint64} so emit_globals can print exact hex.
+                    pat = typecast(token_dval, 'uint64');
                     next();
                     if neg
-                        pat = bitxor(pat, bitshift(int64(1), 63));
+                        pat = bitxor(pat, uint64(9223372036854775808));
                     end
                     initv = {'F', pat};
                 else
@@ -1297,7 +1298,7 @@ for k = 1:numel(glist)
             em(sprintf('	.byte	%d', v));
         elseif t == 6
             % an int constant initializer for a double global: promote
-            em(sprintf('	.quad	0x%016X', cc_d2bits(double(v))));
+            em(sprintf('	.quad	0x%016X', typecast(double(v), 'uint64')));
         else
             em(sprintf('	.quad	%d', v));
         end
@@ -1587,7 +1588,6 @@ function parse_statement()
 % break | continue | return | expr ';'
 global token idname typedefs src si
 if token == 131 || token == 134 || token == 178 || token == 188 || ...  % int/char/struct/unsigned
-   token == 189 || ...                                          % double
    (token == 150 && isfield(typedefs, idname))            % typedef'd type
     parse_declaration();
 elseif token == 123         % '{': block
@@ -2061,8 +2061,6 @@ while true
             parse_assignment();
             if t == 1
                 em(sprintf('\tmovb\t%%al, %d(%%rbp)', off));
-            elseif t == 6
-                em(sprintf('\tmovsd\t%%xmm0, %d(%%rbp)', off));
             elseif base >= 1000 && depth == 0
                 % struct value initializer: copy ssize bytes from rax
                 em(sprintf('\tleaq\t%d(%%rbp), %%rcx', off));
@@ -2157,10 +2155,12 @@ while token == 61 || (token >= 160 && token <= 169)
         rhs_t = etype;      % the RHS expression's type
         em('\tpopq\t%rbx');
         if sav_ltype == 6 && rhs_t ~= 6
-            % double lvalue, int RHS: promote to a double value
+            % double lvalue, int RHS: promote before the store
             em('\tcvtsi2sdq\t%rax, %xmm0');
+            em('\tmovq\t%xmm0, %rax');
         elseif rhs_t == 6 && sav_ltype ~= 1 && sav_ltype ~= 6
             % int/pointer lvalue, double RHS: truncate toward zero
+            em('\tmovq\t%rax, %xmm0');
             em('\tcvttsd2siq\t%xmm0, %rax');
         end
         if sav_ltype == 3 && ~isempty(sav_bstride)
@@ -2194,38 +2194,9 @@ while token == 61 || (token >= 160 && token <= 169)
                 em('\taddq\t$8, %rcx');
                 em('\taddq\t$8, %rdx');
             end
-        elseif sav_ltype == 6
-            em('\tmovsd\t%xmm0, (%rbx)');
         else
             em('\tmovq\t%rax, (%rbx)');
         end
-    elseif sav_ltype == 6
-        % compound on a double lvalue: load-modify-store in %xmm
-        em('\tpushq\t%rax');            % save the address
-        em('\tmovsd\t(%rax), %xmm0');
-        next();
-        parse_assignment();
-        if op == 163 || op == 164
-            fail('compound "/=" and "%%=" on doubles are not supported');
-        end
-        if etype ~= 6
-            em('\tcvtsi2sdq\t%rax, %xmm0');
-        end
-        % xmm0 = the RHS value; re-load the lvalue (the address is on
-        % the stack) and combine
-        em('\tpopq\t%rbx');             % the address
-        em('\tmovsd\t(%rbx), %xmm1');   % old
-        if op == 160
-            em('\taddsd\t%xmm0, %xmm1');
-        elseif op == 161
-            em('\tsubsd\t%xmm0, %xmm1');
-        elseif op == 162
-            em('\tmulsd\t%xmm0, %xmm1');
-        else
-            em('\tdivsd\t%xmm0, %xmm1');
-        end
-        em('\tmovsd\t%xmm1, (%rbx)');
-        em('\tmovsd\t%xmm1, %xmm0');
     else
         % compound: load-modify-store through the address
         em('\tpushq\t%rax');            % save the address
@@ -2389,30 +2360,25 @@ parse_relational();
 while token == 148 || token == 149   % Eq Ne
     op = token;
     next();
-    sav_etype = etype;
-    if sav_etype == 6
-        em('\tsubq\t$8, %rsp');
-        em('\tmovsd\t%xmm0, (%rsp)');
-    else
-        em('\tmovq\t%rax, %r14');
-    end
+    em('\tpushq\t%rax');
     parse_relational();
     rhs_t = etype;
-    if sav_etype == 6 || rhs_t == 6
+    em('\tmovq\t%rax, %rbx');
+    em('\tpopq\t%rax');
+    if etype == 6 || rhs_t == 6
         % double equality: NaN is unordered (ZF=0) so == is false and
         % != is true, exactly matching C.
-        if rhs_t == 6
-            em('\tmovsd\t%xmm0, %xmm0');   % R stays in xmm0
+        if etype == 6 && rhs_t == 6
+            em('\tmovq\t%rax, %xmm0');
+            em('\tmovq\t%rbx, %xmm1');
+        elseif etype == 6
+            em('\tmovq\t%rax, %xmm0');
+            em('\tcvtsi2sdq\t%rbx, %xmm1');
         else
             em('\tcvtsi2sdq\t%rax, %xmm0');
+            em('\tmovq\t%rbx, %xmm1');
         end
-        if sav_etype == 6
-            em('\tmovsd\t(%rsp), %xmm1');
-            em('\taddq\t$8, %rsp');
-        else
-            em('\tcvtsi2sdq\t%r14, %xmm1');
-        end
-        em('\tucomisd\t%xmm0, %xmm1');
+        em('\tucomisd\t%xmm1, %xmm0');
         if op == 148
             em('\tsete\t%al');
         else
@@ -2442,29 +2408,26 @@ while token == 144 || token == 145 || token == 146 || token == 147  % Lt Gt Le G
     op = token;
     sav_etype = etype;
     next();
-    if sav_etype == 6
-        em('\tsubq\t$8, %rsp');
-        em('\tmovsd\t%xmm0, (%rsp)');
-    else
-        em('\tmovq\t%rax, %r14');
-    end
+    em('\tpushq\t%rax');
     parse_shift();
     rhs_t = etype;
+    em('\tmovq\t%rax, %rbx');
+    em('\tpopq\t%rax');
     if sav_etype == 6 || rhs_t == 6
-        % double comparison: values; L -> %xmm1, R -> %xmm0, then
-        % ucomisd b-a with b=%xmm1 (L), a=%xmm0 (R).
-        if rhs_t == 6
-            em('\tmovsd\t%xmm0, %xmm0');   % R stays in xmm0
+        % double comparison: ucomisd a, b compares b-a; flags ZF (eq),
+        % CF (b < a), PF (unordered/NaN).  C semantics: NaN comparisons
+        % are false except !=; only < and <= need the !PF guard.
+        if sav_etype == 6 && rhs_t == 6
+            em('\tmovq\t%rax, %xmm0');
+            em('\tmovq\t%rbx, %xmm1');
+        elseif sav_etype == 6
+            em('\tmovq\t%rax, %xmm0');
+            em('\tcvtsi2sdq\t%rbx, %xmm1');
         else
             em('\tcvtsi2sdq\t%rax, %xmm0');
+            em('\tmovq\t%rbx, %xmm1');
         end
-        if sav_etype == 6
-            em('\tmovsd\t(%rsp), %xmm1');
-            em('\taddq\t$8, %rsp');
-        else
-            em('\tcvtsi2sdq\t%r14, %xmm1');
-        end
-        em('\tucomisd\t%xmm0, %xmm1');
+        em('\tucomisd\t%xmm1, %xmm0');
         if op == 144        % Lt: CF && !PF
             em('\tsetb\t%al');
             em('\tsetnp\t%cl');
@@ -2540,52 +2503,38 @@ end
 function parse_additive()
 % additive := term (('+' | '-') term)* — pointer operands scale the
 % integer by the element size (1 for char*, 4 otherwise); ptr - ptr gives
-% the element difference.  Double operands live in %xmm0 (value model);
-% the left operand is saved on the xmm-stack (double) or in %r14 (int)
-% so a call inside the right operand cannot corrupt it.
+% the element difference.
 global token etype
 parse_term();
 while token == 43 || token == 45   % '+' '-'
     op = token;
     t = etype;              % the left operand's type
     next();
-    if t == 6
-        em('\tsubq\t$8, %rsp');
-        em('\tmovsd\t%xmm0, (%rsp)');
-    else
-        em('\tmovq\t%rax, %r14');   % int/ptr left
-    end
+    em('\tpushq\t%rax');
     parse_term();
     rhs_t = etype;
+    em('\tmovq\t%rax, %rbx');
+    em('\tpopq\t%rax');
     if t == 6 || rhs_t == 6
-        % double arithmetic (usual arithmetic conversions); L in %xmm0
-        % (xmm-stack) or %r14, R in %xmm0 (double) or %rax (int)
-        if rhs_t == 6
-            em('\tmovsd\t%xmm0, %xmm1');   % R -> xmm1
-            if t == 6
-                em('\tmovsd\t(%rsp), %xmm0');
-                em('\taddq\t$8, %rsp');
-            else
-                em('\tcvtsi2sdq\t%r14, %xmm0');
-            end
+        % double arithmetic: usual arithmetic conversions (int -> double)
+        if t == 6 && rhs_t == 6
+            em('\tmovq\t%rax, %xmm0');
+            em('\tmovq\t%rbx, %xmm1');
+        elseif t == 6
+            em('\tmovq\t%rax, %xmm0');
+            em('\tcvtsi2sdq\t%rbx, %xmm1');
         else
-            if t == 6
-                em('\tmovsd\t(%rsp), %xmm0');
-                em('\taddq\t$8, %rsp');
-            else
-                em('\tcvtsi2sdq\t%r14, %xmm0');
-            end
-            em('\tcvtsi2sdq\t%rax, %xmm1');
+            em('\tcvtsi2sdq\t%rax, %xmm0');
+            em('\tmovq\t%rbx, %xmm1');
         end
         if op == 43
             em('\taddsd\t%xmm1, %xmm0');
         else
             em('\tsubsd\t%xmm1, %xmm0');
         end
+        em('\tmovq\t%xmm0, %rax');
         etype = 6;
     elseif t >= 2               % the left is a pointer
-        em('\tmovq\t%rax, %rbx');   % R -> rbx
-        em('\tmovq\t%r14, %rax');   % L
         if op == 45 && rhs_t >= 2
             % ptr - ptr: byte difference / element size
             em('\tsubq\t%rbx, %rax');
@@ -2607,9 +2556,6 @@ while token == 43 || token == 45   % '+' '-'
             etype = t;      % still a pointer
         end
     else
-        % int op int
-        em('\tmovq\t%rax, %rbx');   % R -> rbx
-        em('\tmovq\t%r14, %rax');   % L
         if op == 43
             em('\taddq\t%rbx, %rax');
         else
@@ -2621,73 +2567,60 @@ end
 end
 
 function parse_term()
-% term := unary (('*' | '/' | '%') unary)* — left-associative.  Integer
-% '/' and '%' use cqto/idivq (truncation toward zero, C semantics);
-% doubles use mulsd/divsd on the %xmm0 value model with the left saved
-% on the xmm-stack / %r14 as in parse_additive.
+% term := unary (('*' | '/' | '%') unary)* — left-associative. '/' and '%'
+% use cqto/idivq: the 64-bit signed quotient is in eax, remainder in edx
+% (C semantics: truncation toward zero, remainder takes the dividend's
+% sign).
 global token etype
 parse_unary();
 while token == 42 || token == 47 || token == 37   % '*' '/' '%'
     op = token;
     sav_etype = etype;      % the dividend's type (unsigned -> divq)
     next();
-    if sav_etype == 6
-        em('\tsubq\t$8, %rsp');
-        em('\tmovsd\t%xmm0, (%rsp)');
-    else
-        em('\tmovq\t%rax, %r14');
-    end
+    em('\tpushq\t%rax');
     parse_unary();
     rhs_t = etype;
+    em('\tmovq\t%rax, %rbx');
+    em('\tpopq\t%rax');
     if sav_etype == 6 || rhs_t == 6
         % double multiplication/division (usual arithmetic conversions)
         if op == 37
             fail('%% on doubles is not supported');
         end
-        if rhs_t == 6
-            em('\tmovsd\t%xmm0, %xmm1');
-            if sav_etype == 6
-                em('\tmovsd\t(%rsp), %xmm0');
-                em('\taddq\t$8, %rsp');
-            else
-                em('\tcvtsi2sdq\t%r14, %xmm0');
-            end
+        if sav_etype == 6 && rhs_t == 6
+            em('\tmovq\t%rax, %xmm0');
+            em('\tmovq\t%rbx, %xmm1');
+        elseif sav_etype == 6
+            em('\tmovq\t%rax, %xmm0');
+            em('\tcvtsi2sdq\t%rbx, %xmm1');
         else
-            if sav_etype == 6
-                em('\tmovsd\t(%rsp), %xmm0');
-                em('\taddq\t$8, %rsp');
-            else
-                em('\tcvtsi2sdq\t%r14, %xmm0');
-            end
-            em('\tcvtsi2sdq\t%rax, %xmm1');
+            em('\tcvtsi2sdq\t%rax, %xmm0');
+            em('\tmovq\t%rbx, %xmm1');
         end
         if op == 42
             em('\tmulsd\t%xmm1, %xmm0');
         else
             em('\tdivsd\t%xmm1, %xmm0');
         end
+        em('\tmovq\t%xmm0, %rax');
         etype = 6;
+    elseif op == 42
+        em('\timulq\t%rbx, %rax');
+    elseif sav_etype == 5
+        em('\txorq\t%rdx, %rdx');
+        em('\tdivq\t%rbx');        % unsigned 128/64 division
+        if op == 37
+            em('\tmovq\t%rdx, %rax');
+        end
     else
-        em('\tmovq\t%rax, %rbx');   % rhs
-        em('\tmovq\t%r14, %rax');   % lhs
-        if op == 42
-            em('\timulq\t%rbx, %rax');
-        elseif sav_etype == 5
-            em('\txorq\t%rdx, %rdx');
-            em('\tdivq\t%rbx');        % unsigned
-            if op == 37
-                em('\tmovq\t%rdx, %rax');
-            end
-        else
-            em('\tcqto');
-            em('\tidivq\t%rbx');
-            if op == 37
-                em('\tmovq\t%rdx, %rax');
-            end
+        em('\tcqto');
+        em('\tidivq\t%rbx');
+        if op == 37
+            em('\tmovq\t%rdx, %rax');
         end
-        if sav_etype ~= 6 && rhs_t ~= 6
-            etype = 0;
-        end
+    end
+    if sav_etype ~= 6 && rhs_t ~= 6
+        etype = 0;
     end
 end
 end
@@ -2697,9 +2630,9 @@ function parse_unary()
 % postfix := '[' expr ']' | '.' name | '->' name | '++' | '--'. Prefix ops
 % apply in reverse. Types: etype tracks the type; arrays and struct values
 % decay (no load, estruc = 1 for struct values).
-global token token_val token_dval token_isflt idname strtext lvars lvartype lvararr lvarstruct ...
+global token token_val idname strtext lvars lvartype lvararr lvarstruct ...
        globals gtype garr gstruct funcs fret frettype fparams called ltype libfns libcalls ...
-       etype estruc lvarstride gstride bstride lvararrsz gvararrsz curarrsz si typedefs fbytes fptypes libargt
+       etype estruc lvarstride gstride bstride lvararrsz gvararrsz curarrsz si typedefs fbytes src token_isflt token_dval
 ops = [];
 while token == 45 || token == 126 || token == 33 || token == 43 || ...   % - ~ ! +
       token == 38 || token == 42 || token == 170 || token == 171          % & * ++ --
@@ -2842,12 +2775,14 @@ if token == 40              % '(': a cast (type)unary or parenthesised expr
         else
             parse_unary();      % the operand (cast-expression = unary)
             if cbase == 6 && cdepth == 0
-                % (double)x: int/char -> double (value into %xmm0)
+                % (double)x: int/char -> double via cvtsi2sdq
                 if etype ~= 6
                     em('\tcvtsi2sdq\t%rax, %xmm0');
+                    em('\tmovq\t%xmm0, %rax');
                 end
             elseif (cbase == 0 || cbase == 5) && cdepth == 0 && etype == 6
                 % (int)x / (unsigned)x: double -> int (truncate toward 0)
+                em('\tmovq\t%rax, %xmm0');
                 em('\tcvttsd2siq\t%xmm0, %rax');
             elseif cbase == 1 && cdepth == 0
                 em('\tmovsbl\t%al, %eax');   % truncate to a signed char
@@ -2865,8 +2800,8 @@ elseif token == 128         % Num
         % a double literal: movabsq $0x<pattern>, %rax.  The exact
         % 64-bit hex form is parsed exactly by x86sim (sim_num64); the
         % ordinary decimal form would lose precision for large patterns.
-        em(sprintf('\tmovabsq\t$0x%016X, %%rax', cc_d2bits(token_dval)));
-        em('\tmovq\t%rax, %xmm0');
+        em(sprintf('\tmovabsq\t$0x%016X, %%rax', ...
+            mod(double(typecast(token_dval, 'uint64')), 18446744073709551616)));
         etype = 6;
     else
         em(sprintf('\tmovq\t$%d, %%rax', double(token_val)));
@@ -2949,23 +2884,15 @@ elseif token == 150         % Id: function call or variable
                 end
                 if ~isempty(dt) && dt == 6 && at ~= 6
                     em('\tcvtsi2sdq\t%rax, %xmm0');
+                    em('\tmovq\t%xmm0, %rax');
                 elseif ~isempty(dt) && dt ~= 6 && at == 6
+                    em('\tmovq\t%rax, %xmm0');
                     em('\tcvttsd2siq\t%xmm0, %rax');
-                end
-                pushed = 0;
-                if at == 6 || dt == 6
-                    % a double-typed argument: its VALUE lives in %xmm0
-                    % and is pushed onto the stack directly
-                    em('\tsubq\t$8, %rsp');
-                    em('\tmovsd\t%xmm0, (%rsp)');
-                    pushed = 1;
                 end
                 % by-value struct arg: copy the full size instead of
                 % pushing one word (the callee's declared param sizes)
                 asz = 8;
-                if pushed
-                    asz = 0;    % already on the stack
-                elseif isfield(fparams, name) && nargs + 1 <= numel(fparams.(name))
+                if isfield(fparams, name) && nargs + 1 <= numel(fparams.(name))
                     asz = fparams.(name)(nargs + 1);
                 elseif estruc
                     asz = ssize_of(etype);
@@ -2977,7 +2904,7 @@ elseif token == 150         % Id: function call or variable
                         em('\tpushq\t%r8');
                         em('\taddq\t$8, %rdx');
                     end
-                elseif ~pushed
+                else
                     em('\tpushq\t%rax');
                 end
                 nargs = nargs + 1;
@@ -3002,9 +2929,6 @@ elseif token == 150         % Id: function call or variable
             % runtime-library call: go through the Win64-ABI shim
             libcalls.(sprintf('%s_%d', name, nargs)) = 1;
             em(sprintf('\tcall\t__cc_%s_%d', name, nargs));
-            if isfield(libargt, name)        % all-double math intrinsic:
-                etype = 6;                   % result is a VALUE in %xmm0
-            end
         else
             em(sprintf('\tcall\t%s', name));
         end
@@ -3020,7 +2944,7 @@ elseif token == 150         % Id: function call or variable
         end
         if isfield(fret, name)
             etype = fret.(name);
-        elseif ~(isfield(libfns, name) && isfield(libargt, name))
+        else
             etype = 0;
         end
         if sret_call
@@ -3076,9 +3000,6 @@ elseif token == 150         % Id: function call or variable
                 if ~isarr
                     if t == 1
                         em('\tmovzbl\t(%rax), %eax');
-                    elseif t == 6
-                        % a double VARIABLE load: value to %xmm0
-                        em('\tmovsd\t(%rax), %xmm0');
                     else
                         em('\tmovq\t(%rax), %rax');
                     end
@@ -3087,6 +3008,8 @@ elseif token == 150         % Id: function call or variable
         end
     end
 else
+    fprintf('DBG tok=%d tv=%d flt=%d si=%d
+', token, double(token_val), token_isflt, si); % TEMP
     fail('expected a number, variable, or parenthesised expression');
 end
 
@@ -3234,8 +3157,6 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
             estruc = 0;
             if etype == 1
                 em('\tmovzbl\t(%rax), %eax');
-            elseif etype == 6
-                em('\tmovsd\t(%rax), %xmm0');
             else
                 em('\tmovq\t(%rax), %rax');
             end
@@ -3253,20 +3174,19 @@ end
 % prefix operators, innermost (rightmost) first
 for k = numel(ops):-1:1
     op = ops(k);
-    if op == 45 && etype == 6     % '-' on a double: 0.0 - d in the
-                                    % value domain (exact sign flip)
-        em('\tmovabsq\t$0, %r15');
-        em('\tcvtsi2sdq\t%r15, %xmm1');
-        em('\tsubsd\t%xmm0, %xmm1');
-        em('\tmovsd\t%xmm1, %xmm0');
+    if op == 45 && etype == 6     % '-' on a double: flip the sign bit
+        em('\tmovabsq\t$0x8000000000000000, %%rbx');
+        em('\txorq\t%%rbx, %%rax');
     elseif op == 45             % '-' on an integer
         em('\tnegq\t%rax');
     elseif op == 126        % '~'
         em('\tnotq\t%rax');
     elseif op == 33 && etype == 6   % '!' on a double: (d == 0.0)
-        em('\tmovabsq\t$0, %r15');
-        em('\tcvtsi2sdq\t%r15, %xmm1');
-        em('\tucomisd\t%xmm0, %xmm1');   % b=xmm1=0, a=d
+        % ucomisd: ZF set for equal (incl. +-0); NaN is unordered (ZF=0)
+        em('\tmovabsq\t$0, %%rbx');
+        em('\tmovq\t%rax, %xmm0');
+        em('\tmovq\t%rbx, %xmm1');
+        em('\tucomisd\t%xmm1, %xmm0');
         em('\tsete\t%al');
         em('\tmovzbl\t%al, %eax');
         etype = 0;
@@ -3292,9 +3212,6 @@ for k = numel(ops):-1:1
                 estruc = 0;
             elseif etype >= 1000
                 estruc = 1;     % a struct value: no load
-            elseif etype == 6
-                em('\tmovsd\t(%rax), %xmm0');
-                estruc = 0;
             else
                 em('\tmovq\t(%rax), %rax');
                 estruc = 0;
@@ -3342,26 +3259,23 @@ end
 em('\tpushq\t%rax');            % save the address
 if t == 1
     em('\tmovzbl\t(%rax), %eax');
-elseif t == 6
-    em('\tmovsd\t(%rax), %xmm0');
 else
     em('\tmovq\t(%rax), %rax');
 end
 if post
-    if t == 6
-        em('\tmovsd\t%xmm0, %xmm2');   % old value
-    else
-        em('\tmovq\t%rax, %rbx');   % old value
-    end
+    em('\tmovq\t%rax, %rbx');   % old value = the postfix result
 end
 if t == 6
-    em('\tmovabsq\t$0x3FF0000000000000, %rbx');
-    em('\tcvtsi2sdq\t%rbx, %xmm1');   % 1.0
+    % double ++/-- : add/sub 1.0 in SSE
+    em('\tmovq\t%rax, %xmm0');
+    em('\tmovabsq\t$0x3FF0000000000000, %%rbx');   % 1.0
+    em('\tmovq\t%rbx, %xmm1');
     if op == 170
         em('\taddsd\t%xmm1, %xmm0');
     else
         em('\tsubsd\t%xmm1, %xmm0');
     end
+    em('\tmovq\t%xmm0, %rax');
 elseif op == 170
     em(sprintf('\taddq\t$%d, %%rax', scale));
 else
@@ -3371,63 +3285,16 @@ if post
     em('\tpopq\t%rcx');         % the address
     if t == 1
         em('\tmovb\t%al, (%rcx)');
-    elseif t == 6
-        em('\tmovsd\t%xmm0, (%rcx)');
     else
         em('\tmovq\t%rax, (%rcx)');
     end
-    if t == 6
-        em('\tmovsd\t%xmm2, %xmm0');   % old value
-    else
-        em('\tmovq\t%rbx, %rax');
-    end
+    em('\tmovq\t%rbx, %rax');   % restore the old value
 else
     em('\tpopq\t%rbx');         % the address
     if t == 1
         em('\tmovb\t%al, (%rbx)');
-    elseif t == 6
-        em('\tmovsd\t%xmm0, (%rbx)');
     else
         em('\tmovq\t%rax, (%rbx)');
     end
 end
-end
-
-
-function b = cc_d2bits(d)
-% cc_d2bits — the IEEE-754 double d as an int64 bit pattern.  Exact
-% integer arithmetic only (no typecast: the clone's typecast can corrupt
-% bit patterns in local-function contexts).
-if isnan(d)
-    b = bitor(int64(9218868437227405312), int64(2251799813685248)); % +NaN
-    return;
-elseif isinf(d)
-    b = int64(9218868437227405312);   % +Inf
-    if d < 0
-        b = bitor(b, bitshift(int64(1), 63));
-    end
-    return;
-elseif d == 0
-    if 1 / d < 0
-        b = bitshift(int64(1), 63);   % -0.0
-    else
-        b = int64(0);
-    end
-    return;
-end
-negbit = int64(0);
-if d < 0
-    negbit = bitshift(int64(1), 63);
-    d = -d;
-end
-e = floor(log2(d));   % d<1 needs floor (fix truncates toward 0)
-if e < -1022
-    mant = int64(d / 2^-1074);        % subnormal
-    expo = int64(0);
-else
-    f = d / 2^e;
-    mant = int64(round((f - 1) * 2^52));
-    expo = int64(e) + int64(1023);
-end
-b = bitor(negbit, bitor(bitshift(expo, 52), mant));
 end

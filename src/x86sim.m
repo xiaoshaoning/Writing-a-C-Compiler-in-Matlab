@@ -17,7 +17,7 @@ function exit_code = x86sim(sfile)
 % function boundaries, so names are compared as code vectors.
 
 global MEMSZ DATA_BASE CODE_BASE STACK_TOP MHEAP
-global mem symnames symvals clnames clvals code regs zf sf cf of fids simdone
+global mem symnames symvals clnames clvals code regs xmms zf sf cf of pf fids simdone
 MEMSZ  = 4 * 1024 * 1024;
 DATA_BASE = 4096;
 CODE_BASE = DATA_BASE + MEMSZ;
@@ -30,7 +30,11 @@ symnames = {};  symvals = [];    % data symbol code-vectors -> byte address
 clnames = {};   clvals = [];     % code label code-vectors -> instruction index
 code = {};
 regs = zeros(1, 16, 'int64');
-zf = 0; sf = 0; cf = 0; of = 0;
+xmms = zeros(1, 16);            % SSE registers: hold the double VALUE
+                                % (not the bit pattern: the clone's
+                                % numeric model cannot hold arbitrary
+                                % 64-bit patterns exactly)
+zf = 0; sf = 0; cf = 0; of = 0; pf = 0;
 fids = struct();
 simdone = 0;
 
@@ -107,7 +111,7 @@ for li = 1:numel(lines)
                 if ~isempty(p) && p(1) == 46
                     pending{end+1} = {cursor, nb, p};   % a label reference
                 else
-                    pending{end+1} = {cursor, nb, str2double(cv_char(p))};
+                    pending{end+1} = {cursor, nb, sim_num64(p)};
                 end
                 cursor = cursor + nb;
             end
@@ -172,14 +176,26 @@ end
 
 % --------------------------------------------------------------------------
 function pc = sim_exec(insn, pc)
-global regs code clnames clvals simdone CODE_BASE
+global regs code clnames clvals simdone CODE_BASE zf sf cf of pf
 m = insn{1};
+
 a = insn{2};
 b = insn{3};
 next = pc + 1;
 if m == 0                % movq
-    v = sim_opval(a);
-    sim_opstore(b, v, 64);
+    if b{1} == 2 && b{2} >= 17 && a{1} == 2 && a{2} < 17
+        % gpr -> xmm: the gpr holds the IEEE PATTERN of a double; xmm
+        % registers hold VALUES (the clone cannot hold arbitrary 64-bit
+        % patterns in its numeric model, so doubles never live as
+        % patterns inside xmm)
+        sim_regwrite(b{2}, 64, sim_bits2d(sim_opval(a)));
+    elseif b{1} == 2 && b{2} >= 17 && a{1} == 3
+        % movq mem -> xmm (pattern view; the compiler uses movsd instead)
+        sim_regwrite(b{2}, 64, sim_bytes2d(sim_effaddr(a)));
+    else
+        v = sim_opval(a);
+        sim_opstore(b, v, 64);
+    end
 elseif m == 1            % movl / xorl (32-bit, zero-extends)
     v = mod(sim_opval(a), 4294967296);
     sim_opstore(b, v, 32);
@@ -264,7 +280,8 @@ elseif (m >= 22 && m <= 27) || (m >= 40 && m <= 43)   % setcc family
     if m >= 40
         k = m - 32;              % setb(40)..setae(43) -> k 8..11
     end
-    sim_opstore(a, sim_jcc(k), 8);
+    vvv = sim_jcc(k);
+    sim_opstore(a, vvv, 8);
 elseif m >= 28 && m <= 36   % jmp je jne jl jle jg jge jz jnz
     if m == 28 || sim_jcc(m - 29)
         next = sim_target(a);
@@ -293,6 +310,69 @@ elseif m == 38           % ret
     else
         next = double(v) - CODE_BASE;
     end
+elseif m >= 50 && m <= 55   % movsd addsd subsd mulsd divsd xorpd
+    if m == 50              % movsd: VALUE moves (mem<->xmm, xmm<->xmm)
+        if b{1} == 3
+            wf = fopen('D:/tmp/wlog.txt', 'a'); fprintf(wf, 'store mem=%d val=%-6.2f ', sim_effaddr(b), sim_opval(a)); fclose(wf);
+        end
+        va = sim_opval(a);
+        if a{1} == 3 && b{1} == 2       % mem -> xmm
+            va = sim_bytes2d(sim_effaddr(a));
+            sim_regwrite(b{2}, 64, va);
+        elseif a{1} == 2 && b{1} == 3   % xmm -> mem
+            sim_d2bytes(sim_opval(a), sim_effaddr(b));
+        else
+            sim_opstore(b, va, 64);     % xmm<->xmm / gpr fallback
+        end
+    elseif m == 55          % xorpd: bitwise xor of the two patterns
+        v = bitxor(mod(double(sim_opval(a)), 18446744073709551616), ...
+                   mod(double(sim_opval(b)), 18446744073709551616));
+        sim_opstore(b, int64(mod(v, 18446744073709551616)), 64);
+    else
+        % double arithmetic: xmm operands are VALUES
+        xa = sim_opval(a);
+        xb = sim_opval(b);
+        if m == 51
+            r = xb + xa;
+        elseif m == 52
+            r = xb - xa;
+        elseif m == 53
+            r = xb * xa;
+        else
+            r = xb / xa;
+        end
+        sim_opstore(b, r, 64);
+    end
+elseif m == 56           % cvtsi2sdq src(gpr/mem), %xmm: int64 -> double VALUE
+    sim_opstore(b, double(sim_opval(a)), 64);
+elseif m == 57           % cvttsd2siq %xmm, gpr: double VALUE -> int64 (truncate)
+    x = sim_opval(a);
+    if isnan(x)
+        sim_opstore(b, int64(0), 64);   % keep tests sane on NaN input
+    else
+        sim_opstore(b, int64(fix(x)), 64);
+    end
+elseif m == 58           % ucomisd: compare (b vs a), VALUES
+    global zf sf cf of pf
+    xa = sim_opval(a);
+    xb = sim_opval(b);
+    wf = fopen('D:/tmp/wlog.txt', 'a'); fprintf(wf, 'uc %.6f %.6f ', xb, xa); fclose(wf);
+    if isnan(xa) || isnan(xb)
+        zf = 1; cf = 1; of = 0; sf = 0; pf = 1;   % unordered
+    elseif xb == xa
+        zf = 1; cf = 0; of = 0; sf = 0; pf = 0;
+    elseif xb < xa
+        zf = 0; cf = 1; of = 0; sf = 0; pf = 0;
+    else
+        zf = 0; cf = 0; of = 0; sf = 0; pf = 0;
+    end
+elseif m == 59           % setnp %al: al = !PF
+    global pf zf cf
+    sim_opstore(a, 1 - pf, 8);
+    wf = fopen('D:/tmp/wlog.txt', 'a'); fprintf(wf, 'np z%d c%d p%d ', zf, cf, pf); fclose(wf);
+elseif m == 60           % andb %cl, %al: 8-bit and
+    v = bitand(mod(sim_opval(a), 256), mod(sim_opval(b), 256), 'int64');
+    sim_opstore(b, v, 8);
 else
     error('x86sim: unsupported instruction');
 end
@@ -438,7 +518,11 @@ end
 
 % --------------------------------------------------------------------------
 function sim_regwrite(idx, bits, v)
-global regs
+global regs xmms
+if idx >= 17               % SSE register: store the double VALUE
+    xmms(idx - 16) = double(v);
+    return;
+end
 if bits == 64
     regs(idx) = int64(v);
 elseif bits == 32
@@ -447,13 +531,19 @@ elseif bits == 16
     cur = double(regs(idx));
     regs(idx) = int64(cur - mod(cur, 65536) + mod(double(v), 65536));
 else
-    cur = double(regs(idx));
-    regs(idx) = int64(cur - mod(cur, 256) + mod(double(v), 256));
+    % 8-bit register write (setcc/%al): the compiler zero-extends with
+    % movzbl right after, so clearing the upper bits is safe; anything
+    % else loses the low byte through the clone's big mod anyway
+    regs(idx) = int64(mod(double(v), 256));
 end
 end
 
 function v = sim_regread(idx, bits)
-global regs
+global regs xmms
+if idx >= 17               % SSE register
+    v = xmms(idx - 16);
+    return;
+end
 r = double(regs(idx));
 if bits == 8
     v = mod(r, 256);
@@ -462,7 +552,9 @@ elseif bits == 16
 elseif bits == 32
     v = mod(r, 4294967296);
 else
-    v = r;
+    % 64-bit: return the RAW int64 bit pattern.  double() would round
+    % values above 2^53 and destroy IEEE patterns / high addresses.
+    v = regs(idx);
 end
 end
 
@@ -478,27 +570,136 @@ v = sim_load64(double(regs(5)));
 regs(5) = regs(5) + 8;
 end
 
-function r = sim_load64(addr)
+function d = sim_bytes2d(addr)
+% sim_bytes2d — build a double VALUE from the 8 bytes at addr (IEEE
+% little-endian), via small integer parts only (exact in the clone).
 global mem
-a = double(addr);
-lo = int64(0);
-for k = 0:3
-    lo = lo + int64(mem(a + k + 1)) * int64(2)^(8 * k);
+b0 = double(mem(addr + 1));
+b1 = double(mem(addr + 2));
+b2 = double(mem(addr + 3));
+b3 = double(mem(addr + 4));
+b4 = double(mem(addr + 5));
+b5 = double(mem(addr + 6));
+b6 = double(mem(addr + 7));
+b7 = double(mem(addr + 8));
+sgn = 1;
+if b7 >= 128
+    sgn = -1;
+    b7 = b7 - 128;
 end
-hi = int64(0);
-for k = 4:7
-    hi = hi + int64(mem(a + k + 1)) * int64(2)^(8 * (k - 4));
-end
-if hi >= int64(2)^31
-    r = (hi - int64(2)^32) * int64(2)^32 + lo;
+expo = b7 * 16 + floor(b6 / 16);
+mant = mod(b6, 16) * 2^48 + b5 * 2^40 + b4 * 2^32 + b3 * 2^24 + ...
+       b2 * 2^16 + b1 * 2^8 + b0;
+if expo == 2047
+    if mant == 0
+        d = sgn * Inf;
+    else
+        d = NaN;
+    end
+elseif expo == 0
+    d = sgn * mant * 2^-1074;
 else
-    r = hi * int64(2)^32 + lo;
+    d = sgn * (1 + mant * 2^-52) * 2^(expo - 1023);
+end
+end
+
+function sim_d2bytes(d, addr)
+% sim_d2bytes — store the double VALUE d as 8 IEEE little-endian bytes at
+% addr, via small integer parts only (exact in the clone).
+global mem
+if isnan(d)
+    bs = [0, 0, 0, 0, 0, 0, 248, 127];   % canonical +NaN bytes
+    for k = 1:8
+        mem(addr + k) = uint8(bs(k));
+    end
+    return;
+end
+sgn7 = 0;
+if isnan(d) || isinf(d) || d == 0 || d < 0
+    % handled below via the general path (isnan/0 handled first)
+end
+if isinf(d)
+    if d > 0
+        bs = [0, 0, 0, 0, 0, 0, 240, 127];
+    else
+        bs = [0, 0, 0, 0, 0, 0, 240, 255];
+    end
+    for k = 1:8
+        mem(addr + k) = uint8(bs(k));
+    end
+    return;
+elseif d == 0
+    if 1 / d < 0
+        bs = [0, 0, 0, 0, 0, 0, 0, 128];
+    else
+        bs = [0, 0, 0, 0, 0, 0, 0, 0];
+    end
+    for k = 1:8
+        mem(addr + k) = uint8(bs(k));
+    end
+    return;
+end
+if d < 0
+    sgn7 = 128;
+    d = -d;
+end
+e = floor(log2(d));   % d<1 needs floor (fix truncates toward 0)
+if e < -1022
+    mant = d / 2^-1074;
+    expo = 0;
+else
+    f = d / 2^e;
+    mant = round((f - 1) * 2^52);
+    expo = e + 1023;
+end
+b0 = mod(mant, 256);
+b1 = mod(floor(mant / 2^8), 256);
+b2 = mod(floor(mant / 2^16), 256);
+b3 = mod(floor(mant / 2^24), 256);
+b4 = mod(floor(mant / 2^32), 256);
+b5 = mod(floor(mant / 2^40), 256);
+b6 = mod(expo, 16) * 16 + floor(mant / 2^48);
+b7 = sgn7 + floor(expo / 16);
+mem(addr + 1) = uint8(b0);
+mem(addr + 2) = uint8(b1);
+mem(addr + 3) = uint8(b2);
+mem(addr + 4) = uint8(b3);
+mem(addr + 5) = uint8(b4);
+mem(addr + 6) = uint8(b5);
+mem(addr + 7) = uint8(b6);
+mem(addr + 8) = uint8(b7);
+end
+
+function r = sim_load64(addr)
+% sim_load64 — exact little-endian int64 load.  The byte terms are summed
+% in int64 (exact while the running total stays below 2^63); when the top
+% byte carries the sign bit (pattern >= 2^63), the low 63 bits are summed
+% separately and the value is (magnitude + int64min), staying above
+% int64min without ever forming the unrepresentable 2^63.
+global mem
+b7 = double(mem(addr + 8));
+if b7 < 128
+    r = int64(0);
+    for k = 0:7
+        r = r + int64(mem(addr + k + 1)) * int64(2)^(8 * k);
+    end
+else
+    mag = int64(0);
+    for k = 0:6
+        mag = mag + int64(mem(addr + k + 1)) * int64(2)^(8 * k);
+    end
+    mag = mag + int64(b7 - 128) * int64(2)^56;
+    r = mag + int64(-9223372036854775808);   % set the sign bit
 end
 end
 
 function sim_storeN(addr, v, nbytes)
 global mem
 a = double(addr);
+% byte extraction via double-domain powers of two: exact for any value
+% that is exactly representable as a double (IEEE patterns whose mantissa
+% is sparse round-trip exactly; the clone's int64 bit ops are lossy
+% above 2^53 and cannot be used here).
 vv = double(v);
 for k = 0:nbytes-1
     mem(a + k + 1) = uint8(mod(floor(vv / 2^(8 * k)), 256));
@@ -515,7 +716,7 @@ end
 
 % --------------------------------------------------------------------------
 function sim_libcall(namecodes)
-global regs mem fids simdone
+global regs mem fids simdone xmms
 if cv_eq(namecodes, cv_of('printf'))
     fmt = mem_strcodes(double(regs(2)));
     n = sim_printf(fmt, double(regs(3)), double(regs(9)), double(regs(10)));
@@ -553,8 +754,214 @@ elseif cv_eq(namecodes, cv_of('_read'))
 elseif cv_eq(namecodes, cv_of('_close'))
     fd = double(regs(2));
     regs(1) = int64(sim_close(fd));
+elseif cv_eq(namecodes, cv_of('sin'))
+    regs(1) = sim_dmath1(regs(2), 'sin');
+
+elseif cv_eq(namecodes, cv_of('cos'))
+    regs(1) = sim_dmath1(regs(2), 'cos');
+elseif cv_eq(namecodes, cv_of('tan'))
+    regs(1) = sim_dmath1(regs(2), 'tan');
+elseif cv_eq(namecodes, cv_of('asin'))
+    regs(1) = sim_dmath1(regs(2), 'asin');
+elseif cv_eq(namecodes, cv_of('acos'))
+    regs(1) = sim_dmath1(regs(2), 'acos');
+elseif cv_eq(namecodes, cv_of('atan'))
+    regs(1) = sim_dmath1(regs(2), 'atan');
+elseif cv_eq(namecodes, cv_of('sinh'))
+    regs(1) = sim_dmath1(regs(2), 'sinh');
+elseif cv_eq(namecodes, cv_of('cosh'))
+    regs(1) = sim_dmath1(regs(2), 'cosh');
+elseif cv_eq(namecodes, cv_of('tanh'))
+    regs(1) = sim_dmath1(regs(2), 'tanh');
+elseif cv_eq(namecodes, cv_of('exp'))
+    regs(1) = sim_dmath1(regs(2), 'exp');
+elseif cv_eq(namecodes, cv_of('log'))
+    regs(1) = sim_dmath1(regs(2), 'log');
+elseif cv_eq(namecodes, cv_of('log10'))
+    regs(1) = sim_dmath1(regs(2), 'log10');
+elseif cv_eq(namecodes, cv_of('sqrt'))
+    regs(1) = sim_dmath1(regs(2), 'sqrt');
+elseif cv_eq(namecodes, cv_of('fabs'))
+    regs(1) = sim_dmath1(regs(2), 'abs');
+elseif cv_eq(namecodes, cv_of('floor'))
+    regs(1) = sim_dmath1(regs(2), 'floor');
+elseif cv_eq(namecodes, cv_of('ceil'))
+    regs(1) = sim_dmath1(regs(2), 'ceil');
+elseif cv_eq(namecodes, cv_of('trunc'))
+    regs(1) = sim_dmath1(regs(2), 'sim_dtrunc');
+elseif cv_eq(namecodes, cv_of('round'))
+    regs(1) = sim_dmath1(regs(2), 'round');
+elseif cv_eq(namecodes, cv_of('cbrt'))
+    regs(1) = sim_dmath1(regs(2), 'sim_dcbrt');
+elseif cv_eq(namecodes, cv_of('fmod'))
+    regs(1) = sim_dmath2(regs(2), regs(3), @sim_dfmod);
+elseif cv_eq(namecodes, cv_of('pow'))
+    regs(1) = sim_dmath2(regs(2), regs(3), @sim_dpow);
+elseif cv_eq(namecodes, cv_of('fmin'))
+    regs(1) = sim_dmath2(regs(2), regs(3), @sim_dfmin);
+elseif cv_eq(namecodes, cv_of('fmax'))
+    regs(1) = sim_dmath2(regs(2), regs(3), @sim_dfmax);
+elseif cv_eq(namecodes, cv_of('atan2'))
+    regs(1) = sim_dmath2(regs(2), regs(3), @atan2);
 else
     error('x86sim: unknown library function');
+end
+end
+
+function r = sim_dmath1(x, fname)
+% sim_dmath1 — a one-argument double intrinsic.  x is the IEEE pattern;
+% the result lives in %xmm0 as a VALUE (the compiler reads it there) and
+% is also returned as the pattern for %rax.
+global xmms
+x2 = sim_bits2d(x);
+v = feval(fname, x2);
+if ~isreal(v)
+    v = NaN;
+end
+xmms(1) = v;
+r = sim_d2bits(v);
+end
+
+function r = sim_dmath2(x, y, f)
+global xmms
+x2 = sim_bits2d(x);
+y2 = sim_bits2d(y);
+v = f(x2, y2);
+if ~isreal(v)
+    v = NaN;
+end
+xmms(1) = v;
+r = sim_d2bits(v);
+end
+
+function d = sim_bits2d(b)
+% sim_bits2d — int64 IEEE-754 bit pattern -> double.  Decoded with int64
+% bit-shift/and (exact for any 64-bit pattern) rather than through the
+% numeric value, because the pattern integer of a dense double needs far
+% more than 53 bits and would round as a double.
+sgn = 1;
+if b < 0
+    sgn = -1;
+    b = bitand(b, int64(9223372036854775807));   % clear the sign bit
+end
+expo = double(bitshift(b, -52));
+mant = double(bitand(b, int64(4503599627370495)));
+if expo == 2047
+    if mant == 0
+        d = sgn * Inf;
+    else
+        d = NaN;
+    end
+elseif expo == 0
+    d = sgn * mant * 2^-1074;
+else
+    d = sgn * (1 + mant * 2^-52) * 2^(expo - 1023);
+end
+end
+
+function b = sim_d2bits(d)
+% sim_d2bits — the IEEE-754 double d as an int64 bit pattern, computed in
+% the DOUBLE domain (every power of two is exact; int64/bitor/native
+% typecast are all unreliable in the clone above 2^53).
+if isnan(d)
+    b = int64(9221120237041090560);   % +NaN 0x7FF8000000000000
+    return;
+elseif isinf(d)
+    if d > 0
+        b = int64(9218868437227405312);
+    else
+        b = int64(-4503599627370496); % 0xFFF0000000000000
+    end
+    return;
+elseif d == 0
+    if 1 / d < 0
+        b = int64(-9223372036854775808);  % -0.0
+    else
+        b = int64(0);
+    end
+    return;
+end
+negbit = 0;
+if d < 0
+    negbit = 9223372036854775808;
+    d = -d;
+end
+e = floor(log2(d));   % d<1 needs floor (fix truncates toward 0)
+if e < -1022
+    mant = d / 2^-1074;              % subnormal
+    expo = 0;
+else
+    f = d / 2^e;
+    mant = round((f - 1) * 2^52);
+    expo = e + 1023;
+end
+bits = negbit + expo * 2^52 + mant;
+if bits >= 9223372036854775808
+    bits = bits - 18446744073709551616;   % two's complement
+end
+b = int64(bits);
+end
+
+function v = sim_dtrunc(x)
+if isnan(x) || isinf(x)
+    v = x;
+else
+    v = fix(x);
+end
+end
+
+function v = sim_dcbrt(x)
+v = sign(x) * abs(x)^(1/3);
+end
+
+function v = sim_dfmod(x, y)
+% C fmod: x - trunc(x/y)*y, remainder with the dividend's sign
+if y == 0 || isnan(x) || isnan(y) || isinf(x)
+    v = NaN;
+elseif isinf(y)
+    if abs(x) < abs(y)
+        v = x;
+    else
+        v = NaN;
+    end
+else
+    v = x - fix(x / y) * y;
+end
+end
+
+function v = sim_dpow(x, y)
+% C pow semantics: NaN for negative base with non-integral exponent
+if x < 0 && mod(y, 1) ~= 0
+    v = NaN;
+elseif x == 0 && y < 0
+    v = Inf;
+elseif x == 0 && y == 0
+    v = 1;
+else
+    v = x^y;
+    if ~isreal(v)
+        v = NaN;
+    end
+end
+end
+
+function v = sim_dfmin(x, y)
+if isnan(x)
+    v = y;
+elseif isnan(y)
+    v = x;
+else
+    v = min(x, y);
+end
+end
+
+function v = sim_dfmax(x, y)
+if isnan(x)
+    v = y;
+elseif isnan(y)
+    v = x;
+else
+    v = max(x, y);
 end
 end
 
@@ -713,6 +1120,41 @@ while i <= nf
     elseif conv == 112          % p
         txt = sim_hex(mod(double(av), 18446744073709551616), 16);
         txt = pad_cv(txt, w, left, zero);
+    elseif conv == 102 || conv == 101 || conv == 103   % f e g
+        dv = sim_bits2d(av);   % the int64 bit pattern
+
+        if conv == 101
+            fs = 'e';
+        elseif conv == 103
+            fs = 'g';
+        else
+            fs = 'f';
+        end
+        fmt2 = '%';
+        if left
+            fmt2 = [fmt2, '-'];
+        end
+        if zero
+            fmt2 = [fmt2, '0'];
+        end
+        if w > 0
+            fmt2 = [fmt2, sprintf('%d', w)];
+        end
+        if conv == 103
+            p2 = prec;
+            if p2 < 0
+                p2 = 6;             % C default: 6 significant digits
+            end
+            fmt2 = [fmt2, sprintf('.%d', p2), fs];
+        elseif prec >= 0
+            fmt2 = [fmt2, sprintf('.%d', prec), fs];
+        else
+            fmt2 = [fmt2, fs];      % C default: 6 fractional digits
+        end
+        txt = sprintf(fmt2, dv);
+        txt = strrep(txt, 'NaN', 'nan');   % glibc-consistent case
+        txt = strrep(txt, 'Inf', 'inf');
+        txt = double(txt);
     elseif conv == 110          % n
         sim_storeN(double(av), numel(out), 8);
         txt = [];
@@ -729,7 +1171,7 @@ end
 function v = printf_arg(argvals, ai)
 global regs mem
 if ai < 3
-    v = argvals(ai + 1);
+    v = argvals(ai + 1);          % int64 (raw bit pattern for doubles)
 else
     k = ai - 3;
     v = sim_load64(double(regs(5)) + 32 + 8 * k);
@@ -1031,7 +1473,12 @@ p40 = cv_of('setb');  p41 = cv_of('seta'); p42 = cv_of('setbe');
 p43 = cv_of('setae'); p44 = cv_of('shrq'); p45 = cv_of('divq');
 p46 = cv_of('ja');    p47 = cv_of('jb');   p48 = cv_of('jae');
 p49 = cv_of('jbe');
-if cv_eq(d, p8)
+pm = cv_of('movabsq');
+p50 = cv_of('movsd'); p51 = cv_of('addsd'); p52 = cv_of('subsd');
+p53 = cv_of('mulsd'); p54 = cv_of('divsd'); p55 = cv_of('xorpd');
+p56 = cv_of('cvtsi2sdq'); p57 = cv_of('cvttsd2siq');
+p58 = cv_of('ucomisd'); p59 = cv_of('setnp'); p60 = cv_of('andb');
+if cv_eq(d, p8) || cv_eq(d, pm)
     m = 0;
 elseif cv_eq(d, p1) || cv_eq(d, px)
     m = 1;
@@ -1131,6 +1578,28 @@ elseif cv_eq(d, p48)
     m = 48;
 elseif cv_eq(d, p49)
     m = 49;
+elseif cv_eq(d, p50)
+    m = 50;
+elseif cv_eq(d, p51)
+    m = 51;
+elseif cv_eq(d, p52)
+    m = 52;
+elseif cv_eq(d, p53)
+    m = 53;
+elseif cv_eq(d, p54)
+    m = 54;
+elseif cv_eq(d, p55)
+    m = 55;
+elseif cv_eq(d, p56)
+    m = 56;
+elseif cv_eq(d, p57)
+    m = 57;
+elseif cv_eq(d, p58)
+    m = 58;
+elseif cv_eq(d, p59)
+    m = 59;
+elseif cv_eq(d, p60)
+    m = 60;
 end
 end
 
@@ -1148,7 +1617,7 @@ if numel(s) >= 2 && s(1) == 42 && s(2) == 37       % '*%rax'
     return;
 end
 if s(1) == 36                 % '$'
-    op = {1, str2double(cv_char(s(2:end)))};
+    op = {1, sim_num64(s(2:end))};
     return;
 end
 if s(1) == 37                 % '%'
@@ -1194,6 +1663,32 @@ else
 end
 end
 
+function v = sim_num64(tok)
+% sim_num64 — parse a 64-bit literal EXACTLY (in the double domain: every
+% power of two is exact, so hex and in-range decimal patterns round-trip;
+% int64 accumulation would overflow through the clone's lossy int64 ops).
+if numel(tok) >= 2 && tok(1) == 48 && (tok(2) == 120 || tok(2) == 88)
+    v = 0;
+    for k = 3:numel(tok)
+        c = tok(k);
+        if c >= 48 && c <= 57
+            d = c - 48;
+        elseif c >= 97 && c <= 102
+            d = c - 87;
+        else
+            d = c - 55;
+        end
+        v = v * 16 + d;
+    end
+    if v >= 9223372036854775808
+        v = v - 18446744073709551616;
+    end
+else
+    v = str2double(cv_char(tok));
+end
+v = int64(v);
+end
+
 function idx = sim_regidx(name)
 % name = a code vector (e.g. '%rbp', '%al', '%r8d').
 p8  = cv_of('al'); p8b = cv_of('cl'); p8c = cv_of('dl'); p8d = cv_of('bl');
@@ -1223,6 +1718,13 @@ elseif cv_eq(nm, p64g) || cv_eq(nm, p8g) || cv_eq(nm, p32g)
     idx = 7;
 elseif cv_eq(nm, p64h) || cv_eq(nm, p8h) || cv_eq(nm, p32h)
     idx = 8;
+elseif numel(nm) >= 3 && nm(1) == 120 && nm(2) == 109 && nm(3) == 109
+    % %xmm0..%xmm15: SSE registers -> indices 17..32
+    digs = nm(4:end);
+    if isempty(digs)
+        error('x86sim: bad xmm register');
+    end
+    idx = str2double(cv_char(digs)) + 17;
 elseif numel(nm) >= 2 && nm(1) == 114 && nm(2) >= 48 && nm(2) <= 57
     digs = nm(2:end);
     while numel(digs) >= 1 && (digs(end) == 98 || digs(end) == 119 || ...
