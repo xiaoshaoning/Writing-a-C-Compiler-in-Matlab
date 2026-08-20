@@ -21,13 +21,45 @@ end
 
 flag = 'compile';
 if ~isempty(varargin) && ischar(varargin{end}) && ...
-        any(strcmp(varargin{end}, {'compile', 'gcc', 'interpret'}))
+        (strcmp(varargin{end}, 'compile') || strcmp(varargin{end}, 'gcc') || ...
+         strcmp(varargin{end}, 'interpret') || strcmp(varargin{end}, 'compilecheck'))
     flag = varargin{end};
     varargin(end) = [];
 end
 
 if strcmp(flag, 'gcc')
     error('mex_run: the gcc reference track is not implemented yet');
+end
+
+if strcmp(flag, 'compilecheck')
+    % compile-only track: cc_int must accept the source (the `mex
+    % -backend matlabcc` throwaway check); no harness, no simulation.
+    [fp2, fb2] = fileparts(srcfile);
+    tmpc2 = fullfile(fp2, ['tmp_mxrun_', fb2, '.c']);
+    tmps2 = fullfile(fp2, ['tmp_mxrun_', fb2, '.s']);
+    src2 = fileread(srcfile);
+    src2 = strrep(src2, char(13), '');   % CRLF -> LF (cc_int expects \n)
+    mdx2 = strfind(src2, '/* ---- harness');
+    if ~isempty(mdx2)
+        src2 = src2(1:mdx2(1)-1);
+    end
+    src2 = [mx_preamble(), char(10), src2, char(10), ...
+'mxArray *__mex_prhs[4];' char(10) ...
+        'mxArray *__mex_plhs[4];' char(10) ...
+        'int __mex_nrhs;' char(10) ...
+        'int main()' char(10) ...
+        '{' char(10) ...
+        '        mexFunction(2, __mex_plhs, __mex_nrhs, __mex_prhs);' char(10) ...
+        '        return 0;' char(10) ...
+        '}' char(10)];
+    fid2 = fopen(tmpc2, 'w');
+    if fid2 < 0
+        error('mex_run: could not write(%s)', tmpc2);
+    end
+    fprintf(fid2, '%s', char(src2));
+    fclose(fid2);
+    cc_int(tmpc2, tmps2);
+    return;
 end
 
 if ~exist(srcfile, 'file')
@@ -40,13 +72,22 @@ tmpc = fullfile(fp, ['tmp_mxrun_', fb, '.c']);
 tmps = fullfile(fp, ['tmp_mxrun_', fb, '.s']);
 
 src0 = fileread(srcfile);
+src0 = strrep(src0, char(13), '');   % CRLF -> LF (cc_int expects \n)
 % the group-11 corpus files embed their own harness main (for the raw
 % cc_int/x86sim smoke); strip it so mex_run can append its generic one
 mdx = strfind(src0, '/* ---- harness');
 if ~isempty(mdx)
     src0 = src0(1:mdx(1)-1);
 end
-src = [mx_preamble(), char(10), src0, char(10), mex_run_harness()];
+src = [mx_preamble(), char(10), src0, char(10), ...
+'mxArray *__mex_prhs[4];' char(10) ...
+    'mxArray *__mex_plhs[4];' char(10) ...
+    'int __mex_nrhs;' char(10) ...
+    'int main()' char(10) ...
+    '{' char(10) ...
+    '    mexFunction(2, __mex_plhs, __mex_nrhs, __mex_prhs);' char(10) ...
+    '    return 0;' char(10) ...
+    '}' char(10)];
 fid = fopen(tmpc, 'w');
 if fid < 0
     error('mex_run: could not write(%s)', tmpc);
@@ -60,20 +101,4 @@ cc_int(tmpc, tmps);
 % [outs, ~] assigns the two varargouts directly: singling out the first
 % element of the wrapped {outs, exit} cell (res{1}) makes the clone
 % flatten a nested cell, so avoid the wrapper here.
-end
-
-function txt = mex_run_harness()
-% mex_run_harness — the synthetic main that calls the corpus's
-% mexFunction.  x86sim mex-mode writes __mex_prhs/__mex_nrhs before main
-% and reads __mex_plhs[0..1] after.
-txt = [ ...
-    'mxArray *__mex_prhs[4];' char(10) ...
-    'mxArray *__mex_plhs[4];' char(10) ...
-    'int __mex_nrhs;' char(10) ...
-    'int main()' char(10) ...
-    '{' char(10) ...
-    '    mexFunction(2, __mex_plhs, __mex_nrhs, __mex_prhs);' char(10) ...
-    '    return 0;' char(10) ...
-    '}' char(10) ...
-    ];
 end

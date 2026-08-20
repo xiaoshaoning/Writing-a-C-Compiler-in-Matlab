@@ -2980,27 +2980,12 @@ elseif token == 128         % Num
     next();
 elseif token == 183         % sizeof: type or expression
     next();
-    expect(40);
-    if token == 131 || token == 134 || token == 178 || token == 189   % a type
-        [base, stdef] = parse_basetype();
-        depth = 0;
-        while token == 42       % '*'
-            depth = depth + 1;
-            next();
-        end
-        if base == 1 && depth == 0
-            sz = 1;
-        elseif base >= 1000 && depth == 0
-            sz = ssize_of(base);
-        else
-            sz = 8;
-        end
-        expect(41);
-    else
-        % sizeof(expr): parse for the type, drop the emitted code
+    if token ~= 40
+        % sizeof expr (unparenthesized, C grammar also allows this):
+        % parse for the type, drop the emitted code； an array name
+        % yields its whole byte size
         sn = numel(out);
         parse_assignment();
-        expect(41);
         if etype == 1
             sz = 1;
         elseif curarrsz > 0
@@ -3011,10 +2996,46 @@ elseif token == 183         % sizeof: type or expression
             sz = 8;
         end
         out(sn+1:numel(out)) = [];
+        em(sprintf('\tmovq\t$%d, %%rax', sz));
+        etype = 0;
+        estruc = 0;
+    elseif token == 40
+        next();
+        if token == 131 || token == 134 || token == 178 || token == 189   % a type
+            [base, stdef] = parse_basetype();
+            depth = 0;
+            while token == 42       % '*'
+                depth = depth + 1;
+                next();
+            end
+            if base == 1 && depth == 0
+                sz = 1;
+            elseif base >= 1000 && depth == 0
+                sz = ssize_of(base);
+            else
+                sz = 8;
+            end
+            expect(41);
+        else
+            % sizeof(expr): parse for the type, drop the emitted code
+            sn = numel(out);
+            parse_assignment();
+            expect(41);
+            if etype == 1
+                sz = 1;
+            elseif curarrsz > 0
+                sz = curarrsz;      % a whole array: its total byte size
+            elseif estruc
+                sz = ssize_of(etype);
+            else
+                sz = 8;
+            end
+            out(sn+1:numel(out)) = [];
+        end
+        em(sprintf('\tmovq\t$%d, %%rax', sz));
+        etype = 0;
+        estruc = 0;
     end
-    em(sprintf('\tmovq\t$%d, %%rax', sz));
-    etype = 0;
-    estruc = 0;
 elseif token == 172         % Str: string literal -> char* to .Lstr data
     lab = new_str(strtext);
     em(sprintf('\tleaq\t%s(%%rip), %%rax', lab));
