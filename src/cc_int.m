@@ -161,7 +161,74 @@ libargt.ceil = 6; libargt.trunc = 6; libargt.round = 6;
 libargt.cbrt = 6;
 libargt.fmod = [6 6]; libargt.pow = [6 6];
 libargt.fmin = [6 6]; libargt.fmax = [6 6]; libargt.atan2 = [6 6];
+% mx/mex API: every corpus call becomes a `__cc_<name>_<nargs>` shim the
+% simulator implements against its in-memory mxArray ABI (see the MEX
+% support plan, Phase C).  libargt = per-arg type codes (0 int, 6 double,
+% 8 pointer); libret = the return type (8 pointer, 6 double, 0 int,
+% 4 void) which drives the call-site etype and thus where the simulator
+% must place the result (rax vs xmm0).
+libfns.mxCreateDoubleMatrix = 'mxCreateDoubleMatrix';
+libargt.mxCreateDoubleMatrix = [0 0 0];        libret.mxCreateDoubleMatrix = 8;
+libfns.mxCreateDoubleScalar = 'mxCreateDoubleScalar';
+libargt.mxCreateDoubleScalar = 6;              libret.mxCreateDoubleScalar = 8;
+libfns.mxCreateNumericMatrix = 'mxCreateNumericMatrix';
+libargt.mxCreateNumericMatrix = [0 0 0 0];     libret.mxCreateNumericMatrix = 8;
+libfns.mxCreateString = 'mxCreateString';
+libargt.mxCreateString = 8;                    libret.mxCreateString = 8;
+libfns.mxCreateCharArray = 'mxCreateCharArray';
+libargt.mxCreateCharArray = [0 0];             libret.mxCreateCharArray = 8;
+libfns.mxGetPr = 'mxGetPr';   libargt.mxGetPr = 8;   libret.mxGetPr = 8;
+libfns.mxGetPi = 'mxGetPi';   libargt.mxGetPi = 8;   libret.mxGetPi = 8;
+libfns.mxGetData = 'mxGetData'; libargt.mxGetData = 8; libret.mxGetData = 8;
+libfns.mxGetChars = 'mxGetChars'; libargt.mxGetChars = 8; libret.mxGetChars = 8;
+libfns.mxGetM = 'mxGetM';     libargt.mxGetM = 8;   libret.mxGetM = 0;
+libfns.mxGetN = 'mxGetN';     libargt.mxGetN = 8;   libret.mxGetN = 0;
+libfns.mxGetNumberOfElements = 'mxGetNumberOfElements';
+libargt.mxGetNumberOfElements = 8;             libret.mxGetNumberOfElements = 0;
+libfns.mxGetScalar = 'mxGetScalar';
+libargt.mxGetScalar = 8;                       libret.mxGetScalar = 6;
+libfns.mxGetClassID = 'mxGetClassID';
+libargt.mxGetClassID = 8;                      libret.mxGetClassID = 0;
+libfns.mxGetClassName = 'mxGetClassName';
+libargt.mxGetClassName = 8;                    libret.mxGetClassName = 8;
+libfns.mxGetDimensions = 'mxGetDimensions';
+libargt.mxGetDimensions = 8;                   libret.mxGetDimensions = 8;
+libfns.mxGetElementSize = 'mxGetElementSize';
+libargt.mxGetElementSize = 8;                  libret.mxGetElementSize = 0;
+libfns.mxIsDouble = 'mxIsDouble';   libargt.mxIsDouble = 8;   libret.mxIsDouble = 0;
+libfns.mxIsChar = 'mxIsChar';     libargt.mxIsChar = 8;     libret.mxIsChar = 0;
+libfns.mxIsComplex = 'mxIsComplex'; libargt.mxIsComplex = 8; libret.mxIsComplex = 0;
+libfns.mxIsNaN = 'mxIsNaN';       libargt.mxIsNaN = 8;      libret.mxIsNaN = 0;
+libfns.mxIsInf = 'mxIsInf';       libargt.mxIsInf = 8;      libret.mxIsInf = 0;
+libfns.mxIsEmpty = 'mxIsEmpty';   libargt.mxIsEmpty = 8;    libret.mxIsEmpty = 0;
+libfns.mxIsLogical = 'mxIsLogical'; libargt.mxIsLogical = 8; libret.mxIsLogical = 0;
+libfns.mxGetString = 'mxGetString';
+libargt.mxGetString = [8 8 0];                   libret.mxGetString = 0;
+libfns.mxArrayToString = 'mxArrayToString';
+libargt.mxArrayToString = 8;                     libret.mxArrayToString = 8;
+libfns.mxDuplicateArray = 'mxDuplicateArray';
+libargt.mxDuplicateArray = 8;                    libret.mxDuplicateArray = 8;
+libfns.mxDestroyArray = 'mxDestroyArray';
+libargt.mxDestroyArray = 8;                      libret.mxDestroyArray = 0;
+libfns.mxSetData = 'mxSetData';
+libargt.mxSetData = [8 8];                       libret.mxSetData = 0;
+libfns.mxAssert = 'mxAssert';
+libargt.mxAssert = [0 8];                        libret.mxAssert = 0;
+libfns.mexPrintf = 'mexPrintf';                  libret.mexPrintf = 0;
+libfns.mexErrMsgIdAndTxt = 'mexErrMsgIdAndTxt';
+libargt.mexErrMsgIdAndTxt = [8 8];               libret.mexErrMsgIdAndTxt = 0;
+libfns.mexEvalString = 'mexEvalString';
+libargt.mexEvalString = 8;                       libret.mexEvalString = 0;
+% string.h / stdio.  sprintf is varargs (int/char* mixed) so no libargt.
+libfns.strcmp = 'strcmp'; libargt.strcmp = [8 8]; libret.strcmp = 0;
+libfns.strlen = 'strlen'; libargt.strlen = 8;    libret.strlen = 0;
+libfns.strcpy = 'strcpy'; libargt.strcpy = [8 8]; libret.strcpy = 8;
+libfns.memcpy = 'memcpy'; libargt.memcpy = [8 8 0]; libret.memcpy = 8;
+libfns.strncmp = 'strncmp'; libargt.strncmp = [8 8 0]; libret.strncmp = 0;
+libfns.malloc = 'malloc'; libargt.malloc = 0; libret.malloc = 8;
+libfns.free = 'free'; libargt.free = 8; libret.free = 0;
 fptypes = struct();   % user function -> vector of parameter type codes
+libret = struct();    % fall back: default 0 (int)
 libcalls = struct();  % 'name_nargs' -> 1 for every shim used (emitted)
 out = {};       % emitted assembly lines (cell; tabs are literal in em)
 
@@ -347,6 +414,10 @@ elseif (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
         token = 188;            % Unsigned
     elseif strcmp(id, 'double')
         token = 189;            % Double
+    elseif strcmp(id, 'const')
+        token = 190;            % Const (no-op qualifier)
+    elseif strcmp(id, 'register')
+        token = 191;            % Register (no-op qualifier)
     else
         token = 150;            % Id (incl. 'main'); text in idname
         idname = id;
@@ -749,6 +820,9 @@ function [base, stdef] = parse_basetype()
 global token idname stags
 base = 0;
 stdef = 0;
+while token == 190 || token == 191   % const / register: no-ops
+    next();
+end
 if token == 131             % int
     next();
 elseif token == 134         % char
@@ -799,6 +873,9 @@ membermap = struct();
 mnames = {};
 off = 0;
 while token ~= 125          % '}'
+    while token == 190 || token == 191
+        next();
+    end
     if token == 131         % int
         mbase = 0;
         next();
@@ -1733,13 +1810,23 @@ function parse_for()
 % Runtime order: init / s: cond / body / st: step / jmp s / e:. The step is
 % token-wise BEFORE the body, so its emitted lines are buffered and spliced
 % after the body.
-global token loopctx out
+global token idname typedefs loopctx out
 next();                     % consume 'for'
 expect(40);
 if token ~= 59              % ';': optional init
-    parse_assignment();
+    if token == 131 || token == 134 || token == 178 || token == 188 || ...
+       token == 189 || (token == 150 && isfield(typedefs, idname))
+        parse_declaration();      % `for (mwSize i = 0; ...)`; consumes ';'
+    else
+        parse_assignment();
+        expect(59);
+    end
 end
-expect(59);
+if token ~= 59
+    % a declaration init already consumed the ';'; skip the empty cond
+else
+    expect(59);
+end
 s = newlabel();
 e = newlabel();
 st = newlabel();
@@ -2421,6 +2508,8 @@ while token == 148 || token == 149   % Eq Ne
         em('\tmovzbl\t%al, %eax');
         etype = 0;
     else
+        em('\tmovq\t%rax, %rbx');   % R -> rbx
+        em('\tmovq\t%r14, %rax');   % L -> rax
         em('\tcmpq\t%rbx, %rax');
         if op == 148
             em('\tsete\t%al');
@@ -2481,6 +2570,8 @@ while token == 144 || token == 145 || token == 146 || token == 147  % Lt Gt Le G
         em('\tmovzbl\t%al, %eax');
         etype = 0;
     else
+        em('\tmovq\t%rax, %rbx');   % R -> rbx
+        em('\tmovq\t%r14, %rax');   % L -> rax
         em('\tcmpq\t%rbx, %rax');
         if op == 144        % Lt
         if sav_etype == 5
@@ -2699,7 +2790,7 @@ function parse_unary()
 % decay (no load, estruc = 1 for struct values).
 global token token_val token_dval token_isflt idname strtext lvars lvartype lvararr lvarstruct ...
        globals gtype garr gstruct funcs fret frettype fparams called ltype libfns libcalls ...
-       etype estruc lvarstride gstride bstride lvararrsz gvararrsz curarrsz si typedefs fbytes fptypes libargt
+       etype estruc lvarstride gstride bstride lvararrsz gvararrsz curarrsz si typedefs fbytes fptypes libargt libret
 ops = [];
 while token == 45 || token == 126 || token == 33 || token == 43 || ...   % - ~ ! +
       token == 38 || token == 42 || token == 170 || token == 171          % & * ++ --
@@ -2999,11 +3090,15 @@ elseif token == 150         % Id: function call or variable
             called.(name) = nargs;
         end
         if isfield(libfns, name)
-            % runtime-library call: go through the Win64-ABI shim
+            % runtime-library call: go through the shim; the simulator
+            % implements <name> (dispatches on the symbol, not the CRT)
             libcalls.(sprintf('%s_%d', name, nargs)) = 1;
             em(sprintf('\tcall\t__cc_%s_%d', name, nargs));
-            if isfield(libargt, name)        % all-double math intrinsic:
-                etype = 6;                   % result is a VALUE in %xmm0
+            if isfield(libret, name)
+                etype = libret.(name);   % 8 ptr, 6 double, 0 int, 4 void
+                if etype == 4
+                    etype = 0;
+                end
             end
         else
             em(sprintf('\tcall\t%s', name));
@@ -3020,7 +3115,7 @@ elseif token == 150         % Id: function call or variable
         end
         if isfield(fret, name)
             etype = fret.(name);
-        elseif ~(isfield(libfns, name) && isfield(libargt, name))
+        elseif ~(isfield(libfns, name) && isfield(libret, name))
             etype = 0;
         end
         if sret_call
@@ -3127,6 +3222,10 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
                 elseif t - 2 >= 1000
                     etype = t - 2;
                     estruc = 1;
+                elseif t - 2 == 6
+                    etype = 6;
+                    em('\tmovsd\t(%rax), %xmm0');
+                    estruc = 0;
                 else
                     etype = t - 2;
                     em('\tmovq\t(%rax), %rax');
@@ -3142,6 +3241,10 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
             elseif et >= 1000
                 etype = et;               % struct element: address, no load
                 estruc = 1;
+            elseif et == 6
+                etype = 6;
+                em('\tmovsd\t(%rax), %xmm0');
+                estruc = 0;
             else
                 etype = et;
                 em('\tmovq\t(%rax), %rax');
@@ -3318,7 +3421,8 @@ function ok = lvalue_addr()
 global out
 if numel(out) >= 1 && ...
    (strcmp(out{end}, sprintf('\tmovq\t(%%rax), %%rax')) || ...
-    strcmp(out{end}, sprintf('\tmovzbl\t(%%rax), %%eax')))
+    strcmp(out{end}, sprintf('\tmovzbl\t(%%rax), %%eax')) || ...
+    strcmp(out{end}, sprintf('\tmovsd\t(%%rax), %%xmm0')))
     out(end) = [];
     ok = 1;
 elseif numel(out) >= 1 && ~isempty(strfind(out{end}, 'leaq'))
@@ -3431,3 +3535,5 @@ else
 end
 b = bitor(negbit, bitor(bitshift(expo, 52), mant));
 end
+
+
