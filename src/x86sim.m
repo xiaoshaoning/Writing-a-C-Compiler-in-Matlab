@@ -1,16 +1,20 @@
-function exit_code = x86sim(sfile)
+function varargout = x86sim(sfile, inputs)
 % x86sim — a mini x86-64 simulator for the assembly emitted by cc_int.m.
 %
 % Runs the generated .s directly — no assembler, linker, or gcc. Parses
-% the COFF-ish directives (ignoring .file/.def/.globl/.cfi), lays out
-% .comm/.data/.string symbols in a byte memory, and interprets the
-% instruction stream with a register file, flags, and a downward-growing
-% stack. Emulates the CRT entry (call main; the exit code = rax) and the
-% runtime-library symbols the shims forward to (printf, malloc, memset,
-% memcmp, exit, _open, _read, _close).
+% the COFF-ish directives, lays out .comm/.data/.string symbols in a byte
+% memory, and interprets the instruction stream with a register file,
+% flags, and a downward-growing stack.  Emulates the CRT entry (call
+% main; the exit code = rax) and the runtime-library symbols the shims
+% forward to.
 %
-%   exit_code = x86sim('out.s')     % the program's exit code (full rax;
-%                                   % callers truncate to the low byte)
+%   exit_code = x86sim('out.s')                   % normal run
+%   outs      = x86sim('mex.s', {x1, x2, ...})    % mex mode: builds the
+%                                                  % harness prhs (the
+%                                                  % corpus's __mex_*
+%                                                  % globals), runs main,
+%                                                  % and returns the plhs
+%                                                  % as MATLAB arrays
 %
 % All text is processed as double code vectors: the clone mangles certain
 % string literals (e.g. 'sum', 'count', 'set') when they cross local-
@@ -163,6 +167,59 @@ pc = cl_get(cv_of('main'));
 n = numel(code);
 steps = 0;
 maxsteps = 50000000;
+mex_flag = 0;
+if nargin >= 2 && ~isempty(inputs)
+    mex_flag = 1;
+    pbase = sym_get(cv_of('__mex_prhs'));
+    qbase = sym_get(cv_of('__mex_plhs'));
+    nrsec = sym_get(cv_of('__mex_nrhs'));
+    if pbase < 0 || qbase < 0
+        error('x86sim: mex mode needs __mex_prhs/__mex_plhs globals');
+    end
+    nk = numel(inputs);
+    for k = 1:nk
+        v = inputs{k};
+        if ischar(v)
+            h = sim_mx_new(4, [1 max(1, numel(v))], 0);
+            pr = double(sim_load64(h + 56));
+            for j = 1:numel(v)
+                sim_storeN(pr + (j - 1) * 8, double(v(j)), 8);
+            end
+        elseif isnumeric(v)
+            d1 = size(v, 1);
+            d2 = size(v, 2);
+            d3 = 1;
+            if numel(size(v)) >= 3
+                d3 = size(v, 3);
+            end
+            if isinteger(v)
+                cls = 12;   % int32 data: store the raw integer words
+            else
+                cls = 6;
+            end
+            h = sim_mx_new(cls, [d1 d2 d3], 0);
+            pr = double(sim_load64(h + 56));
+            cnt = 0;
+            for ii = 1:d1
+                for jj = 1:d2
+                    cnt = cnt + 1;
+                    if cls == 6
+                        sim_d2bytes(v(ii, jj), pr + (cnt - 1) * 8);
+                    else
+                        sim_storeN(pr + (cnt - 1) * 8, v(ii, jj), 8);
+                    end
+                end
+            end
+        else
+            error('x86sim: unsupported input type');
+        end
+        sim_storeN(pbase + 8 * (k - 1), h, 8);
+    end
+    if nrsec >= 0
+        sim_storeN(nrsec, nk, 8);
+    else
+    end
+end
 while pc >= 1 && pc <= n && simdone == 0
     insn = code{pc};
     pc = sim_exec(insn, pc);
@@ -172,6 +229,58 @@ while pc >= 1 && pc <= n && simdone == 0
     end
 end
 exit_code = double(regs(1));
+if mex_flag
+    qbase = sym_get(cv_of('__mex_plhs'));
+    outs = {};
+    for k = 1:4
+        h = double(sim_load64(qbase + 8 * (k - 1)));
+        if h == 0
+            continue;
+        end
+        cls = double(sim_load64(h + 8));
+        d1 = double(sim_load64(h + 32));
+        d2 = double(sim_load64(h + 40));
+        pr = double(sim_load64(h + 56));
+        ne = d1 * d2;
+        if cls == 4
+            vals = zeros(1, ne);
+            for j = 1:ne
+                vals(j) = mod(double(sim_load64(pr + (j - 1) * 8)), 256);
+            end
+            outs{end+1} = char(vals);
+        elseif cls == 6
+            vals = zeros(1, ne);
+            for j = 1:ne
+                vals(j) = sim_bytes2d(pr + (j - 1) * 8);
+            end
+            if ne == 1
+                outs{end+1} = vals;
+            else
+                % C row-major values with dims [m n]: M(i,j) = vals((i-1)*n+j).
+                % (the clone's reshape/transpose order differs from MATLAB,
+                % so build the matrix explicitly)
+                M = zeros(d1, d2);
+                for ii = 1:d1
+                    for jj = 1:d2
+                        M(ii, jj) = vals((ii - 1) * d2 + jj);
+                    end
+                end
+                outs{end+1} = M;
+            end
+        elseif cls == 12 || cls == 14
+            vals = zeros(1, ne);
+            for j = 1:ne
+                vals(j) = double(sim_load64(pr + (j - 1) * 8));
+            end
+            outs{end+1} = vals;
+        else
+            outs{end+1} = [];
+        end
+    end
+    varargout = {outs, exit_code};
+else
+    varargout = {exit_code};
+end
 end
 
 % --------------------------------------------------------------------------
