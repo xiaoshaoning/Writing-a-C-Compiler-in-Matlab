@@ -356,6 +356,7 @@ elseif m == 58           % ucomisd: compare (b vs a), VALUES
     global zf sf cf of pf
     xa = sim_opval(a);
     xb = sim_opval(b);
+    dd = fopen('D:/tmp/mxdbg.txt','a'); fprintf(dd,' uc %.17g | %.17g', xb, xa); fclose(dd);
     wf = fopen('D:/tmp/wlog.txt', 'a'); fprintf(wf, 'uc %.6f %.6f ', xb, xa); fclose(wf);
     if isnan(xa) || isnan(xb)
         zf = 1; cf = 1; of = 0; sf = 0; pf = 1;   % unordered
@@ -625,6 +626,7 @@ elseif strcmp(nm, 'mxGetScalar')
     end
     xmms(1) = v;
     regs(1) = sim_d2bits(v);
+    dd = fopen('D:/tmp/mxdbg.txt','a'); fprintf(dd,' scal h=%d pr=%d v=%.17g', h, pr, v); fclose(dd);
 elseif strcmp(nm, 'mxGetClassID')
     regs(1) = sim_load64(double(regs(2)) + 8);
 elseif strcmp(nm, 'mxGetClassName')
@@ -642,23 +644,12 @@ elseif strcmp(nm, 'mxIsComplex')
 elseif strcmp(nm, 'mxIsLogical')
     regs(1) = int64(double(sim_load64(double(regs(2)) + 8)) == 3);
 elseif strcmp(nm, 'mxIsNaN')
-    h = double(regs(2));
-    pr = double(sim_load64(h + 56));
-    if pr == 0
-        regs(1) = int64(0);
-    else
-        v = sim_bytes2d(pr);
-        regs(1) = int64(isnan(v));
-    end
+    v = sim_bits2d(regs(2));          % the arg is the double VALUE
+    regs(1) = int64(isnan(v));
 elseif strcmp(nm, 'mxIsInf')
-    h = double(regs(2));
-    pr = double(sim_load64(h + 56));
-    if pr == 0
-        regs(1) = int64(0);
-    else
-        v = sim_bytes2d(pr);
-        regs(1) = int64(isinf(v));
-    end
+    v = sim_bits2d(regs(2));          % the arg is the double VALUE
+    regs(1) = int64(isinf(v));
+    regs(2) = regs(2);
 elseif strcmp(nm, 'mxIsEmpty')
     regs(1) = int64(sim_mx_numel(double(regs(2))) == 0);
 elseif strcmp(nm, 'mxGetString')
@@ -670,10 +661,10 @@ elseif strcmp(nm, 'mxGetString')
     k = 0;
     while k < n
         c = double(sim_load64(pr + k * 8));
-        mem(dst + k + 1) = uint8(mod(c, 256));
+        mem(dst + k + 1) = uint8(mod(c, 256));   % sim mem is 1-based
         k = k + 1;
     end
-    mem(dst + k + 1) = uint8(0);
+    mem(dst + n + 1) = uint8(0);
     regs(1) = int64(0);
 elseif strcmp(nm, 'mxArrayToString')
     sc = sim_mx_string(double(regs(2)));
@@ -682,14 +673,14 @@ elseif strcmp(nm, 'mxArrayToString')
     else
         a = sim_malloc(numel(sc) + 1);
         for k = 1:numel(sc)
-            mem(a + k) = uint8(sc(k));
+            mem(a + k) = uint8(sc(k));          % k starts at 1: a+1..a+n
         end
         mem(a + numel(sc) + 1) = uint8(0);
         regs(1) = int64(a);
     end
 elseif strcmp(nm, 'mxDuplicateArray')
     regs(1) = int64(sim_mx_dup(double(regs(2))));
-elseif strcmp(nm, 'mxDestroyArray')
+elseif strcmp(nm, 'mxDestroyArray') || strcmp(nm, 'mxFree')
     regs(1) = int64(0);   % arena heap: no real destructor
 elseif strcmp(nm, 'mxSetData')
     sim_storeN(double(regs(2)) + 56, sim_load64(double(regs(3))), 8);
@@ -1061,7 +1052,7 @@ elseif cv_eq(namecodes, cv_of('strcmp'))
     b = mem_strcodes(double(regs(3)));
     regs(1) = int64(sim_strcmp(a, b));
 elseif cv_eq(namecodes, cv_of('strlen'))
-    regs(1) = int64(numel(mem_strcodes(double(regs(2)))) - 1);
+    regs(1) = int64(numel(mem_strcodes(double(regs(2)))));
 elseif cv_eq(namecodes, cv_of('strcpy'))
     d = double(regs(2)); s2 = double(regs(3));
     sc = mem_strcodes(s2);
@@ -1082,8 +1073,18 @@ elseif cv_eq(namecodes, cv_of('memcpy'))
         mem(d + k) = mem(s2 + k);
     end
     regs(1) = int64(d);
-elseif cv_eq(namecodes, cv_of('free'))
+elseif cv_eq(namecodes, cv_of('free')) || cv_eq(namecodes, cv_of('mxFree'))
     regs(1) = int64(0);   % the sim heap is arena-based; nothing to free
+elseif cv_eq(namecodes, cv_of('strcat'))
+    d = double(regs(2)); s2 = double(regs(3));
+    scd = mem_strcodes(d);
+    scs = mem_strcodes(s2);
+    n = numel(scd);                     % d length (no NUL in the codes)
+    for k = 1:numel(scs)
+        mem(d + n + k) = uint8(scs(k));
+    end
+    mem(d + n + numel(scs) + 1) = uint8(0);
+    regs(1) = int64(d);
 else
     error('x86sim: unknown library function');
 end

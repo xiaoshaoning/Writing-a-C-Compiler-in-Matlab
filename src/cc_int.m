@@ -58,7 +58,7 @@ function cc_int(varargin)
 global src si token token_val token_dval token_isflt idname strtext out fname lbl lvars lvartype ...
        lvararr fbytes funcs fret called retlbl cfn globals gtype garr glist ...
        strs nstr etype ltype cret loopctx stags sdefs nstid estruc ...
-       lvarstruct gstruct typedefs enums lvarstride gstride bstride glabels sret sretsize libfns libcalls ginit fptypes libargt
+       lvarstruct gstruct typedefs enums lvarstride gstride bstride glabels sret sretsize libfns libcalls ginit fptypes libargt libret
 
 if nargin ~= 2
    error('USAGE: cc_int in.c out.s');
@@ -167,6 +167,12 @@ libargt.fmin = [6 6]; libargt.fmax = [6 6]; libargt.atan2 = [6 6];
 % 8 pointer); libret = the return type (8 pointer, 6 double, 0 int,
 % 4 void) which drives the call-site etype and thus where the simulator
 % must place the result (rax vs xmm0).
+libret = struct();    % mx/mex + math return types (8 ptr / 6 double / 0 int)
+for lm = {'sin','cos','tan','asin','acos','atan','sinh','cosh','tanh', ...
+          'exp','log','log10','sqrt','fabs','floor','ceil','trunc','round', ...
+          'cbrt','fmod','pow','fmin','fmax','atan2'}
+    libret.(lm{1}) = 6;
+end
 libfns.mxCreateDoubleMatrix = 'mxCreateDoubleMatrix';
 libargt.mxCreateDoubleMatrix = [0 0 0];        libret.mxCreateDoubleMatrix = 8;
 libfns.mxCreateDoubleScalar = 'mxCreateDoubleScalar';
@@ -198,8 +204,8 @@ libargt.mxGetElementSize = 8;                  libret.mxGetElementSize = 0;
 libfns.mxIsDouble = 'mxIsDouble';   libargt.mxIsDouble = 8;   libret.mxIsDouble = 0;
 libfns.mxIsChar = 'mxIsChar';     libargt.mxIsChar = 8;     libret.mxIsChar = 0;
 libfns.mxIsComplex = 'mxIsComplex'; libargt.mxIsComplex = 8; libret.mxIsComplex = 0;
-libfns.mxIsNaN = 'mxIsNaN';       libargt.mxIsNaN = 8;      libret.mxIsNaN = 0;
-libfns.mxIsInf = 'mxIsInf';       libargt.mxIsInf = 8;      libret.mxIsInf = 0;
+libfns.mxIsNaN = 'mxIsNaN';       libargt.mxIsNaN = 6;      libret.mxIsNaN = 0;
+libfns.mxIsInf = 'mxIsInf';       libargt.mxIsInf = 6;      libret.mxIsInf = 0;
 libfns.mxIsEmpty = 'mxIsEmpty';   libargt.mxIsEmpty = 8;    libret.mxIsEmpty = 0;
 libfns.mxIsLogical = 'mxIsLogical'; libargt.mxIsLogical = 8; libret.mxIsLogical = 0;
 libfns.mxGetString = 'mxGetString';
@@ -227,8 +233,9 @@ libfns.memcpy = 'memcpy'; libargt.memcpy = [8 8 0]; libret.memcpy = 8;
 libfns.strncmp = 'strncmp'; libargt.strncmp = [8 8 0]; libret.strncmp = 0;
 libfns.malloc = 'malloc'; libargt.malloc = 0; libret.malloc = 8;
 libfns.free = 'free'; libargt.free = 8; libret.free = 0;
+libfns.mxFree = 'mxFree'; libargt.mxFree = 8; libret.mxFree = 0;
+libfns.strcat = 'strcat'; libargt.strcat = [8 8]; libret.strcat = 8;
 fptypes = struct();   % user function -> vector of parameter type codes
-libret = struct();    % fall back: default 0 (int)
 libcalls = struct();  % 'name_nargs' -> 1 for every shim used (emitted)
 out = {};       % emitted assembly lines (cell; tabs are literal in em)
 
@@ -2481,7 +2488,7 @@ while token == 148 || token == 149   % Eq Ne
         em('\tsubq\t$8, %rsp');
         em('\tmovsd\t%xmm0, (%rsp)');
     else
-        em('\tmovq\t%rax, %r14');
+        em('\tpushq\t%rax');
     end
     parse_relational();
     rhs_t = etype;
@@ -2497,7 +2504,8 @@ while token == 148 || token == 149   % Eq Ne
             em('\tmovsd\t(%rsp), %xmm1');
             em('\taddq\t$8, %rsp');
         else
-            em('\tcvtsi2sdq\t%r14, %xmm1');
+            em('\tcvtsi2sdq\t(%rsp), %xmm1');
+        em('\taddq\t$8, %rsp');
         end
         em('\tucomisd\t%xmm0, %xmm1');
         if op == 148
@@ -2509,7 +2517,7 @@ while token == 148 || token == 149   % Eq Ne
         etype = 0;
     else
         em('\tmovq\t%rax, %rbx');   % R -> rbx
-        em('\tmovq\t%r14, %rax');   % L -> rax
+        em('\tpopq\t%rax');   % L -> rax
         em('\tcmpq\t%rbx, %rax');
         if op == 148
             em('\tsete\t%al');
@@ -2535,7 +2543,7 @@ while token == 144 || token == 145 || token == 146 || token == 147  % Lt Gt Le G
         em('\tsubq\t$8, %rsp');
         em('\tmovsd\t%xmm0, (%rsp)');
     else
-        em('\tmovq\t%rax, %r14');
+        em('\tpushq\t%rax');
     end
     parse_shift();
     rhs_t = etype;
@@ -2551,7 +2559,8 @@ while token == 144 || token == 145 || token == 146 || token == 147  % Lt Gt Le G
             em('\tmovsd\t(%rsp), %xmm1');
             em('\taddq\t$8, %rsp');
         else
-            em('\tcvtsi2sdq\t%r14, %xmm1');
+            em('\tcvtsi2sdq\t(%rsp), %xmm1');
+        em('\taddq\t$8, %rsp');
         end
         em('\tucomisd\t%xmm0, %xmm1');
         if op == 144        % Lt: CF && !PF
@@ -2571,7 +2580,7 @@ while token == 144 || token == 145 || token == 146 || token == 147  % Lt Gt Le G
         etype = 0;
     else
         em('\tmovq\t%rax, %rbx');   % R -> rbx
-        em('\tmovq\t%r14, %rax');   % L -> rax
+        em('\tpopq\t%rax');   % L -> rax
         em('\tcmpq\t%rbx, %rax');
         if op == 144        % Lt
         if sav_etype == 5
@@ -2632,7 +2641,7 @@ function parse_additive()
 % additive := term (('+' | '-') term)* — pointer operands scale the
 % integer by the element size (1 for char*, 4 otherwise); ptr - ptr gives
 % the element difference.  Double operands live in %xmm0 (value model);
-% the left operand is saved on the xmm-stack (double) or in %r14 (int)
+% the left operand is saved on the xmm-stack (double) or on the stack (int)
 % so a call inside the right operand cannot corrupt it.
 global token etype
 parse_term();
@@ -2644,27 +2653,29 @@ while token == 43 || token == 45   % '+' '-'
         em('\tsubq\t$8, %rsp');
         em('\tmovsd\t%xmm0, (%rsp)');
     else
-        em('\tmovq\t%rax, %r14');   % int/ptr left
+        em('\tpushq\t%rax');   % int/ptr left
     end
     parse_term();
     rhs_t = etype;
     if t == 6 || rhs_t == 6
         % double arithmetic (usual arithmetic conversions); L in %xmm0
-        % (xmm-stack) or %r14, R in %xmm0 (double) or %rax (int)
+        % (xmm-stack) or the stack, R in %xmm0 (double) or %rax (int)
         if rhs_t == 6
             em('\tmovsd\t%xmm0, %xmm1');   % R -> xmm1
             if t == 6
                 em('\tmovsd\t(%rsp), %xmm0');
                 em('\taddq\t$8, %rsp');
             else
-                em('\tcvtsi2sdq\t%r14, %xmm0');
+                em('\tcvtsi2sdq\t(%rsp), %xmm0');
+        em('\taddq\t$8, %rsp');
             end
         else
             if t == 6
                 em('\tmovsd\t(%rsp), %xmm0');
                 em('\taddq\t$8, %rsp');
             else
-                em('\tcvtsi2sdq\t%r14, %xmm0');
+                em('\tcvtsi2sdq\t(%rsp), %xmm0');
+        em('\taddq\t$8, %rsp');
             end
             em('\tcvtsi2sdq\t%rax, %xmm1');
         end
@@ -2676,7 +2687,7 @@ while token == 43 || token == 45   % '+' '-'
         etype = 6;
     elseif t >= 2               % the left is a pointer
         em('\tmovq\t%rax, %rbx');   % R -> rbx
-        em('\tmovq\t%r14, %rax');   % L
+        em('\tpopq\t%rax');   % L
         if op == 45 && rhs_t >= 2
             % ptr - ptr: byte difference / element size
             em('\tsubq\t%rbx, %rax');
@@ -2700,7 +2711,7 @@ while token == 43 || token == 45   % '+' '-'
     else
         % int op int
         em('\tmovq\t%rax, %rbx');   % R -> rbx
-        em('\tmovq\t%r14, %rax');   % L
+        em('\tpopq\t%rax');   % L
         if op == 43
             em('\taddq\t%rbx, %rax');
         else
@@ -2715,7 +2726,7 @@ function parse_term()
 % term := unary (('*' | '/' | '%') unary)* — left-associative.  Integer
 % '/' and '%' use cqto/idivq (truncation toward zero, C semantics);
 % doubles use mulsd/divsd on the %xmm0 value model with the left saved
-% on the xmm-stack / %r14 as in parse_additive.
+% on the xmm-stack / the stack as in parse_additive.
 global token etype
 parse_unary();
 while token == 42 || token == 47 || token == 37   % '*' '/' '%'
@@ -2726,7 +2737,7 @@ while token == 42 || token == 47 || token == 37   % '*' '/' '%'
         em('\tsubq\t$8, %rsp');
         em('\tmovsd\t%xmm0, (%rsp)');
     else
-        em('\tmovq\t%rax, %r14');
+        em('\tpushq\t%rax');
     end
     parse_unary();
     rhs_t = etype;
@@ -2741,14 +2752,16 @@ while token == 42 || token == 47 || token == 37   % '*' '/' '%'
                 em('\tmovsd\t(%rsp), %xmm0');
                 em('\taddq\t$8, %rsp');
             else
-                em('\tcvtsi2sdq\t%r14, %xmm0');
+                em('\tcvtsi2sdq\t(%rsp), %xmm0');
+        em('\taddq\t$8, %rsp');
             end
         else
             if sav_etype == 6
                 em('\tmovsd\t(%rsp), %xmm0');
                 em('\taddq\t$8, %rsp');
             else
-                em('\tcvtsi2sdq\t%r14, %xmm0');
+                em('\tcvtsi2sdq\t(%rsp), %xmm0');
+        em('\taddq\t$8, %rsp');
             end
             em('\tcvtsi2sdq\t%rax, %xmm1');
         end
@@ -2760,7 +2773,7 @@ while token == 42 || token == 47 || token == 37   % '*' '/' '%'
         etype = 6;
     else
         em('\tmovq\t%rax, %rbx');   % rhs
-        em('\tmovq\t%r14, %rax');   % lhs
+        em('\tpopq\t%rax');   % lhs
         if op == 42
             em('\timulq\t%rbx, %rax');
         elseif sav_etype == 5
@@ -2990,6 +3003,8 @@ elseif token == 183         % sizeof: type or expression
         expect(41);
         if etype == 1
             sz = 1;
+        elseif curarrsz > 0
+            sz = curarrsz;      % a whole array: its total byte size
         elseif estruc
             sz = ssize_of(etype);
         else
