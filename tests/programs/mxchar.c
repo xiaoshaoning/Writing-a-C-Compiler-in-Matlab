@@ -2,6 +2,7 @@
  * mxArrayToString, strcmp, strcat.
  * mexFunction: "prefix:<input>" via strcat, then back via mxCreateString
  * of mxArrayToString.  Harness feeds "hi", expects "prefix:hi". */
+#include <string.h>
 #include "mex.h"
 
 void
