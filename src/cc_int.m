@@ -1669,17 +1669,25 @@ end
 function parse_statement()
 % statement := declaration | '{' statement* '}' | if | while | for | do |
 % break | continue | return | expr ';'
-global token idname typedefs src si
+global token idname typedefs src si lvars lvartype lvararr lvarstruct lvarstride
 if token == 131 || token == 134 || token == 178 || token == 188 || ...  % int/char/struct/unsigned
    token == 189 || ...                                          % double
    (token == 150 && isfield(typedefs, idname))            % typedef'd type
     parse_declaration();
-elseif token == 123         % '{': block
+elseif token == 123         % '{': block — C scopes block locals: a
+    % declaration inside is invisible outside, and sibling blocks may
+    % reuse names.  Snapshot + restore the local maps around the block.
     next();
+    save_blvars = lvars;       save_blvartype = lvartype;
+    save_blvararr = lvararr;   save_blvarstruct = lvarstruct;
+    save_blvarstride = lvarstride;
     while token ~= 125      % '}'
         parse_statement();
     end
     next();
+    lvars = save_blvars;       lvartype = save_blvartype;
+    lvararr = save_blvararr;   lvarstruct = save_blvarstruct;
+    lvarstride = save_blvarstride;
 elseif token == 151         % if
     parse_if();
 elseif token == 152         % while
