@@ -309,7 +309,7 @@ if m == 0                % movq
         sim_opstore(b, v, 64);
     end
 elseif m == 1            % movl / xorl (32-bit, zero-extends)
-    v = mod(sim_opval(a), 4294967296);
+    v = sim_dwordval(a);
     sim_opstore(b, v, 32);
 elseif m == 2            % movzbl
     v = sim_byteval(a);
@@ -567,6 +567,23 @@ elseif a{1} == 2
     v = double(mod(sim_regread(a{2}, a{3}), 256));
 else
     v = mod(a{2}, 256);
+end
+end
+
+function v = sim_dwordval(a)
+% sim_dwordval — read FOUR bytes (little-endian) from an operand for the
+% 32-bit loads (movl).  Reading exactly 4 bytes keeps packed integer
+% elements from overrunning their block's end (sim_load64+mask would
+% read 8 bytes and blow up on a 12-byte int32 array at the heap edge).
+global mem
+if a{1} == 3
+    ad = sim_effaddr(a);
+    v = double(mem(ad + 1)) + 256 * double(mem(ad + 2)) + ...
+        65536 * double(mem(ad + 3)) + 16777216 * double(mem(ad + 4));
+elseif a{1} == 2
+    v = double(mod(sim_regread(a{2}, a{3}), 4294967296));
+else
+    v = mod(a{2}, 4294967296);
 end
 end
 
@@ -885,6 +902,9 @@ end
 pr = 0;
 if ne >= 1
     es = sim_mx_elsize(class_id);
+    if class_id == 3 || class_id == 4
+        es = 8;   % char/logical data is read/written at 8-byte strides
+    end
     pr = sim_malloc(ne * es);
 end
 sim_storeN(h + 56, pr, 8);
