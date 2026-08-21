@@ -1282,7 +1282,11 @@ for k = 1:n
     end
 end
 if r == 0 && numel(a) ~= numel(b)
-    r = a(k) - b(k);
+    if numel(a) > numel(b)
+        r = a(n + 1);          % b at n+1 is the NUL terminator (0)
+    else
+        r = -b(n + 1);
+    end
 end
 end
 

@@ -3396,7 +3396,15 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
                 estruc = 0;
             else
                 etype = et;
-                em('\tmovq\t(%rax), %rax');
+                if et == 7
+                    em('\tmovzwl\t(%rax), %eax');
+                elseif et == 9
+                    em('\tmovl\t(%rax), %eax');
+                elseif et == 1
+                    em('\tmovzbl\t(%rax), %eax');
+                else
+                    em('\tmovq\t(%rax), %rax');
+                end
                 estruc = 0;
             end
         end
@@ -3571,6 +3579,8 @@ global out
 if numel(out) >= 1 && ...
    (strcmp(out{end}, sprintf('\tmovq\t(%%rax), %%rax')) || ...
     strcmp(out{end}, sprintf('\tmovzbl\t(%%rax), %%eax')) || ...
+    strcmp(out{end}, sprintf('\tmovl\t(%%rax), %%eax')) || ...
+    strcmp(out{end}, sprintf('\tmovzwl\t(%%rax), %%eax')) || ...
     strcmp(out{end}, sprintf('\tmovsd\t(%%rax), %%xmm0')))
     out(end) = [];
     ok = 1;
