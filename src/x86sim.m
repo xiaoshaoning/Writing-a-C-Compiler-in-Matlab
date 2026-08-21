@@ -193,12 +193,13 @@ if nargin >= 2 && ~isempty(inputs)
                 d3 = size(v, 3);
             end
             if isinteger(v)
-                cls = 12;   % int32 data: store the raw integer words
+                cls = 12;   % int32 inputs: packed 4-byte words
             else
                 cls = 6;
             end
             h = sim_mx_new(cls, [d1 d2 d3], 0);
             pr = double(sim_load64(h + 56));
+            nbytes = sim_mx_elsize(cls);
             cnt = 0;
             for ii = 1:d1
                 for jj = 1:d2
@@ -206,7 +207,7 @@ if nargin >= 2 && ~isempty(inputs)
                     if cls == 6
                         sim_d2bytes(v(ii, jj), pr + (cnt - 1) * 8);
                     else
-                        sim_storeN(pr + (cnt - 1) * 8, v(ii, jj), 8);
+                        sim_storeN(pr + (cnt - 1) * nbytes, v(ii, jj), nbytes);
                     end
                 end
             end
@@ -267,10 +268,12 @@ if mex_flag
                 end
                 outs{end+1} = M;
             end
-        elseif cls == 12 || cls == 14
+        elseif cls >= 8 && cls <= 15
+            % the integer classes, packed at their native width
+            w = sim_mx_elsize(cls);
             vals = zeros(1, ne);
             for j = 1:ne
-                vals(j) = double(sim_load64(pr + (j - 1) * 8));
+                vals(j) = mod(double(sim_load64(pr + (j - 1) * w)), 2^(8 * w));
             end
             outs{end+1} = vals;
         else
@@ -320,6 +323,12 @@ elseif m == 3            % movsbl
 elseif m == 4            % movb
     v = mod(sim_opval(a), 256);
     sim_opstore(b, v, 8);
+elseif m == 65           % movzwl: 2-byte zero-extend load
+    v = sim_wordval(a);
+    sim_opstore(b, v, 32);
+elseif m == 66           % movw: 2-byte store
+    v = mod(sim_opval(a), 65536);
+    sim_opstore(b, v, 16);
 elseif m == 5            % leaq
     sim_opstore(b, sim_effaddr(a), 64);
 elseif m == 6            % pushq
@@ -561,6 +570,20 @@ else
 end
 end
 
+function v = sim_wordval(a)
+% sim_wordval — read TWO bytes (little-endian) from an operand for the
+% 2-byte loads (movzwl).  Byte-by-byte reads keep the low 16 bits exact.
+global mem
+if a{1} == 3
+    ad = sim_effaddr(a);
+    v = double(mem(ad + 1)) + 256 * double(mem(ad + 2));
+elseif a{1} == 2
+    v = double(mod(sim_regread(a{2}, a{3}), 65536));
+else
+    v = mod(a{2}, 65536);
+end
+end
+
 function sim_opstore(a, v, bits)
 global mem
 if a{1} == 2
@@ -752,6 +775,27 @@ elseif strcmp(nm, 'mxIsComplex')
     regs(1) = int64(mod(double(sim_load64(double(regs(2)) + 16)), 2) == 1);
 elseif strcmp(nm, 'mxIsLogical')
     regs(1) = int64(double(sim_load64(double(regs(2)) + 8)) == 3);
+elseif strcmp(nm, 'mxIsInt8')
+    regs(1) = int64(double(sim_load64(double(regs(2)) + 8)) == 8);
+elseif strcmp(nm, 'mxIsUint8')
+    regs(1) = int64(double(sim_load64(double(regs(2)) + 8)) == 9);
+elseif strcmp(nm, 'mxIsInt16')
+    regs(1) = int64(double(sim_load64(double(regs(2)) + 8)) == 10);
+elseif strcmp(nm, 'mxIsUint16')
+    regs(1) = int64(double(sim_load64(double(regs(2)) + 8)) == 11);
+elseif strcmp(nm, 'mxIsInt32')
+    regs(1) = int64(double(sim_load64(double(regs(2)) + 8)) == 12);
+elseif strcmp(nm, 'mxIsUint32')
+    regs(1) = int64(double(sim_load64(double(regs(2)) + 8)) == 13);
+elseif strcmp(nm, 'mxIsInt64')
+    regs(1) = int64(double(sim_load64(double(regs(2)) + 8)) == 14);
+elseif strcmp(nm, 'mxIsUint64')
+    regs(1) = int64(double(sim_load64(double(regs(2)) + 8)) == 15);
+elseif strcmp(nm, 'mxGetInt8s') || strcmp(nm, 'mxGetUint8s') || ...
+        strcmp(nm, 'mxGetInt16s') || strcmp(nm, 'mxGetUint16s') || ...
+        strcmp(nm, 'mxGetInt32s') || strcmp(nm, 'mxGetUint32s') || ...
+        strcmp(nm, 'mxGetInt64s') || strcmp(nm, 'mxGetUint64s')
+    regs(1) = sim_load64(double(regs(2)) + 56);   % the data address
 elseif strcmp(nm, 'mxIsNaN')
     v = sim_bits2d(regs(2));          % the arg is the double VALUE
     regs(1) = int64(isnan(v));
@@ -840,7 +884,8 @@ for k = 1:numel(dims)
 end
 pr = 0;
 if ne >= 1
-    pr = sim_malloc(ne * 8);
+    es = sim_mx_elsize(class_id);
+    pr = sim_malloc(ne * es);
 end
 sim_storeN(h + 56, pr, 8);
 sim_storeN(h + 64, 0, 8);
@@ -866,8 +911,14 @@ end
 end
 
 function sz = sim_mx_elsize(class_id)
-if class_id == 3 || class_id == 4
+% the integer classes store packed at their native width; everything else
+% keeps an 8-byte slot (doubles, and the char/logical convention).
+if class_id == 3 || class_id == 4 || class_id == 8 || class_id == 9
     sz = 1;
+elseif class_id == 10 || class_id == 11
+    sz = 2;
+elseif class_id == 12 || class_id == 13
+    sz = 4;
 else
     sz = 8;
 end
@@ -1885,6 +1936,7 @@ p50 = cv_of('movsd'); p51 = cv_of('addsd'); p52 = cv_of('subsd');
 p53 = cv_of('mulsd'); p54 = cv_of('divsd'); p55 = cv_of('xorpd');
 p56 = cv_of('cvtsi2sdq'); p57 = cv_of('cvttsd2siq');
 p58 = cv_of('ucomisd'); p59 = cv_of('setnp'); p60 = cv_of('andb');
+p61 = cv_of('movzwl');  p62 = cv_of('movw');
 if cv_eq(d, p8) || cv_eq(d, pm)
     m = 0;
 elseif cv_eq(d, p1) || cv_eq(d, px)
@@ -1931,6 +1983,10 @@ elseif cv_eq(d, p20)
     m = 20;
 elseif cv_eq(d, p21)
     m = 21;
+elseif cv_eq(d, p61)
+    m = 65;
+elseif cv_eq(d, p62)
+    m = 66;
 elseif cv_eq(d, p22)
     m = 22;
 elseif cv_eq(d, p23)
@@ -2104,26 +2160,28 @@ p64 = cv_of('rax'); p64b = cv_of('rcx'); p64c = cv_of('rdx'); p64d = cv_of('rbx'
 p64e = cv_of('rsp'); p64f = cv_of('rbp'); p64g = cv_of('rsi'); p64h = cv_of('rdi');
 p32 = cv_of('eax'); p32b = cv_of('ecx'); p32c = cv_of('edx'); p32d = cv_of('ebx');
 p32e = cv_of('esp'); p32f = cv_of('ebp'); p32g = cv_of('esi'); p32h = cv_of('edi');
+p16 = cv_of('ax'); p16b = cv_of('cx'); p16c = cv_of('dx'); p16d = cv_of('bx');
+p16e = cv_of('sp'); p16f = cv_of('bp'); p16g = cv_of('si'); p16h = cv_of('di');
 nm = name;
 if nm(1) == 37
     nm = nm(2:end);
 end
 idx = -1;
-if cv_eq(nm, p64) || cv_eq(nm, p8) || cv_eq(nm, p32)
+if cv_eq(nm, p64) || cv_eq(nm, p8) || cv_eq(nm, p32) || cv_eq(nm, p16)
     idx = 1;
-elseif cv_eq(nm, p64b) || cv_eq(nm, p8b) || cv_eq(nm, p32b)
+elseif cv_eq(nm, p64b) || cv_eq(nm, p8b) || cv_eq(nm, p32b) || cv_eq(nm, p16b)
     idx = 2;
-elseif cv_eq(nm, p64c) || cv_eq(nm, p8c) || cv_eq(nm, p32c)
+elseif cv_eq(nm, p64c) || cv_eq(nm, p8c) || cv_eq(nm, p32c) || cv_eq(nm, p16c)
     idx = 3;
-elseif cv_eq(nm, p64d) || cv_eq(nm, p8d) || cv_eq(nm, p32d)
+elseif cv_eq(nm, p64d) || cv_eq(nm, p8d) || cv_eq(nm, p32d) || cv_eq(nm, p16d)
     idx = 4;
-elseif cv_eq(nm, p64e) || cv_eq(nm, p8e) || cv_eq(nm, p32e)
+elseif cv_eq(nm, p64e) || cv_eq(nm, p8e) || cv_eq(nm, p32e) || cv_eq(nm, p16e)
     idx = 5;
-elseif cv_eq(nm, p64f) || cv_eq(nm, p8f) || cv_eq(nm, p32f)
+elseif cv_eq(nm, p64f) || cv_eq(nm, p8f) || cv_eq(nm, p32f) || cv_eq(nm, p16f)
     idx = 6;
-elseif cv_eq(nm, p64g) || cv_eq(nm, p8g) || cv_eq(nm, p32g)
+elseif cv_eq(nm, p64g) || cv_eq(nm, p8g) || cv_eq(nm, p32g) || cv_eq(nm, p16g)
     idx = 7;
-elseif cv_eq(nm, p64h) || cv_eq(nm, p8h) || cv_eq(nm, p32h)
+elseif cv_eq(nm, p64h) || cv_eq(nm, p8h) || cv_eq(nm, p32h) || cv_eq(nm, p16h)
     idx = 8;
 elseif numel(nm) >= 3 && nm(1) == 120 && nm(2) == 109 && nm(3) == 109
     % %xmm0..%xmm15: SSE registers -> indices 17..32

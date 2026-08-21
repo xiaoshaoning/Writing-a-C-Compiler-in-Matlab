@@ -9,8 +9,8 @@ mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
     mwSize m = mxGetM(prhs[0]);
     mwSize n = mxGetN(prhs[0]);
     plhs[0] = mxCreateNumericMatrix(m, n, mxINT32_CLASS, mxREAL);
-    int *x = (int *) mxGetData(prhs[0]);
-    int *y = (int *) mxGetData(plhs[0]);
+    int32_t *x = (int32_t *) mxGetData(prhs[0]);
+    int32_t *y = (int32_t *) mxGetData(plhs[0]);
     mwSize numel = mxGetNumberOfElements(prhs[0]);
     for (mwSize i = 0; i < numel; i++)
         y[i] = x[i] + 100;
@@ -24,7 +24,7 @@ int main()
 {
     int i, ok;
     __mex_prhs[0] = mxCreateNumericMatrix(1, 3, mxINT32_CLASS, mxREAL);
-    int *ix = (int *) mxGetData(__mex_prhs[0]);
+    int32_t *ix = (int32_t *) mxGetData(__mex_prhs[0]);
     ix[0] = 10; ix[1] = 20; ix[2] = 30;
 
     mexFunction(1, __mex_plhs, 1, __mex_prhs);
@@ -32,7 +32,7 @@ int main()
     printf("%d\n", (int) mxGetClassID(__mex_plhs[0]));
     printf("%d %d %d\n", (int) mxGetM(__mex_plhs[0]), (int) mxGetN(__mex_plhs[0]),
            (int) mxGetNumberOfElements(__mex_plhs[0]));
-    int *oy = (int *) mxGetData(__mex_plhs[0]);
+    int32_t *oy = (int32_t *) mxGetData(__mex_plhs[0]);
     ok = 1;
     for (i = 0; i < 3; i++) {
         printf("%d%c", oy[i], (i == 2) ? '\n' : 32);

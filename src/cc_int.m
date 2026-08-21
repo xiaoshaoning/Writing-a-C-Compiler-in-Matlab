@@ -2779,7 +2779,9 @@ while token == 43 || token == 45   % '+' '-'
             em('\tsubsd\t%xmm1, %xmm0');
         end
         etype = 6;
-    elseif t >= 2               % the left is a pointer
+    elseif t >= 2 && t ~= 7 && t ~= 9   % the left is a pointer (the
+        % 2-/4-byte integer VALUE codes 7/9 are not pointers; only their
+        % pointer codes 9/11 are)
         em('\tmovq\t%rax, %rbx');   % R -> rbx
         em('\tpopq\t%rax');   % L
         if op == 45 && rhs_t >= 2
