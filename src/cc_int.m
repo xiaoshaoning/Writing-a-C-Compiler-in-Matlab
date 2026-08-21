@@ -187,6 +187,13 @@ libfns.mxGetPr = 'mxGetPr';   libargt.mxGetPr = 8;   libret.mxGetPr = 8;
 libfns.mxGetPi = 'mxGetPi';   libargt.mxGetPi = 8;   libret.mxGetPi = 8;
 libfns.mxGetData = 'mxGetData'; libargt.mxGetData = 8; libret.mxGetData = 8;
 libfns.mxGetChars = 'mxGetChars'; libargt.mxGetChars = 8; libret.mxGetChars = 8;
+% interleaved integer accessors: every width returns the data address
+for lw = {'mxGetInt8s','mxGetUint8s','mxGetInt16s','mxGetUint16s', ...
+         'mxGetInt32s','mxGetUint32s','mxGetInt64s','mxGetUint64s'}
+    libfns.(lw{1}) = lw{1};
+    libargt.(lw{1}) = 8;
+    libret.(lw{1}) = 8;
+end
 libfns.mxGetM = 'mxGetM';     libargt.mxGetM = 8;   libret.mxGetM = 0;
 libfns.mxGetN = 'mxGetN';     libargt.mxGetN = 8;   libret.mxGetN = 0;
 libfns.mxGetNumberOfElements = 'mxGetNumberOfElements';
@@ -208,6 +215,15 @@ libfns.mxIsNaN = 'mxIsNaN';       libargt.mxIsNaN = 6;      libret.mxIsNaN = 0;
 libfns.mxIsInf = 'mxIsInf';       libargt.mxIsInf = 6;      libret.mxIsInf = 0;
 libfns.mxIsEmpty = 'mxIsEmpty';   libargt.mxIsEmpty = 8;    libret.mxIsEmpty = 0;
 libfns.mxIsLogical = 'mxIsLogical'; libargt.mxIsLogical = 8; libret.mxIsLogical = 0;
+% class predicates for the integer classes
+libfns.mxIsInt8 = 'mxIsInt8';   libargt.mxIsInt8 = 8;   libret.mxIsInt8 = 0;
+libfns.mxIsUint8 = 'mxIsUint8'; libargt.mxIsUint8 = 8; libret.mxIsUint8 = 0;
+libfns.mxIsInt16 = 'mxIsInt16'; libargt.mxIsInt16 = 8; libret.mxIsInt16 = 0;
+libfns.mxIsUint16 = 'mxIsUint16'; libargt.mxIsUint16 = 8; libret.mxIsUint16 = 0;
+libfns.mxIsInt32 = 'mxIsInt32'; libargt.mxIsInt32 = 8; libret.mxIsInt32 = 0;
+libfns.mxIsUint32 = 'mxIsUint32'; libargt.mxIsUint32 = 8; libret.mxIsUint32 = 0;
+libfns.mxIsInt64 = 'mxIsInt64'; libargt.mxIsInt64 = 8; libret.mxIsInt64 = 0;
+libfns.mxIsUint64 = 'mxIsUint64'; libargt.mxIsUint64 = 8; libret.mxIsUint64 = 0;
 libfns.mxGetString = 'mxGetString';
 libargt.mxGetString = [8 8 0];                   libret.mxGetString = 0;
 libfns.mxArrayToString = 'mxArrayToString';
@@ -425,6 +441,15 @@ elseif (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
         token = 190;            % Const (no-op qualifier)
     elseif strcmp(id, 'register')
         token = 191;            % Register (no-op qualifier)
+    elseif strcmp(id, 'static')
+        token = 192;            % Static (no-op qualifier)
+    elseif strcmp(id, 'short')
+        token = 193;            % Short: the 2-byte integer base (7)
+    elseif strcmp(id, 'word')
+        token = 194;            % Word: the 4-byte integer base (9); the
+                                % oracle keeps int as the 64-bit base
+    elseif strcmp(id, 'long')
+        token = 195;            % Long: 8-byte (same base as int, 0)
     else
         token = 150;            % Id (incl. 'main'); text in idname
         idname = id;
@@ -824,10 +849,10 @@ function [base, stdef] = parse_basetype()
 % parse_basetype — parse int/char/struct tag; returns the base type code
 % (0 int, 1 char, 1000+2*stid struct) and, for a struct type DEFINITION at
 % file scope, a cell {tag, members} for the caller to register.
-global token idname stags
+global token idname stags enums
 base = 0;
 stdef = 0;
-while token == 190 || token == 191   % const / register: no-ops
+while token == 190 || token == 191 || token == 192   % const / register / static: no-ops
     next();
 end
 if token == 131             % int
@@ -847,6 +872,21 @@ elseif token == 188         % unsigned (int): a 64-bit unsigned type
 elseif token == 189         % double
     base = 6;
     next();
+elseif token == 193         % short: 2-byte integer base
+    base = 7;
+    next();
+    if token == 131         % 'short int'
+        next();
+    end
+elseif token == 194         % word: 4-byte integer base
+    base = 9;
+    next();
+elseif token == 195         % long: 8-byte integer base (same as int)
+    base = 0;
+    next();
+    if token == 131 || token == 193 || token == 194   % 'long int/short/word'
+        next();
+    end
 elseif token == 178         % struct
     next();
     if token ~= 150
@@ -866,6 +906,35 @@ elseif token == 178         % struct
 elseif token == 150 && isfield(typedefs, idname)
     base = typedefs.(idname);
     next();
+elseif token == 185         % enum: `typedef enum { … } mxClassID;` —
+    % register the constants, the type itself is an int (class ids)
+    base = 0;
+    next();
+    if token == 150         % optional tag
+        next();
+    end
+    if token ~= 123
+        fail('expected { after enum');
+    end
+    next();
+    i = 0;
+    while token ~= 125 && token ~= 0
+        if token ~= 150
+            fail('expected an enum identifier');
+        end
+        enm = idname;
+        next();
+        if token == 61      % '='
+            next();
+            i = eval_const();
+        end
+        enums.(enm) = i;
+        i = i + 1;
+        if token == 44
+            next();
+        end
+    end
+    next();                 % '}'
 else
     fail('expected a type');
 end
@@ -880,7 +949,7 @@ membermap = struct();
 mnames = {};
 off = 0;
 while token ~= 125          % '}'
-    while token == 190 || token == 191
+    while token == 190 || token == 191 || token == 192
         next();
     end
     if token == 131         % int
@@ -985,9 +1054,14 @@ end
 
 function sz = elem_size(t)
 % elem_size — byte size per element for pointer arithmetic/indexing on
-% type t: 1 for char*, the struct size for struct-related, else 8.
+% type t: 1 for char*, 2/4 for the 2-/4-byte integer pointer types, the
+% struct size for struct-related, else 8.
 if t == 3
     sz = 1;
+elseif t == 9              % base 7 *: 2-byte elements
+    sz = 2;
+elseif t == 11             % base 9 *: 4-byte elements
+    sz = 4;
 elseif t >= 1000 && t < 1002
     sz = ssize_of(t);
 elseif t >= 1002
@@ -1906,7 +1980,7 @@ function parse_switch()
 % stmts)* '}' — the value is kept in %r10; the dispatch (cmpq/je per case)
 % is spliced before the case bodies, whose lines are buffered during the
 % parse. break targets the switch end; continue the enclosing loop.
-global token out loopctx
+global token out loopctx enums idname
 next();                     % 'switch'
 expect(40);
 parse_expr();
@@ -1929,11 +2003,15 @@ deflbl = '';
 while token ~= 125          % '}'
     if token == 180         % case
         next();
-        if token ~= 128
+        if token == 128          % numeric constant
+            v = double(token_val);
+            next();
+        elseif token == 150 && isfield(enums, idname)   % enum constant
+            v = double(enums.(idname));
+            next();
+        else
             fail('expected a case value');
         end
-        v = double(token_val);
-        next();
         expect(58);         % ':'
         l = newlabel();
         em(sprintf('%s:', l));
@@ -2285,6 +2363,10 @@ while token == 61 || (token >= 160 && token <= 169)
             em(sprintf('%s:', cpd));
         elseif sav_ltype == 1
             em('\tmovb\t%al, (%rbx)');
+        elseif sav_ltype == 7
+            em('\tmovw\t%ax, (%rbx)');
+        elseif sav_ltype == 9
+            em('\tmovl\t%eax, (%rbx)');
         elseif sav_ltype >= 1002 && sav_ltype <= 1000 + 2 * numel(sdefs)
             % struct-value assignment: copy the whole size (preserve rax)
             em('\tmovq\t%rax, %rcx');
@@ -2333,6 +2415,10 @@ while token == 61 || (token >= 160 && token <= 169)
         em('\tpushq\t%rax');            % save the address
         if sav_ltype == 1
             em('\tmovzbl\t(%rax), %eax');
+        elseif sav_ltype == 7
+            em('\tmovzwl\t(%rax), %eax');
+        elseif sav_ltype == 9
+            em('\tmovl\t(%rax), %eax');
         else
             em('\tmovq\t(%rax), %rax');
         end
@@ -2958,10 +3044,15 @@ if token == 40              % '(': a cast (type)unary or parenthesised expr
                 if etype ~= 6
                     em('\tcvtsi2sdq\t%rax, %xmm0');
                 end
-            elseif (cbase == 0 || cbase == 5) && cdepth == 0 && etype == 6
-                % (int)x / (unsigned)x: double -> int (truncate toward 0)
+            elseif (cbase == 0 || cbase == 5 || cbase == 7 || cbase == 9) ...
+                    && cdepth == 0 && etype == 6
+                % (int)x / (unsigned)x / (int16_t)x / (int32_t)x :
+                % double -> int (truncate toward 0)
                 em('\tcvttsd2siq\t%xmm0, %rax');
             elseif cbase == 1 && cdepth == 0
+                if etype == 6
+                    em('\tcvttsd2siq\t%xmm0, %rax');
+                end
                 em('\tmovsbl\t%al, %eax');   % truncate to a signed char
             end
             etype = cbase + 2 * cdepth;
@@ -3215,6 +3306,10 @@ elseif token == 150         % Id: function call or variable
                 if ~isarr
                     if t == 1
                         em('\tmovzbl\t(%rax), %eax');
+                    elseif t == 7
+                        em('\tmovzwl\t(%rax), %eax');
+                    elseif t == 9
+                        em('\tmovl\t(%rax), %eax');
                     elseif t == 6
                         % a double VARIABLE load: value to %xmm0
                         em('\tmovsd\t(%rax), %xmm0');
@@ -3266,6 +3361,14 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
                 elseif t - 2 >= 1000
                     etype = t - 2;
                     estruc = 1;
+                elseif t - 2 == 7
+                    etype = 7;
+                    em('\tmovzwl\t(%rax), %eax');
+                    estruc = 0;
+                elseif t - 2 == 9
+                    etype = 9;
+                    em('\tmovl\t(%rax), %eax');
+                    estruc = 0;
                 elseif t - 2 == 6
                     etype = 6;
                     em('\tmovsd\t(%rax), %xmm0');
