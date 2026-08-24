@@ -21,7 +21,7 @@ function varargout = x86sim(sfile, inputs)
 % function boundaries, so names are compared as code vectors.
 
 global MEMSZ DATA_BASE CODE_BASE STACK_TOP MHEAP
-global mem symnames symvals clnames clvals code regs xmms zf sf cf of pf fids simdone
+global mem symnames symvals clnames clvals code regs xmms zf sf cf of pf fids simdone sim_mex_locked
 MEMSZ  = 4 * 1024 * 1024;
 DATA_BASE = 4096;
 CODE_BASE = DATA_BASE + MEMSZ;
@@ -41,6 +41,7 @@ xmms = zeros(1, 16);            % SSE registers: hold the double VALUE
 zf = 0; sf = 0; cf = 0; of = 0; pf = 0;
 fids = struct();
 simdone = 0;
+sim_mex_locked = 0;   % mexLock/mexUnlock state (within and across runs)
 
 % ---- read the source as a double code vector ----
 fid = fopen(sfile, 'r');
@@ -53,24 +54,33 @@ srcC = double(src);
 lines = sim_strsplit(srcC);
 
 % ---- pass 1: data layout + code lines ----
+% The clone's cell auto-grow is O(n) per append (calloc + copy), so
+% building the instruction cell via code{end+1} is O(n^2) — preallocate
+% to numel(lines) and trim the unused tail instead.
 cursor = DATA_BASE;
-pending = {};                  % {addr, nbytes, value-or-labelcodes}
+NL = numel(lines);
+symnames = cell(1, NL);  symvals = zeros(1, NL);   sym_n = 0;
+clnames = cell(1, NL);   clvals = zeros(1, NL);    cl_n = 0;
+code = cell(1, NL);                                 code_n = 0;
+pending = cell(1, NL);                              pend_n = 0;
 mode = 'text';
 plab = [];                     % a pending label awaiting data/code resolution
-for li = 1:numel(lines)
+for li = 1:NL
     L = lines{li};
     if L(end) == 58 && isempty(sim_find(L, 9))      % ':' label, no tab
         lab = cv_slice(L, 1, numel(L)-1);
         if strcmp(mode, 'data')
-            symnames{end+1} = lab;
-            symvals(end+1) = cursor;
+            sym_n = sym_n + 1;
+            symnames{sym_n} = lab;
+            symvals(sym_n) = cursor;
         elseif ~(numel(lab) >= 3 && lab(1) == 46 && lab(2) == 76 && lab(3) == 70)
             % not a .LF marker: resolve any pending label (a label followed
             % by a label in the text section is a code label), then hold
             % the new one pending for the next item
-            if ~isempty(plab)
-                clnames{end+1} = plab;
-                clvals(end+1) = numel(code) + 1;
+                        if ~isempty(plab)
+                cl_n = cl_n + 1;
+                clnames{cl_n} = plab;
+                clvals(cl_n) = code_n + 1;
             end
             plab = lab;
         end
@@ -84,8 +94,9 @@ for li = 1:numel(lines)
             mode = 'data';
         elseif cv_eq(d, cv_of('.comm'))
             if ~isempty(plab)
-                symnames{end+1} = plab;
-                symvals(end+1) = cursor;
+                sym_n = sym_n + 1;
+                symnames{sym_n} = plab;
+                symvals(sym_n) = cursor;
                 plab = [];
             end
             parts = sim_split_commas(rest);
@@ -96,13 +107,15 @@ for li = 1:numel(lines)
                 aln = str2double(cv_char(parts{3}));
             end
             cursor = cursor + mod(-cursor, aln);
-            symnames{end+1} = nm;
-            symvals(end+1) = cursor;
+            sym_n = sym_n + 1;
+            symnames{sym_n} = nm;
+            symvals(sym_n) = cursor;
             cursor = cursor + sz;
         elseif cv_eq(d, cv_of('.quad')) || cv_eq(d, cv_of('.byte'))
             if ~isempty(plab)
-                symnames{end+1} = plab;
-                symvals(end+1) = cursor;
+                sym_n = sym_n + 1;
+                symnames{sym_n} = plab;
+                symvals(sym_n) = cursor;
                 plab = [];
             end
             nb = 8;
@@ -112,33 +125,80 @@ for li = 1:numel(lines)
             parts = sim_split_commas(rest);
             for k = 1:numel(parts)
                 p = sim_trim(parts{k});
+                pend_n = pend_n + 1;
                 if ~isempty(p) && p(1) == 46
-                    pending{end+1} = {cursor, nb, p};   % a label reference
+                    pending{pend_n} = {cursor, nb, p};   % a label reference
                 else
-                    pending{end+1} = {cursor, nb, sim_num64(p)};
+                    pending{pend_n} = {cursor, nb, sim_num64(p)};
                 end
                 cursor = cursor + nb;
             end
         elseif cv_eq(d, cv_of('.string'))
             if ~isempty(plab)
-                symnames{end+1} = plab;
-                symvals(end+1) = cursor;
+                sym_n = sym_n + 1;
+                symnames{sym_n} = plab;
+                symvals(sym_n) = cursor;
                 plab = [];
             end
             txt = sim_unescape(rest);
-            pending{end+1} = {cursor, 1, [double('S'), txt]};
+            pend_n = pend_n + 1;
+            pending{pend_n} = {cursor, 1, [double('S'), txt]};
             cursor = cursor + numel(txt) + 1;
         end
         continue;
     end
     if strcmp(mode, 'text')
         if ~isempty(plab)
-            clnames{end+1} = plab;
-            clvals(end+1) = numel(code) + 1;
+            cl_n = cl_n + 1;
+            clnames{cl_n} = plab;
+            clvals(cl_n) = code_n + 1;
             plab = [];
         end
-        code{end+1} = sim_parse_insn(L);
+        code_n = code_n + 1;
+        code{code_n} = sim_parse_insn(L);
     end
+end
+% The clone's cell SLICING (c(1:n)) is broken (returns empty), so trim
+% by rebuilding a fresh cell with a loop.
+if code_n > 0
+    code2 = cell(1, code_n);
+    for k = 1:code_n
+        code2{k} = code{k};
+    end
+    code = code2;
+else
+    code = {};
+end
+if cl_n > 0
+    clnames2 = cell(1, cl_n);
+    for k = 1:cl_n
+        clnames2{k} = clnames{k};
+    end
+    clnames = clnames2;
+    clvals = clvals(1:cl_n);
+else
+    clnames = {};
+    clvals = [];
+end
+if sym_n > 0
+    symnames2 = cell(1, sym_n);
+    for k = 1:sym_n
+        symnames2{k} = symnames{k};
+    end
+    symnames = symnames2;
+    symvals = symvals(1:sym_n);
+else
+    symnames = {};
+    symvals = [];
+end
+if pend_n > 0
+    pending2 = cell(1, pend_n);
+    for k = 1:pend_n
+        pending2{k} = pending{k};
+    end
+    pending = pending2;
+else
+    pending = {};
 end
 % ---- mem: [0, CODE_BASE) plus room for call return-address pushes ----
 mem = zeros(1, CODE_BASE + numel(code) + 64, 'uint8');
@@ -157,6 +217,8 @@ for k = 1:numel(pending)
     end
 end
 
+steps = 0;
+n = numel(code);
 % ---- run: CRT entry ----
 if cl_get(cv_of('main')) < 0
     error('x86sim: no main');
@@ -168,7 +230,11 @@ n = numel(code);
 steps = 0;
 maxsteps = 50000000;
 mex_flag = 0;
-if nargin >= 2 && ~isempty(inputs)
+% mex mode is driven by the harness (mex_run passes an inputs cell even
+% when empty): a no-input oracle MEX call still reads back plhs and sees
+% __mex_nrhs = 0 (the fresh .comm).  The raw harness mains run with a
+% single argument and stay in exit-code mode.
+if nargin >= 2 && iscell(inputs)
     mex_flag = 1;
     pbase = sym_get(cv_of('__mex_prhs'));
     qbase = sym_get(cv_of('__mex_plhs'));
@@ -177,48 +243,17 @@ if nargin >= 2 && ~isempty(inputs)
         error('x86sim: mex mode needs __mex_prhs/__mex_plhs globals');
     end
     nk = numel(inputs);
-    for k = 1:nk
+        for k = 1:nk
         v = inputs{k};
-        if ischar(v)
-            h = sim_mx_new(4, [1 max(1, numel(v))], 0);
-            pr = double(sim_load64(h + 56));
-            for j = 1:numel(v)
-                sim_storeN(pr + (j - 1) * 8, double(v(j)), 8);
-            end
-        elseif isnumeric(v)
-            d1 = size(v, 1);
-            d2 = size(v, 2);
-            d3 = 1;
-            if numel(size(v)) >= 3
-                d3 = size(v, 3);
-            end
-            if isinteger(v)
-                cls = 12;   % int32 inputs: packed 4-byte words
-            else
-                cls = 6;
-            end
-            h = sim_mx_new(cls, [d1 d2 d3], 0);
-            pr = double(sim_load64(h + 56));
-            nbytes = sim_mx_elsize(cls);
-            cnt = 0;
-            for ii = 1:d1
-                for jj = 1:d2
-                    cnt = cnt + 1;
-                    if cls == 6
-                        sim_d2bytes(v(ii, jj), pr + (cnt - 1) * 8);
-                    else
-                        sim_storeN(pr + (cnt - 1) * nbytes, v(ii, jj), nbytes);
-                    end
-                end
-            end
-        else
-            error('x86sim: unsupported input type');
-        end
+        % char/double/int matrices live in the sim heap as MATLAB-COLUMN-
+        % MAJOR memory (matching the clone's real_data and the C code's
+        % i + j*m indexing); cells/structs/sparse/complex get dedicated
+        % layouts via mat2sim.
+        h = mat2sim(v);
         sim_storeN(pbase + 8 * (k - 1), h, 8);
     end
     if nrsec >= 0
         sim_storeN(nrsec, nk, 8);
-    else
     end
 end
 while pc >= 1 && pc <= n && simdone == 0
@@ -238,47 +273,7 @@ if mex_flag
         if h == 0
             continue;
         end
-        cls = double(sim_load64(h + 8));
-        d1 = double(sim_load64(h + 32));
-        d2 = double(sim_load64(h + 40));
-        pr = double(sim_load64(h + 56));
-        ne = d1 * d2;
-        if cls == 4
-            vals = zeros(1, ne);
-            for j = 1:ne
-                vals(j) = mod(double(sim_load64(pr + (j - 1) * 8)), 256);
-            end
-            outs{end+1} = char(vals);
-        elseif cls == 6
-            vals = zeros(1, ne);
-            for j = 1:ne
-                vals(j) = sim_bytes2d(pr + (j - 1) * 8);
-            end
-            if ne == 1
-                outs{end+1} = vals;
-            else
-                % C row-major values with dims [m n]: M(i,j) = vals((i-1)*n+j).
-                % (the clone's reshape/transpose order differs from MATLAB,
-                % so build the matrix explicitly)
-                M = zeros(d1, d2);
-                for ii = 1:d1
-                    for jj = 1:d2
-                        M(ii, jj) = vals((ii - 1) * d2 + jj);
-                    end
-                end
-                outs{end+1} = M;
-            end
-        elseif cls >= 8 && cls <= 15
-            % the integer classes, packed at their native width
-            w = sim_mx_elsize(cls);
-            vals = zeros(1, ne);
-            for j = 1:ne
-                vals(j) = mod(double(sim_load64(pr + (j - 1) * w)), 2^(8 * w));
-            end
-            outs{end+1} = vals;
-        else
-            outs{end+1} = [];
-        end
+        outs{end+1} = sim_mx2mat(h);
     end
     varargout = {outs, exit_code};
 else
@@ -431,7 +426,6 @@ elseif m == 38           % ret
 elseif m >= 50 && m <= 55   % movsd addsd subsd mulsd divsd xorpd
     if m == 50              % movsd: VALUE moves (mem<->xmm, xmm<->xmm)
         if b{1} == 3
-            wf = fopen('D:/tmp/wlog.txt', 'a'); fprintf(wf, 'store mem=%d val=%-6.2f ', sim_effaddr(b), sim_opval(a)); fclose(wf);
         end
         va = sim_opval(a);
         if a{1} == 3 && b{1} == 2       % mem -> xmm
@@ -475,7 +469,6 @@ elseif m == 58           % ucomisd: compare (b vs a), VALUES
     xa = sim_opval(a);
     xb = sim_opval(b);
     dd = fopen('D:/tmp/mxdbg.txt','a'); fprintf(dd,' uc %.17g | %.17g', xb, xa); fclose(dd);
-    wf = fopen('D:/tmp/wlog.txt', 'a'); fprintf(wf, 'uc %.6f %.6f ', xb, xa); fclose(wf);
     if isnan(xa) || isnan(xb)
         zf = 1; cf = 1; of = 0; sf = 0; pf = 1;   % unordered
     elseif xb == xa
@@ -488,7 +481,6 @@ elseif m == 58           % ucomisd: compare (b vs a), VALUES
 elseif m == 59           % setnp %al: al = !PF
     global pf zf cf
     sim_opstore(a, 1 - pf, 8);
-    wf = fopen('D:/tmp/wlog.txt', 'a'); fprintf(wf, 'np z%d c%d p%d ', zf, cf, pf); fclose(wf);
 elseif m == 60           % andb %cl, %al: 8-bit and
     v = bitand(mod(sim_opval(a), 256), mod(sim_opval(b), 256), 'int64');
     sim_opstore(b, v, 8);
@@ -728,7 +720,9 @@ function sim_mx(namecodes)
 % Data lives in separately-allocated blocks addressed by pr/pi.  The
 % Win64-packed args are in regs(2)/regs(3)/regs(9)/regs(10); return
 % values go in regs(1) for int/pointer and in xmms(1) for double.
-global regs xmms mem
+% Extended headers:  struct (+80 nfields, +88 fieldnames block),
+%                    sparse (+80 ir, +88 jc, +96 nzmax).
+global regs xmms mem sim_mex_locked
 nm = cv_char(namecodes);
 if strcmp(nm, 'mxCreateDoubleMatrix')
     h = sim_mx_new(6, [double(regs(2)) double(regs(3))], double(regs(9)));
@@ -775,7 +769,6 @@ elseif strcmp(nm, 'mxGetScalar')
     end
     xmms(1) = v;
     regs(1) = sim_d2bits(v);
-    dd = fopen('D:/tmp/mxdbg.txt','a'); fprintf(dd,' scal h=%d pr=%d v=%.17g', h, pr, v); fclose(dd);
 elseif strcmp(nm, 'mxGetClassID')
     regs(1) = sim_load64(double(regs(2)) + 8);
 elseif strcmp(nm, 'mxGetClassName')
@@ -853,7 +846,7 @@ elseif strcmp(nm, 'mxDuplicateArray')
 elseif strcmp(nm, 'mxDestroyArray') || strcmp(nm, 'mxFree')
     regs(1) = int64(0);   % arena heap: no real destructor
 elseif strcmp(nm, 'mxSetData')
-    sim_storeN(double(regs(2)) + 56, sim_load64(double(regs(3))), 8);
+    sim_storeN(double(regs(2)) + 56, regs(3), 8);   % pr IS the pointer value
     regs(1) = int64(0);
 elseif strcmp(nm, 'mxAssert')
     if double(regs(2)) == 0
@@ -868,12 +861,223 @@ elseif strcmp(nm, 'mexPrintf')
     regs(1) = int64(n);
 elseif strcmp(nm, 'mexEvalString')
     regs(1) = int64(0);
+elseif strcmp(nm, 'mxIsCell')
+    regs(1) = int64(double(sim_load64(double(regs(2)) + 8)) == 1);
+elseif strcmp(nm, 'mxCreateCellMatrix')
+    % the pr block is the element-handle array (numel x 8 bytes)
+    h = sim_mx_new(1, [double(regs(2)) double(regs(3))], 0);
+    pr = double(sim_load64(h + 56));
+    for k = 1:sim_mx_numel(h)
+        sim_storeN(pr + (k - 1) * 8, 0, 8);
+    end
+    regs(1) = int64(h);
+elseif strcmp(nm, 'mxGetCell')
+    h = double(regs(2));
+    pr = double(sim_load64(h + 56));
+    i = double(regs(3));
+    regs(1) = sim_load64(pr + i * 8);
+elseif strcmp(nm, 'mxSetCell')
+    % the value argument IS the element handle (an int) — store it as-is
+    h = double(regs(2));
+    pr = double(sim_load64(h + 56));
+    i = double(regs(3));
+    sim_storeN(pr + i * 8, regs(9), 8);
+    regs(1) = int64(0);
+elseif strcmp(nm, 'mxIsStruct')
+    regs(1) = int64(double(sim_load64(double(regs(2)) + 8)) == 2);
+elseif strcmp(nm, 'mxCreateStructMatrix')
+    % header +16 extra: +80 nfields, +88 fieldnames block; pr = the
+    % field-major element-handle block (numel*nfields x 8 bytes)
+    h = sim_mx_alloc(2, [double(regs(2)) double(regs(3))], 0, 16);
+    nf = double(regs(9));
+    sim_storeN(h + 80, nf, 8);
+    fa = double(regs(10));
+    fblk = sim_malloc(nf * 8);
+    for f = 1:nf
+        sc = mem_strcodes(double(sim_load64(fa + (f - 1) * 8)));
+        sblk = sim_malloc(numel(sc) + 1);
+        for j = 1:numel(sc)
+            mem(sblk + j) = uint8(sc(j));
+        end
+        mem(sblk + numel(sc) + 1) = uint8(0);
+        sim_storeN(fblk + (f - 1) * 8, sblk, 8);
+    end
+    sim_storeN(h + 88, fblk, 8);
+    ne = sim_mx_numel(h);
+    dblk = sim_malloc(ne * nf * 8);
+    for j = 1:ne * nf
+        sim_storeN(dblk + (j - 1) * 8, 0, 8);
+    end
+    sim_storeN(h + 56, dblk, 8);
+    regs(1) = int64(h);
+elseif strcmp(nm, 'mxGetNumberOfFields')
+    regs(1) = sim_load64(double(regs(2)) + 80);
+elseif strcmp(nm, 'mxGetFieldNumber')
+    f = sim_mx_findfield(double(regs(2)), mem_strcodes(double(regs(3))));
+    regs(1) = int64(f);   % 1-based; -1 when absent (real MATLAB: 0)
+elseif strcmp(nm, 'mxGetFieldNameByNumber')
+    h = double(regs(2));
+    f = double(regs(3));
+    nf = double(sim_load64(h + 80));
+    if f < 1 || f > nf
+        regs(1) = int64(0);
+    else
+        fblk = double(sim_load64(h + 88));
+        regs(1) = sim_load64(fblk + (f - 1) * 8);
+    end
+elseif strcmp(nm, 'mxGetField') || strcmp(nm, 'mxGetFieldByNumber')
+    h = double(regs(2));
+    i = double(regs(3));
+    if strcmp(nm, 'mxGetField')
+        f = sim_mx_findfield(h, mem_strcodes(double(regs(9))));
+        if f < 0
+            regs(1) = int64(0);
+        else
+            dblk = double(sim_load64(h + 56));
+            ne = sim_mx_numel(h);
+            regs(1) = sim_load64(dblk + ((f - 1) * ne + i) * 8);
+        end
+    else
+        f = double(regs(9));
+        dblk = double(sim_load64(h + 56));
+        ne = sim_mx_numel(h);
+        regs(1) = sim_load64(dblk + ((f - 1) * ne + i) * 8);
+    end
+elseif strcmp(nm, 'mxSetField') || strcmp(nm, 'mxSetFieldByNumber')
+    h = double(regs(2));
+    i = double(regs(3));
+    v = regs(10);   % the value argument IS the field-value handle
+    if strcmp(nm, 'mxSetField')
+        f = sim_mx_findfield(h, mem_strcodes(double(regs(9))));
+        if f < 0
+            regs(1) = int64(-1);
+        else
+            dblk = double(sim_load64(h + 56));
+            ne = sim_mx_numel(h);
+            sim_storeN(dblk + ((f - 1) * ne + i) * 8, v, 8);
+            regs(1) = int64(0);
+        end
+    else
+        f = double(regs(9));
+        dblk = double(sim_load64(h + 56));
+        ne = sim_mx_numel(h);
+        sim_storeN(dblk + ((f - 1) * ne + i) * 8, v, 8);
+        regs(1) = int64(0);
+    end
+elseif strcmp(nm, 'mxIsSparse')
+    regs(1) = int64(bitand(double(sim_load64(double(regs(2)) + 16)), 2) == 2);
+elseif strcmp(nm, 'mxCreateSparse')
+    % header +24 extra: +80 ir, +88 jc, +96 nzmax; pr = the nzmax-value
+    % block (8-byte doubles), ir/jc packed 4-byte (mwIndex = int)
+    m = double(regs(2)); n = double(regs(3));
+    nzmax = double(regs(9)); cf = double(regs(10));
+    h = sim_mx_alloc(6, [m n], cf, 24);
+    sim_storeN(h + 16, bitor(cf, 2), 8);   % complex bit0 + sparse bit1
+    % ir/jc are mwIndex = size_t = 8 bytes (cc_int's int and the real
+    % Win64 ABI), so the blocks are 8-byte-packed like the C code indexes
+    % them (jc[k] at jc + 8*k)
+    pr = sim_malloc(nzmax * 8);
+    ir = sim_malloc(nzmax * 8);
+    jc = sim_malloc((n + 1) * 8);
+    for j = 1:nzmax
+        sim_storeN(pr + (j - 1) * 8, 0, 8);
+        sim_storeN(ir + (j - 1) * 8, 0, 8);
+    end
+    for j = 1:n + 1
+        sim_storeN(jc + (j - 1) * 8, 0, 8);
+    end
+    sim_storeN(h + 56, pr, 8);
+    sim_storeN(h + 80, ir, 8);
+    sim_storeN(h + 88, jc, 8);
+    sim_storeN(h + 96, nzmax, 8);
+    regs(1) = int64(h);
+elseif strcmp(nm, 'mxGetIr')
+    regs(1) = sim_load64(double(regs(2)) + 80);
+elseif strcmp(nm, 'mxGetJc')
+    regs(1) = sim_load64(double(regs(2)) + 88);
+elseif strcmp(nm, 'mxGetNzmax')
+    regs(1) = sim_load64(double(regs(2)) + 96);
+elseif strcmp(nm, 'mxSetIr')
+    sim_storeN(double(regs(2)) + 80, sim_load64(double(regs(3))), 8);
+    regs(1) = int64(0);
+elseif strcmp(nm, 'mxSetJc')
+    sim_storeN(double(regs(2)) + 88, sim_load64(double(regs(3))), 8);
+    regs(1) = int64(0);
+elseif strcmp(nm, 'mexMakeArrayPersistent') || ...
+        strcmp(nm, 'mexMakeMemoryPersistent') || strcmp(nm, 'mexAtExit')
+    regs(1) = int64(0);   % no-ops: the sim heap is arena-based; at-exit
+                          % callbacks are never invoked (no unload)
+elseif strcmp(nm, 'mexLock')
+    sim_mex_locked = 1;
+    regs(1) = int64(0);
+elseif strcmp(nm, 'mexUnlock')
+    sim_mex_locked = 0;
+    regs(1) = int64(0);
+elseif strcmp(nm, 'mexIsLocked')
+    regs(1) = int64(1 * (sim_mex_locked > 0));
+elseif strcmp(nm, 'mexCallMATLAB') || strcmp(nm, 'mexCallMATLABWithTrap')
+    % mexCallMATLAB(nlhs, plhs, nrhs, prhs, fname): 5th arg on the stack
+    % at [rsp+32] (Win64 shadow space; see printf_arg)
+    nlhs = double(regs(2));
+    plhsaddr = double(regs(3));
+    nrhs = double(regs(9));
+    prhsaddr = double(regs(10));
+    f5 = double(sim_load64(double(regs(5)) + 32));
+    fname = cv_char(mem_strcodes(f5));
+    margs = {};
+    for k = 1:nrhs
+        margs{end+1} = sim_mx2mat(double(sim_load64(prhsaddr + (k - 1) * 8)));
+    end
+    try
+        r = sim_feval_multi(fname, margs, nlhs);
+        for k = 1:min(nlhs, numel(r))
+            sim_storeN(plhsaddr + (k - 1) * 8, mat2sim(r{k}), 8);
+        end
+        if strcmp(nm, 'mexCallMATLAB')
+            regs(1) = int64(0);
+        else
+            regs(1) = int64(0);   % WithTrap: NULL = success
+        end
+    catch
+        if strcmp(nm, 'mexCallMATLAB')
+            % real mexCallMATLAB never returns on error: raise it
+            error(['mexCallMATLAB(' fname ') failed']);
+        else
+            % WithTrap: a non-NULL handle to a minimal object array
+            regs(1) = int64(sim_mx_new(17, [1 1], 0));
+        end
+    end
+elseif strcmp(nm, 'mexEvalString') || strcmp(nm, 'mexEvalStringWithTrap')
+    code = cv_char(mem_strcodes(double(regs(2))));
+    try
+        evalin('base', code);
+        regs(1) = int64(0);   % WithTrap: NULL = success
+    catch err
+        if strcmp(nm, 'mexEvalString')
+            error(err.identifier, err.message);   % propagate like the real API
+        else
+            regs(1) = int64(sim_mx_new(17, [1 1], 0));
+        end
+    end
+elseif strcmp(nm, 'mexGetVariable') || strcmp(nm, 'mexGetVariablePtr')
+    nmc = mem_strcodes(double(regs(3)));
+    try
+        v = evalin('base', cv_char(nmc));
+        regs(1) = int64(mat2sim(v));
+    catch
+        regs(1) = int64(0);   % NULL: not found
+    end
+elseif strcmp(nm, 'mexPutVariable')
+    assignin('base', cv_char(mem_strcodes(double(regs(3)))), ...
+             sim_mx2mat(double(regs(9))));
+    regs(1) = int64(0);
 elseif strcmp(nm, 'mexErrMsgIdAndTxt')
-    % print MATLAB-style and stop: real mexErrMsgIdAndTxt never returns
-    fprintf('Error using %s\n', cv_char(mem_strcodes(double(regs(3)))));
-    global simdone
-    simdone = 1;
-    regs(1) = int64(-1);
+    % Raise a REAL catchable error with the MEX identifier (never returns,
+    % like the real API).  The engine propagates it through mex_run to the
+    % caller's try/catch; error(id, msg) needs ':' in the id (MATLAB rule)
+    % and the corpus keeps messages format-arg-free.
+    error(cv_char(mem_strcodes(double(regs(2)))), ...
+          cv_char(mem_strcodes(double(regs(3)))));
 else
     error(['x86sim: unknown mx function ' nm]);
 end
@@ -881,8 +1085,18 @@ end
 
 function h = sim_mx_new(class_id, dims, complexflag)
 % sim_mx_new — allocate an 80-byte mxArray header + its data block.
+h = sim_mx_alloc(class_id, dims, complexflag, 0);
+end
+
+function h = sim_mx_alloc(class_id, dims, complexflag, extra)
+% sim_mx_alloc — raw header with `extra` extra bytes past +80 (sparse
+% and struct store their extended fields there).  With extra == 0 the
+% data block is allocated: every class gets an 8-byte-slot block except
+% the packed integer classes; class 2 (struct) gets none (the struct
+% shim owns the field-major handle block).  A complex flag also
+% allocates the pi block (mxGetPi on a complex matrix must be writable).
 global mem
-h = sim_malloc(80);
+h = sim_malloc(80 + extra);
 sim_storeN(h + 0, 1298231634, 8);          % 'MXAR'
 sim_storeN(h + 8, class_id, 8);
 sim_storeN(h + 16, double(complexflag), 8);
@@ -900,7 +1114,7 @@ for k = 1:numel(dims)
     ne = ne * dims(k);
 end
 pr = 0;
-if ne >= 1
+if extra == 0 && ne >= 1 && class_id ~= 2
     es = sim_mx_elsize(class_id);
     if class_id == 3 || class_id == 4
         es = 8;   % char/logical data is read/written at 8-byte strides
@@ -908,7 +1122,15 @@ if ne >= 1
     pr = sim_malloc(ne * es);
 end
 sim_storeN(h + 56, pr, 8);
-sim_storeN(h + 64, 0, 8);
+pi = 0;
+if extra == 0 && mod(complexflag, 2) == 1 && class_id ~= 2 && ne >= 1
+    es = sim_mx_elsize(class_id);
+    if class_id == 3 || class_id == 4
+        es = 8;
+    end
+    pi = sim_malloc(ne * es);
+end
+sim_storeN(h + 64, pi, 8);
 sim_storeN(h + 72, 1, 8);
 end
 
@@ -1141,9 +1363,16 @@ if cv_eq(namecodes, cv_of('printf'))
     fmt = mem_strcodes(double(regs(2)));
     n = sim_printf(fmt, double(regs(3)), double(regs(9)), double(regs(10)));
     regs(1) = int64(n);
-elseif cv_eq(namecodes, cv_of('malloc'))
+elseif cv_eq(namecodes, cv_of('malloc')) || cv_eq(namecodes, cv_of('mxMalloc'))
     sz = double(regs(2));
     regs(1) = int64(sim_malloc(sz));
+elseif cv_eq(namecodes, cv_of('mxCalloc'))
+    n = double(regs(2)); sz = double(regs(3));
+    a = sim_malloc(n * sz);
+    for k = 0:n * sz - 1
+        mem(a + k + 1) = uint8(0);
+    end
+    regs(1) = int64(a);
 elseif cv_eq(namecodes, cv_of('memset'))
     dst = double(regs(2)); val = double(regs(3)); cnt = double(regs(9));
     for k = 0:cnt-1
@@ -1936,157 +2165,47 @@ end
 
 function m = sim_mnemonic(d)
 % d = the mnemonic as a code vector -> an opcode index.
+%
+% The 65-entry table is built ONCE (persistent global).  The previous
+% per-call rebuild (75x cv_of + up to 75x cv_eq, each a ~1ms user-function
+% call in the clone) cost ~150ms per instruction line in pass 1; this
+% version uses builtins only (numel/all inline), prefilters on length +
+% first char, and is ordered by corpus frequency so the common mnemonics
+% (movq, pushq, leaq, ...) match in the first few iterations.
+global sim_mn_codes sim_mn_lens sim_mn_c1 sim_mn_ops
+if isempty(sim_mn_ops)
+    names = {'movq','pushq','leaq','popq','addq','call','movsd','imulq','subq', ...
+             'cmpq','jmp','ret','andq','xorl','je','movzbl','sete','setl', ...
+             'movabsq','mulsd','cvtsi2sdq','subsd','jne','setne','addsd', ...
+             'divsd','setg','setge','seta','setle','ucomisd','andb','cqto', ...
+             'cvttsd2siq','divq','idivq','incq','ja','jae','jb','jbe','jg', ...
+             'jge','jl','jle','jnz','jz','movb','movl','movsbl','movw','movzwl', ...
+             'negq','notq','orq','sarq','setae','setb','setbe','setnp','shlq', ...
+             'shrq','testb','xorpd','xorq'};
+    ops = [0 6 5 7 8 37 50 10 9 18 28 38 11 1 29 2 22 24 0 53 56 52 30 23 ...
+           51 54 26 27 41 25 58 60 20 57 45 21 16 46 48 47 49 33 34 31 32 ...
+           36 35 4 1 3 66 65 14 15 12 39 43 40 42 59 17 44 19 55 13];
+    nt = numel(names);
+    sim_mn_codes = cell(1, nt);
+    sim_mn_lens = zeros(1, nt);
+    sim_mn_c1 = zeros(1, nt);
+    for k = 1:nt
+        t = double(names{k});
+        sim_mn_codes{k} = t;
+        sim_mn_lens(k) = numel(t);
+        sim_mn_c1(k) = t(1);
+    end
+    sim_mn_ops = ops;
+end
 m = 99;
-p8  = cv_of('movq');  p1 = cv_of('movl');  p2 = cv_of('movzbl');
-p3  = cv_of('movsbl'); p4 = cv_of('movb');  p5 = cv_of('leaq');
-p6  = cv_of('pushq'); p7 = cv_of('popq');  p8b = cv_of('addq');
-p9  = cv_of('subq');  p10 = cv_of('imulq'); p11 = cv_of('andq');
-p12 = cv_of('orq');   p13 = cv_of('xorq'); p14 = cv_of('negq');
-p15 = cv_of('notq');  p16 = cv_of('incq'); p17 = cv_of('shlq');
-p17b= cv_of('sarq');  p18 = cv_of('cmpq'); p19 = cv_of('testb');
-p20 = cv_of('cqto');  p21 = cv_of('idivq'); p22 = cv_of('sete');
-p23 = cv_of('setne'); p24 = cv_of('setl'); p25 = cv_of('setle');
-p26 = cv_of('setg');  p27 = cv_of('setge'); p28 = cv_of('jmp');
-p29 = cv_of('je');    p30 = cv_of('jne'); p31 = cv_of('jl');
-p32 = cv_of('jle');   p33 = cv_of('jg');  p34 = cv_of('jge');
-p35 = cv_of('jz');    p36 = cv_of('jnz'); p37 = cv_of('call');
-p38 = cv_of('ret');   px  = cv_of('xorl');
-p40 = cv_of('setb');  p41 = cv_of('seta'); p42 = cv_of('setbe');
-p43 = cv_of('setae'); p44 = cv_of('shrq'); p45 = cv_of('divq');
-p46 = cv_of('ja');    p47 = cv_of('jb');   p48 = cv_of('jae');
-p49 = cv_of('jbe');
-pm = cv_of('movabsq');
-p50 = cv_of('movsd'); p51 = cv_of('addsd'); p52 = cv_of('subsd');
-p53 = cv_of('mulsd'); p54 = cv_of('divsd'); p55 = cv_of('xorpd');
-p56 = cv_of('cvtsi2sdq'); p57 = cv_of('cvttsd2siq');
-p58 = cv_of('ucomisd'); p59 = cv_of('setnp'); p60 = cv_of('andb');
-p61 = cv_of('movzwl');  p62 = cv_of('movw');
-if cv_eq(d, p8) || cv_eq(d, pm)
-    m = 0;
-elseif cv_eq(d, p1) || cv_eq(d, px)
-    m = 1;
-elseif cv_eq(d, p2)
-    m = 2;
-elseif cv_eq(d, p3)
-    m = 3;
-elseif cv_eq(d, p4)
-    m = 4;
-elseif cv_eq(d, p5)
-    m = 5;
-elseif cv_eq(d, p6)
-    m = 6;
-elseif cv_eq(d, p7)
-    m = 7;
-elseif cv_eq(d, p8b)
-    m = 8;
-elseif cv_eq(d, p9)
-    m = 9;
-elseif cv_eq(d, p10)
-    m = 10;
-elseif cv_eq(d, p11)
-    m = 11;
-elseif cv_eq(d, p12)
-    m = 12;
-elseif cv_eq(d, p13)
-    m = 13;
-elseif cv_eq(d, p14)
-    m = 14;
-elseif cv_eq(d, p15)
-    m = 15;
-elseif cv_eq(d, p16)
-    m = 16;
-elseif cv_eq(d, p17)
-    m = 17;
-elseif cv_eq(d, p17b)
-    m = 39;
-elseif cv_eq(d, p18)
-    m = 18;
-elseif cv_eq(d, p19)
-    m = 19;
-elseif cv_eq(d, p20)
-    m = 20;
-elseif cv_eq(d, p21)
-    m = 21;
-elseif cv_eq(d, p61)
-    m = 65;
-elseif cv_eq(d, p62)
-    m = 66;
-elseif cv_eq(d, p22)
-    m = 22;
-elseif cv_eq(d, p23)
-    m = 23;
-elseif cv_eq(d, p24)
-    m = 24;
-elseif cv_eq(d, p25)
-    m = 25;
-elseif cv_eq(d, p26)
-    m = 26;
-elseif cv_eq(d, p27)
-    m = 27;
-elseif cv_eq(d, p28)
-    m = 28;
-elseif cv_eq(d, p29)
-    m = 29;
-elseif cv_eq(d, p30)
-    m = 30;
-elseif cv_eq(d, p31)
-    m = 31;
-elseif cv_eq(d, p32)
-    m = 32;
-elseif cv_eq(d, p33)
-    m = 33;
-elseif cv_eq(d, p34)
-    m = 34;
-elseif cv_eq(d, p35)
-    m = 35;
-elseif cv_eq(d, p36)
-    m = 36;
-elseif cv_eq(d, p37)
-    m = 37;
-elseif cv_eq(d, p38)
-    m = 38;
-elseif cv_eq(d, p40)
-    m = 40;
-elseif cv_eq(d, p41)
-    m = 41;
-elseif cv_eq(d, p42)
-    m = 42;
-elseif cv_eq(d, p43)
-    m = 43;
-elseif cv_eq(d, p44)
-    m = 44;
-elseif cv_eq(d, p45)
-    m = 45;
-elseif cv_eq(d, p46)
-    m = 46;
-elseif cv_eq(d, p47)
-    m = 47;
-elseif cv_eq(d, p48)
-    m = 48;
-elseif cv_eq(d, p49)
-    m = 49;
-elseif cv_eq(d, p50)
-    m = 50;
-elseif cv_eq(d, p51)
-    m = 51;
-elseif cv_eq(d, p52)
-    m = 52;
-elseif cv_eq(d, p53)
-    m = 53;
-elseif cv_eq(d, p54)
-    m = 54;
-elseif cv_eq(d, p55)
-    m = 55;
-elseif cv_eq(d, p56)
-    m = 56;
-elseif cv_eq(d, p57)
-    m = 57;
-elseif cv_eq(d, p58)
-    m = 58;
-elseif cv_eq(d, p59)
-    m = 59;
-elseif cv_eq(d, p60)
-    m = 60;
+ld = numel(d);
+c1 = d(1);
+lens = sim_mn_lens; c1s = sim_mn_c1; codes = sim_mn_codes; ops = sim_mn_ops;
+for k = 1:65
+    if lens(k) == ld && c1s(k) == c1 && all(d == codes{k})
+        m = ops(k);
+        return;
+    end
 end
 end
 
@@ -2178,53 +2297,59 @@ end
 
 function idx = sim_regidx(name)
 % name = a code vector (e.g. '%rbp', '%al', '%r8d').
-p8  = cv_of('al'); p8b = cv_of('cl'); p8c = cv_of('dl'); p8d = cv_of('bl');
-p8e = cv_of('spl'); p8f = cv_of('bpl'); p8g = cv_of('sil'); p8h = cv_of('dil');
-p64 = cv_of('rax'); p64b = cv_of('rcx'); p64c = cv_of('rdx'); p64d = cv_of('rbx');
-p64e = cv_of('rsp'); p64f = cv_of('rbp'); p64g = cv_of('rsi'); p64h = cv_of('rdi');
-p32 = cv_of('eax'); p32b = cv_of('ecx'); p32c = cv_of('edx'); p32d = cv_of('ebx');
-p32e = cv_of('esp'); p32f = cv_of('ebp'); p32g = cv_of('esi'); p32h = cv_of('edi');
-p16 = cv_of('ax'); p16b = cv_of('cx'); p16c = cv_of('dx'); p16d = cv_of('bx');
-p16e = cv_of('sp'); p16f = cv_of('bp'); p16g = cv_of('si'); p16h = cv_of('di');
+% Persistent table + length-prefilter: the previous 40x cv_of rebuild
+% cost ~40ms per call in the clone (user-function call overhead), which
+% dominated operand parsing in pass 1.
+global sim_reg_names sim_reg_lens sim_reg_ops
+if isempty(sim_reg_ops)
+    rnames = {'rax','rcx','rdx','rbx','rsp','rbp','rsi','rdi', ...
+              'al','cl','dl','bl','spl','bpl','sil','dil', ...
+              'eax','ecx','edx','ebx','esp','ebp','esi','edi', ...
+              'ax','cx','dx','bx','sp','bp','si','di'};
+    rops = [1 2 3 4 5 6 7 8 1 2 3 4 5 6 7 8 1 2 3 4 5 6 7 8 1 2 3 4 5 6 7 8];
+    rt = numel(rnames);
+    sim_reg_names = cell(1, rt);
+    sim_reg_lens = zeros(1, rt);
+    sim_reg_ops = zeros(1, rt);
+    for k = 1:rt
+        t = double(rnames{k});
+        sim_reg_names{k} = t;
+        sim_reg_lens(k) = numel(t);
+        sim_reg_ops(k) = rops(k);
+    end
+end
 nm = name;
 if nm(1) == 37
     nm = nm(2:end);
 end
-idx = -1;
-if cv_eq(nm, p64) || cv_eq(nm, p8) || cv_eq(nm, p32) || cv_eq(nm, p16)
-    idx = 1;
-elseif cv_eq(nm, p64b) || cv_eq(nm, p8b) || cv_eq(nm, p32b) || cv_eq(nm, p16b)
-    idx = 2;
-elseif cv_eq(nm, p64c) || cv_eq(nm, p8c) || cv_eq(nm, p32c) || cv_eq(nm, p16c)
-    idx = 3;
-elseif cv_eq(nm, p64d) || cv_eq(nm, p8d) || cv_eq(nm, p32d) || cv_eq(nm, p16d)
-    idx = 4;
-elseif cv_eq(nm, p64e) || cv_eq(nm, p8e) || cv_eq(nm, p32e) || cv_eq(nm, p16e)
-    idx = 5;
-elseif cv_eq(nm, p64f) || cv_eq(nm, p8f) || cv_eq(nm, p32f) || cv_eq(nm, p16f)
-    idx = 6;
-elseif cv_eq(nm, p64g) || cv_eq(nm, p8g) || cv_eq(nm, p32g) || cv_eq(nm, p16g)
-    idx = 7;
-elseif cv_eq(nm, p64h) || cv_eq(nm, p8h) || cv_eq(nm, p32h) || cv_eq(nm, p16h)
-    idx = 8;
-elseif numel(nm) >= 3 && nm(1) == 120 && nm(2) == 109 && nm(3) == 109
+nn = numel(nm);
+if nn >= 3 && nm(1) == 120 && nm(2) == 109 && nm(3) == 109
     % %xmm0..%xmm15: SSE registers -> indices 17..32
-    digs = nm(4:end);
+    digs = nm(4:nn);
     if isempty(digs)
         error('x86sim: bad xmm register');
     end
     idx = str2double(cv_char(digs)) + 17;
-elseif numel(nm) >= 2 && nm(1) == 114 && nm(2) >= 48 && nm(2) <= 57
-    digs = nm(2:end);
+    return;
+end
+if nn >= 2 && nm(1) == 114 && nm(2) >= 48 && nm(2) <= 57
+    digs = nm(2:nn);
     while numel(digs) >= 1 && (digs(end) == 98 || digs(end) == 119 || ...
           digs(end) == 100)
         digs = digs(1:end-1);
     end
     idx = str2double(cv_char(digs)) + 1;   % r8 -> 9 .. r15 -> 16
+    return;
 end
-if idx < 0
-    error('x86sim: unknown register');
+idx = -1;
+lens = sim_reg_lens; nms = sim_reg_names; ops = sim_reg_ops;
+for k = 1:32
+    if lens(k) == nn && all(nm == nms{k})
+        idx = ops(k);
+        return;
+    end
 end
+error('x86sim: unknown register');
 end
 
 function bits = sim_regbits(name)
@@ -2257,5 +2382,334 @@ while true
     end
     s(end+1) = c;
     k = k + 1;
+end
+end
+
+% --------------------------------------------------------------------------
+% sim_mx2mat / mat2sim — the sim-memory <-> MATLAB-value converters.
+% Numeric matrices are stored COLUMN-MAJOR (like MATLAB and the clone's
+% real_data), so C code using classic i + j*m indexing behaves identically
+% on the gcc and oracle tracks.
+% --------------------------------------------------------------------------
+function v = sim_mx2mat(h)
+% sim_mx2mat — convert an in-sim mxArray handle to a MATLAB value.
+global mem
+if h == 0
+    v = [];
+    return;
+end
+cls = double(sim_load64(h + 8));
+flags = double(sim_load64(h + 16));
+d1 = double(sim_load64(h + 32));
+
+d2 = double(sim_load64(h + 40));
+d3 = double(sim_load64(h + 48));
+pr = double(sim_load64(h + 56));
+ne = d1 * d2 * d3;
+if cls == 1
+    c = cell(d1, d2);
+    for k = 1:ne
+        eh = double(sim_load64(pr + (k - 1) * 8));
+        c{k} = sim_mx2mat(eh);
+    end
+    v = c;
+elseif cls == 2
+    nf = double(sim_load64(h + 80));
+    fblk = double(sim_load64(h + 88));
+    fn = cell(1, nf);
+    for f = 1:nf
+        fn{f} = cv_char(mem_strcodes(double(sim_load64(fblk + (f - 1) * 8))));
+    end
+    if ne == 1
+        s = struct();
+        for f = 1:nf
+            s.(fn{f}) = sim_mx2mat(double(sim_load64(pr + (f - 1) * ne * 8)));
+        end
+        v = s;
+    else
+        c = cell(1, ne);
+        for k = 1:ne
+            s = struct();
+            for f = 1:nf
+                s.(fn{f}) = sim_mx2mat(double(sim_load64(pr + ((f - 1) * ne + (k - 1)) * 8)));
+            end
+            c{k} = s;
+        end
+        v = [c{:}];
+    end
+elseif cls == 4
+    vals = zeros(1, ne);
+    for j = 1:ne
+        vals(j) = mod(double(sim_load64(pr + (j - 1) * 8)), 256);
+    end
+    v = char(vals);
+elseif cls == 6
+    if bitand(flags, 2) == 2
+        ir = double(sim_load64(h + 80));
+        jc = double(sim_load64(h + 88));
+        n = d2;
+        nz = double(sim_load64(jc + n * 8));
+        ii = zeros(1, nz); jj = zeros(1, nz); vv = zeros(1, nz);
+        col = 0;
+        for k = 1:nz
+            while col < n && double(sim_load64(jc + (col + 1) * 8)) <= k - 1
+                col = col + 1;
+            end
+            ii(k) = double(sim_load64(ir + (k - 1) * 8)) + 1;
+            jj(k) = col + 1;
+            vv(k) = sim_bytes2d(pr + (k - 1) * 8);
+        end
+        v = sparse(ii, jj, vv, d1, d2);
+        if mod(flags, 2) == 1
+            pi = double(sim_load64(h + 64));
+            iv = zeros(1, nz);
+            for k = 1:nz
+                iv(k) = sim_bytes2d(pi + (k - 1) * 8);
+            end
+            v = v + 1i * sparse(ii, jj, iv, d1, d2);
+        end
+    else
+        vals = zeros(1, ne);
+        for j = 1:ne
+            vals(j) = sim_bytes2d(pr + (j - 1) * 8);
+        end
+        if ne == 1
+            v = vals;
+        else
+            % column-major memory (MATLAB-native): M(i,j) = vals((j-1)*d1+i)
+            M = zeros(d1, d2);
+            for jj = 1:d2
+                for ii = 1:d1
+                    M(ii, jj) = vals((jj - 1) * d1 + ii);
+                end
+            end
+            v = M;
+        end
+        if mod(flags, 2) == 1
+            pi = double(sim_load64(h + 64));
+            vals = zeros(1, ne);
+            for j = 1:ne
+                vals(j) = sim_bytes2d(pi + (j - 1) * 8);
+            end
+            if ne == 1
+                v = v + 1i * vals;
+            else
+                Mi = zeros(d1, d2);
+                for jj = 1:d2
+                    for ii = 1:d1
+                        Mi(ii, jj) = vals((jj - 1) * d1 + ii);
+                    end
+                end
+                v = v + 1i * Mi;
+            end
+        end
+    end
+elseif cls >= 8 && cls <= 15
+    w = sim_mx_elsize(cls);
+    vals = zeros(1, ne);
+    for j = 1:ne
+        vals(j) = mod(double(sim_load64(pr + (j - 1) * w)), 2^(8 * w));
+    end
+    switch cls
+        case 8, v = int8(vals);
+        case 9, v = uint8(vals);
+        case 10, v = int16(vals);
+        case 11, v = uint16(vals);
+        case 12, v = int32(vals);
+        case 13, v = uint32(vals);
+        case 14, v = int64(vals);
+        case 15, v = uint64(vals);
+    end
+else
+    v = [];
+end
+end
+
+function h = mat2sim(v)
+% mat2sim — convert a MATLAB value to an in-sim mxArray handle.
+global mem
+if ischar(v)
+    % convert to a DOUBLE code vector FIRST: the clone auto-calls a
+    % string INDEX v(j) when v matches a function name ('sin'(j) =
+    % sin(j)), so never index the raw char (double vectors are inert)
+    codes = double(v);
+    h = sim_mx_new(4, [1 max(1, numel(codes))], 0);
+    pr = double(sim_load64(h + 56));
+    for j = 1:numel(codes)
+        sim_storeN(pr + (j - 1) * 8, codes(j), 8);
+    end
+elseif issparse(v)
+    [m n] = size(v);
+    [i j s] = find(v);
+    nz = numel(i);
+    h = sim_mx_new(6, [m n], 0);
+    sim_storeN(h + 16, 2, 8);   % sparse flag
+    ir = sim_malloc(nz * 8);
+    jc = sim_malloc((n + 1) * 8);
+    pr = sim_malloc(nz * 8);
+    cnt = zeros(1, n + 1);
+    for k = 1:nz
+        cnt(j(k)) = cnt(j(k)) + 1;   % column j(k) (1-based)
+    end
+    % jc[k] = # nonzeros in columns 1..k (0-based index k); jc[0] = 0
+    sim_storeN(jc, 0, 8);
+    acc = 0;
+    for c = 1:n
+        acc = acc + cnt(c);
+        sim_storeN(jc + c * 8, acc, 8);
+    end
+    for k = 1:nz
+        sim_storeN(ir + (k - 1) * 8, i(k) - 1, 8);
+        sim_d2bytes(s(k), pr + (k - 1) * 8);
+    end
+
+    sim_storeN(h + 56, pr, 8);
+    sim_storeN(h + 80, ir, 8);
+    sim_storeN(h + 88, jc, 8);
+    sim_storeN(h + 96, nz, 8);
+elseif iscell(v)
+    d1 = size(v, 1); d2 = size(v, 2);
+    h = sim_mx_new(1, [d1 d2], 0);
+    pr = double(sim_load64(h + 56));
+    cnt = 0;
+    for ii = 1:d1
+        for jj = 1:d2
+            cnt = cnt + 1;
+            sim_storeN(pr + (cnt - 1) * 8, mat2sim(v{ii, jj}), 8);
+        end
+    end
+elseif isstruct(v)
+    fn = fieldnames(v);
+    nf = numel(fn);
+    ne = numel(v);
+    d1 = size(v, 1); d2 = size(v, 2);
+    h = sim_mx_alloc(2, [d1 d2], 0, 16);
+    sim_storeN(h + 80, nf, 8);
+    fblk = sim_malloc(nf * 8);
+    for f = 1:nf
+        sc = double(fn{f});
+        sblk = sim_malloc(numel(sc) + 1);
+        for j = 1:numel(sc)
+            mem(sblk + j) = uint8(sc(j));
+        end
+        mem(sblk + numel(sc) + 1) = uint8(0);
+        sim_storeN(fblk + (f - 1) * 8, sblk, 8);
+    end
+    sim_storeN(h + 88, fblk, 8);
+    dblk = sim_malloc(ne * nf * 8);
+    for f = 1:nf
+        for k = 1:ne
+            sim_storeN(dblk + ((f - 1) * ne + (k - 1)) * 8, ...
+                       mat2sim(v(k).(fn{f})), 8);
+        end
+    end
+    sim_storeN(h + 56, dblk, 8);
+elseif isnumeric(v) || islogical(v)
+    d1 = size(v, 1); d2 = size(v, 2);
+    d3 = 1;
+    if numel(size(v)) >= 3
+        d3 = size(v, 3);
+    end
+    if isinteger(v)
+        if isa(v, 'int8'), cls = 8;
+        elseif isa(v, 'uint8'), cls = 9;
+        elseif isa(v, 'int16'), cls = 10;
+        elseif isa(v, 'uint16'), cls = 11;
+        elseif isa(v, 'int32'), cls = 12;
+        elseif isa(v, 'uint32'), cls = 13;
+        elseif isa(v, 'int64'), cls = 14;
+        else cls = 15; end
+    else
+        cls = 6;
+    end
+    cf = 0;
+    if cls == 6 && ~isreal(v)
+        cf = 1;
+    end
+    h = sim_mx_new(cls, [d1 d2 d3], cf);
+    pr = double(sim_load64(h + 56));
+    nbytes = sim_mx_elsize(cls);
+    cnt = 0;
+    for jj = 1:d2
+        for ii = 1:d1
+            cnt = cnt + 1;
+            if cls == 6
+                sim_d2bytes(real(v(ii, jj)), pr + (cnt - 1) * 8);
+            else
+                sim_storeN(pr + (cnt - 1) * nbytes, ...
+                           mod(double(v(ii, jj)), 2^(8 * nbytes)), nbytes);
+            end
+        end
+    end
+    if cf
+        pi = double(sim_load64(h + 64));
+        cnt = 0;
+        for jj = 1:d2
+            for ii = 1:d1
+                cnt = cnt + 1;
+                sim_d2bytes(imag(v(ii, jj)), pi + (cnt - 1) * 8);
+            end
+        end
+    end
+else
+    error('x86sim: mat2sim unsupported input type');
+end
+end
+
+function v = sim_load32(addr)
+% sim_load32 — exact little-endian 32-bit load from a raw address
+% (packed mwIndex data in sparse ir/jc blocks).
+global mem
+v = double(mem(addr + 1)) + 256 * double(mem(addr + 2)) + ...
+    65536 * double(mem(addr + 3)) + 16777216 * double(mem(addr + 4));
+end
+
+function f = sim_mx_findfield(h, nmc)
+% sim_mx_findfield — 1-based field index of name nmc in struct h; -1 if
+% absent.  The stored field names are NUL-terminated sim strings.
+global mem
+nf = double(sim_load64(h + 80));
+fblk = double(sim_load64(h + 88));
+f = -1;
+for k = 1:nf
+    saddr = double(sim_load64(fblk + (k - 1) * 8));
+    if sim_strcmp(mem_strcodes(saddr), nmc) == 0
+        f = k;
+        return;
+    end
+end
+end
+
+function r = sim_feval_multi(fname, margs, nlhs)
+% sim_feval_multi — feval with an explicit output count and EXPLICIT cell
+% indexing (the clone's cell EXPANSION margs{:} inside a call corrupts the
+% args and the [c{:}] = feval(...) lhs form is unsupported, so branch per
+% arg count and per nlhs; margs{k} indexing is safe).
+n = numel(margs);
+if nlhs == 1
+    if n == 1
+        r = {feval(fname, margs{1})};
+    elseif n == 2
+        r = {feval(fname, margs{1}, margs{2})};
+    elseif n == 3
+        r = {feval(fname, margs{1}, margs{2}, margs{3})};
+    else
+        r = {feval(fname)};
+    end
+elseif nlhs == 2
+    if n == 1
+        [a, b] = feval(fname, margs{1});
+    else
+        [a, b] = feval(fname, margs{1}, margs{2});
+    end
+    r = {a, b};
+elseif nlhs == 3
+    [a, b, c] = feval(fname, margs{1}, margs{2}, margs{3});
+    r = {a, b, c};
+elseif nlhs == 4
+    [a, b, c, d] = feval(fname, margs{1}, margs{2}, margs{3}, margs{4});
+    r = {a, b, c, d};
+else
+    r = {feval(fname, margs{1})};
 end
 end

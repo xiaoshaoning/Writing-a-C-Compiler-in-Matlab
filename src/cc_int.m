@@ -60,8 +60,13 @@ global src si token token_val token_dval token_isflt idname strtext out fname lb
        strs nstr etype ltype cret loopctx stags sdefs nstid estruc ...
        lvarstruct gstruct typedefs enums lvarstride gstride bstride glabels sret sretsize libfns libcalls ginit fptypes libargt libret
 
-if nargin ~= 2
-   error('USAGE: cc_int in.c out.s');
+if nargin ~= 2 && nargin ~= 3
+    error('USAGE: cc_int in.c out.s');
+end
+
+peephole_on = 1;
+if nargin == 3 && strcmp(varargin{3}, 'nopeephole')
+    peephole_on = 0;
 end
 
 source_file = varargin{1};
@@ -241,6 +246,64 @@ libfns.mexErrMsgIdAndTxt = 'mexErrMsgIdAndTxt';
 libargt.mexErrMsgIdAndTxt = [8 8];               libret.mexErrMsgIdAndTxt = 0;
 libfns.mexEvalString = 'mexEvalString';
 libargt.mexEvalString = 8;                       libret.mexEvalString = 0;
+% cell arrays
+libfns.mxIsCell = 'mxIsCell'; libargt.mxIsCell = 8; libret.mxIsCell = 0;
+libfns.mxCreateCellMatrix = 'mxCreateCellMatrix';
+libargt.mxCreateCellMatrix = [0 0];               libret.mxCreateCellMatrix = 8;
+libfns.mxGetCell = 'mxGetCell';
+libargt.mxGetCell = [8 0];                        libret.mxGetCell = 8;
+libfns.mxSetCell = 'mxSetCell';
+libargt.mxSetCell = [8 0 8];                      libret.mxSetCell = 0;
+% struct arrays
+libfns.mxIsStruct = 'mxIsStruct'; libargt.mxIsStruct = 8; libret.mxIsStruct = 0;
+libfns.mxCreateStructMatrix = 'mxCreateStructMatrix';
+libargt.mxCreateStructMatrix = [0 0 0 8];         libret.mxCreateStructMatrix = 8;
+libfns.mxGetNumberOfFields = 'mxGetNumberOfFields';
+libargt.mxGetNumberOfFields = 8;                  libret.mxGetNumberOfFields = 0;
+libfns.mxGetFieldNumber = 'mxGetFieldNumber';
+libargt.mxGetFieldNumber = [8 8];                 libret.mxGetFieldNumber = 0;
+libfns.mxGetFieldNameByNumber = 'mxGetFieldNameByNumber';
+libargt.mxGetFieldNameByNumber = [8 0];           libret.mxGetFieldNameByNumber = 8;
+libfns.mxGetField = 'mxGetField';
+libargt.mxGetField = [8 0 8];                     libret.mxGetField = 8;
+libfns.mxGetFieldByNumber = 'mxGetFieldByNumber';
+libargt.mxGetFieldByNumber = [8 0 0];             libret.mxGetFieldByNumber = 8;
+libfns.mxSetField = 'mxSetField';
+libargt.mxSetField = [8 0 8 8];                   libret.mxSetField = 0;
+libfns.mxSetFieldByNumber = 'mxSetFieldByNumber';
+libargt.mxSetFieldByNumber = [8 0 0 8];           libret.mxSetFieldByNumber = 0;
+% sparse
+libfns.mxIsSparse = 'mxIsSparse'; libargt.mxIsSparse = 8; libret.mxIsSparse = 0;
+libfns.mxCreateSparse = 'mxCreateSparse';
+libargt.mxCreateSparse = [0 0 0 0];               libret.mxCreateSparse = 8;
+libfns.mxGetIr = 'mxGetIr';     libargt.mxGetIr = 8;     libret.mxGetIr = 8;
+libfns.mxGetJc = 'mxGetJc';     libargt.mxGetJc = 8;     libret.mxGetJc = 8;
+libfns.mxGetNzmax = 'mxGetNzmax'; libargt.mxGetNzmax = 8; libret.mxGetNzmax = 0;
+libfns.mxSetIr = 'mxSetIr';     libargt.mxSetIr = [8 8]; libret.mxSetIr = 0;
+libfns.mxSetJc = 'mxSetJc';     libargt.mxSetJc = [8 8]; libret.mxSetJc = 0;
+% lifecycle
+libfns.mexLock = 'mexLock';                       libret.mexLock = 0;
+libfns.mexUnlock = 'mexUnlock';                   libret.mexUnlock = 0;
+libfns.mexIsLocked = 'mexIsLocked';               libret.mexIsLocked = 0;
+libfns.mexMakeArrayPersistent = 'mexMakeArrayPersistent';
+libargt.mexMakeArrayPersistent = 8;               libret.mexMakeArrayPersistent = 0;
+libfns.mexMakeMemoryPersistent = 'mexMakeMemoryPersistent';
+libargt.mexMakeMemoryPersistent = 8;              libret.mexMakeMemoryPersistent = 0;
+libfns.mexAtExit = 'mexAtExit';
+libargt.mexAtExit = 8;                            libret.mexAtExit = 0;
+% callbacks
+libfns.mexCallMATLAB = 'mexCallMATLAB';
+libargt.mexCallMATLAB = [0 8 0 8 8];              libret.mexCallMATLAB = 0;
+libfns.mexCallMATLABWithTrap = 'mexCallMATLABWithTrap';
+libargt.mexCallMATLABWithTrap = [0 8 0 8 8];      libret.mexCallMATLABWithTrap = 8;
+libfns.mexEvalStringWithTrap = 'mexEvalStringWithTrap';
+libargt.mexEvalStringWithTrap = 8;                libret.mexEvalStringWithTrap = 8;
+libfns.mexGetVariable = 'mexGetVariable';
+libargt.mexGetVariable = [8 8];                   libret.mexGetVariable = 8;
+libfns.mexGetVariablePtr = 'mexGetVariablePtr';
+libargt.mexGetVariablePtr = [8 8];                libret.mexGetVariablePtr = 8;
+libfns.mexPutVariable = 'mexPutVariable';
+libargt.mexPutVariable = [8 8 8];                 libret.mexPutVariable = 0;
 % string.h / stdio.  sprintf is varargs (int/char* mixed) so no libargt.
 libfns.strcmp = 'strcmp'; libargt.strcmp = [8 8]; libret.strcmp = 0;
 libfns.strlen = 'strlen'; libargt.strlen = 8;    libret.strlen = 0;
@@ -250,6 +313,8 @@ libfns.strncmp = 'strncmp'; libargt.strncmp = [8 8 0]; libret.strncmp = 0;
 libfns.malloc = 'malloc'; libargt.malloc = 0; libret.malloc = 8;
 libfns.free = 'free'; libargt.free = 8; libret.free = 0;
 libfns.mxFree = 'mxFree'; libargt.mxFree = 8; libret.mxFree = 0;
+libfns.mxMalloc = 'mxMalloc'; libargt.mxMalloc = 0; libret.mxMalloc = 8;
+libfns.mxCalloc = 'mxCalloc'; libargt.mxCalloc = [0 0]; libret.mxCalloc = 8;
 libfns.strcat = 'strcat'; libargt.strcat = [8 8]; libret.strcat = 8;
 fptypes = struct();   % user function -> vector of parameter type codes
 libcalls = struct();  % 'name_nargs' -> 1 for every shim used (emitted)
@@ -257,7 +322,13 @@ out = {};       % emitted assembly lines (cell; tabs are literal in em)
 
 next();
 parse_program();
-out = peephole_pass(out);   % optimization plan Phase B (safe local rewrites)
+% the peephole optimizer is the dominant compile cost on the clone's
+% slow string ops; the mex oracle path (mex_run) skips it via the
+% 'nopeephole' flag — the corpus runs identically either way (the sim
+% executes unoptimized code fine).
+if peephole_on
+    out = peephole_pass(out);
+end
 
 fid_output = fopen(destination_file, 'w+');
 if fid_output < 0
@@ -1585,7 +1656,47 @@ function lab = new_str(text)
 global strs nstr
 lab = sprintf('.Lstr%d', nstr);
 nstr = nstr + 1;
-strs{end+1} = {lab, double(norm_fmt(char(text)))};   % stored as codes
+strs{end+1} = {lab, norm_codes(double(text))};   % stored as codes
+end
+
+function t = norm_codes(codes)
+% norm_codes — code-vector version of norm_fmt (drop printf length
+% modifiers l ll h hh j z t L before the conversion char).  The CLONE
+% auto-calls a STRING argument that matches a function name ('sin'
+% passed to a local function becomes callable), so format strings must
+% never cross a local-function boundary as raw char arrays — they stay
+% double code vectors here.
+t = [];
+i = 1;
+nf = numel(codes);
+while i <= nf
+    if codes(i) ~= 37          % '%'
+        t = [t, codes(i)];
+        i = i + 1;
+        continue;
+    end
+    j = i + 1;
+    if j <= nf && codes(j) == 37
+        t = [t, codes(i), codes(j)];   % literal percent
+        i = j + 1;
+        continue;
+    end
+    p = j;
+    while p <= nf && ~((codes(p) >= 65 && codes(p) <= 90) || ...
+                       (codes(p) >= 97 && codes(p) <= 122))
+        p = p + 1;
+    end
+    k = p;
+    while k <= nf && ~isempty(strfind('hljztL', char(codes(k))))
+        k = k + 1;
+    end
+    if k > nf
+        t = [t, codes(i)];     % a lone trailing '%': leave it
+        break;
+    end
+    t = [t, codes(i), codes(j:p-1), codes(k)];
+    i = k + 1;
+end
 end
 
 function t = norm_fmt(fmt)
@@ -1745,7 +1856,7 @@ function parse_statement()
 % break | continue | return | expr ';'
 global token idname typedefs src si lvars lvartype lvararr lvarstruct lvarstride
 if token == 131 || token == 134 || token == 178 || token == 188 || ...  % int/char/struct/unsigned
-   token == 189 || ...                                          % double
+   token == 189 || token == 190 || token == 191 || token == 192 || ... % double/const/register/static
    (token == 150 && isfield(typedefs, idname))            % typedef'd type
     parse_declaration();
 elseif token == 123         % '{': block — C scopes block locals: a
@@ -1904,7 +2015,8 @@ next();                     % consume 'for'
 expect(40);
 if token ~= 59              % ';': optional init
     if token == 131 || token == 134 || token == 178 || token == 188 || ...
-       token == 189 || (token == 150 && isfield(typedefs, idname))
+       token == 189 || token == 190 || token == 191 || token == 192 || ...
+       (token == 150 && isfield(typedefs, idname))
         parse_declaration();      % `for (mwSize i = 0; ...)`; consumes ';'
     else
         parse_assignment();
