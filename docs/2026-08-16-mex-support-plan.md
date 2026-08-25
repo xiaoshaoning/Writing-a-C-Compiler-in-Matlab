@@ -238,3 +238,42 @@ passing; new groups append).
   is a follow-up.
 - **Performance** — `x86sim` runs at MATLAB speed; `mex_run` is a
   validation tool, not a runtime.
+
+## 10. GCC reference track — DONE (2026-08-25)
+
+`mex_run(..., 'gcc')` is implemented:
+
+- **`src/mx_ref.c`** — a standalone native mx/mex runtime implementing the
+  documented mxArray ABI (exact offsets, extended struct/cell/sparse/cells
+  area) plus the corpus's mx*/mex* surface (~80 entries incl. the protocol
+  helpers).  Compiles with real gcc; the mex source's preprocessor lines
+  are stripped cc_int-style so both tracks compile BYTE-IDENTICAL code
+  text, only the toolchain differs.
+- **`src/mex_run_gcc.m`** — the driver: assembles [std includes + decls +
+  mx_ref.c + stripped source + harness main], caches the build by
+  comparing the assembly, compiles with gcc (`-O2 -w -std=c11`; locates
+  gcc via MW_MINGW64_LOC → msys64 ucrt64 → PATH), runs the exe with the
+  inputs (text protocol file: `N <nrhs>` + one spec per input:
+  D/Z/C/L/I/CE/ST/SP), and parses the plhs dump back into MATLAB arrays.
+- **`tests/run_mex_run_gcc.sh`** — the A/B gate: `mex_run(src, ins...)`
+  (x86sim track) vs `mex_run(src, ins..., 'gcc')` must be `isequal` on
+  every corpus pair.  **18/18 pass** across the group-11 sources and the
+  main repo's B+ parity corpus (mxcell build+get, mxstruct build+get,
+  mxsparse build+get, mxerror 'id', mxprint, mxpersist get+lock, yprime,
+  matrixDivideComplex).  mexcallmatlab.c is excluded: mexCallMATLAB /
+  mexEvalString / mexGetVariable need a MATLAB host (mx_ref.c raises a
+  clear error for them).
+
+**Clone quirks hit along the way** (all worked around):
+- `v(:).'` on a char returns a **double** in the clone — dropped the
+  defensive transpose in the serializer.
+- `['a' 10 'b']` (bare `10` between char literals) yields a **double**
+  (no char promotion); wrap the assembly in `char(...)` before writing.
+- `fprintf(2, ...)` is the only stderr form (bare `stderr` is undefined).
+- The exe must `freopen` the input/output files onto stdin/stdout (the
+  driver passes them as argv; mexPrintf routes to stderr so it cannot
+  corrupt the plhs dump protocol).
+- mxIsNaN/mxIsInf/mxIsFinite are VALUE-based (real mex.h macros), not
+  mxArray-based.
+- GCC 14+ treats implicit declarations as errors: mx_ref.c carries full
+  forward declarations.

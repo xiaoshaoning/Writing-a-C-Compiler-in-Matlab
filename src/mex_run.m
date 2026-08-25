@@ -34,7 +34,8 @@ if ~isempty(varargin) && ischar(varargin{end}) && ...
 end
 
 if strcmp(flag, 'gcc')
-    error('mex_run: the gcc reference track is not implemented yet');
+    outs = mex_run_gcc(srcfile, varargin);
+    return;
 end
 
 if strcmp(flag, 'compilecheck')

@@ -14,3 +14,7 @@ tests/_probe_tmp.txt
 /tests/tmp_mx_*.c
 /tests/programs/tmp_mxrun_*.c
 /tests/tmp_mxrun_*.c
+
+# gcc reference-track intermediates
+/tests/programs/tmp_mxrun_*_gcc.*
+/tests/tmp_mxrun_*_gcc.*
