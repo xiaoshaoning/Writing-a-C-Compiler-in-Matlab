@@ -1309,4 +1309,249 @@ __mx_dump_outputs(mxArray *plhs[], int cap)
 	fflush(stdout);
 }
 
+/* ------------------------------------------------------------------ *
+ * MAT-file API (libmat) — gcc reference track.
+ *
+ * The reference track has no real filesystem bridge for .mat files, so
+ * MATFile is a process-global VIRTUAL store keyed by filename: matOpen
+ * looks up/creates the store, matPutVariable/matDeleteVariable mutate it,
+ * matClose keeps it alive (the corpus roundtrips within one process: a
+ * close followed by a reopen of the same name must see the variables).
+ * The A/B gate compares the plhs VALUES the MEX returns, so the virtual
+ * store must agree with the main-repo mat_api.c only on the API surface,
+ * not on the on-disk bytes.
+ * ------------------------------------------------------------------ */
+
+typedef struct mx_ref_mat_var {
+	char *name;
+	mxArray *value;               /* owned deep copy */
+	struct mx_ref_mat_var *next;
+} mx_ref_mat_var;
+
+typedef struct mx_ref_matfile {
+	char *filename;
+	char mode;
+	mx_ref_mat_var *vars;
+	int64_t cursor;               /* matGetNextVariable position */
+	struct mx_ref_matfile *next;
+} mx_ref_matfile;
+
+typedef struct mx_ref_matfile MATFile;
+
+static mx_ref_matfile *mx_ref_mat_files = NULL;
+static int mx_ref_mat_quiet = 0;
+
+static mx_ref_mat_var *
+mx_ref_mat_find_var(MATFile *mf, const char *name)
+{
+	for (mx_ref_mat_var *v = mf->vars; v; v = v->next)
+		if (strcmp(v->name, name) == 0) return v;
+	return NULL;
+}
+
+static void
+mx_ref_mat_free(MATFile *mf)
+{
+	mx_ref_mat_var *v = mf->vars;
+	while (v) {
+		mx_ref_mat_var *next = v->next;
+		free(v->name);
+		if (v->value) mxDestroyArray(v->value);
+		free(v);
+		v = next;
+	}
+	free(mf->filename);
+	free(mf);
+}
+
+void
+matSetQuietErrorsOn(int b)
+{
+	mx_ref_mat_quiet = b;
+}
+
+MATFile *
+matOpen(const char *filename, const char *mode)
+{
+	if (!filename || !mode) return NULL;
+	MATFile *mf = mx_ref_mat_files;
+	while (mf && strcmp(mf->filename, filename) != 0)
+		mf = mf->next;
+	if (mf && mode[0] == 'w') {
+		/* Write mode: a fresh store (the caller rewrites the file).
+		   Read/update mode REUSES the store so a close + reopen
+		   roundtrip within one process sees the variables. */
+		mx_ref_mat_free(mf);
+		if (mx_ref_mat_files == mf)
+			mx_ref_mat_files = mf->next;
+		else {
+			MATFile *p = mx_ref_mat_files;
+			while (p && p->next != mf) p = p->next;
+			if (p) p->next = mf->next;
+		}
+		mf = NULL;
+	}
+	if (!mf) {
+		mf = (MATFile *) calloc(1, sizeof(MATFile));
+		mf->filename = strdup(filename);
+		mf->next = mx_ref_mat_files;
+		mx_ref_mat_files = mf;
+	}
+	mf->mode = mode[0];
+	mf->cursor = 0;
+	return mf;
+}
+
+int
+matClose(MATFile *pMF)
+{
+	/* Virtual store: keep the variables alive for a later matOpen
+	   in the same process (the corpus roundtrips after close). */
+	(void) pMF;
+	return 0;
+}
+
+FILE *
+matGetfp(MATFile *pMF)
+{
+	(void) pMF;
+	return NULL;
+}
+
+char **
+matGetDir(MATFile *pMF, int *num)
+{
+	if (!pMF) return NULL;
+	int n = 0;
+	for (mx_ref_mat_var *v = pMF->vars; v; v = v->next) n++;
+	if (num) *num = n;
+	char **out = (char **) calloc((size_t) n + 1, sizeof(char *));
+	int i = 0;
+	for (mx_ref_mat_var *v = pMF->vars; v; v = v->next)
+		out[i++] = strdup(v->name);
+	out[n] = NULL;
+	return out;
+}
+
+static mxArray *
+mx_ref_mat_get(MATFile *pMF, const char *name)
+{
+	if (!pMF || !name) return NULL;
+	mx_ref_mat_var *v = mx_ref_mat_find_var(pMF, name);
+	return v ? mxDuplicateArray(v->value) : NULL;
+}
+
+mxArray *
+matGetVariable(MATFile *pMF, const char *name)
+{
+	return mx_ref_mat_get(pMF, name);
+}
+
+mxArray *
+matGetVariableInfo(MATFile *pMF, const char *name)
+{
+	return mx_ref_mat_get(pMF, name);
+}
+
+static mxArray *
+mx_ref_mat_next(MATFile *pMF, const char **nameptr)
+{
+	/* Corpus use: called once, right after open, expecting the first
+	   variable.  Track the cursor in the MATFile. */
+	if (!pMF) return NULL;
+	mx_ref_mat_var *v = pMF->vars;
+	int64_t skip = pMF->cursor;
+	for (int64_t i = 0; v && i < skip; i++) v = v->next;
+	if (!v) return NULL;
+	pMF->cursor = skip + 1;
+	if (nameptr) *nameptr = v->name;
+	return mxDuplicateArray(v->value);
+}
+
+mxArray *
+matGetNextVariable(MATFile *pMF, const char **nameptr)
+{
+	return mx_ref_mat_next(pMF, nameptr);
+}
+
+mxArray *
+matGetNextVariableInfo(MATFile *pMF, const char **nameptr)
+{
+	return mx_ref_mat_next(pMF, nameptr);
+}
+
+int
+matPutVariable(MATFile *pMF, const char *name, const mxArray *pm)
+{
+	if (!pMF || !name || !pm) return 1;
+	mx_ref_mat_var *v = mx_ref_mat_find_var(pMF, name);
+	if (v) {
+		mxDestroyArray(v->value);
+		v->value = mxDuplicateArray(pm);
+	} else {
+		v = (mx_ref_mat_var *) calloc(1, sizeof(mx_ref_mat_var));
+		v->name = strdup(name);
+		v->value = mxDuplicateArray(pm);
+		/* tail insert: file order = put order (the corpus expects the
+		   first-put variable to be matGetNextVariable's first result) */
+		if (!pMF->vars) {
+			pMF->vars = v;
+		} else {
+			mx_ref_mat_var *t = pMF->vars;
+			while (t->next) t = t->next;
+			t->next = v;
+		}
+	}
+	return 0;
+}
+
+int
+matPutVariableAsGlobal(MATFile *pMF, const char *name, const mxArray *pm)
+{
+	return matPutVariable(pMF, name, pm);
+}
+
+int
+matDeleteVariable(MATFile *pMF, const char *name)
+{
+	if (!pMF || !name) return 1;
+	mx_ref_mat_var **pp = &pMF->vars;
+	while (*pp) {
+		if (strcmp((*pp)->name, name) == 0) {
+			mx_ref_mat_var *dead = *pp;
+			*pp = dead->next;
+			free(dead->name);
+			mxDestroyArray(dead->value);
+			free(dead);
+			return 0;
+		}
+		pp = &(*pp)->next;
+	}
+	return 1;
+}
+
+char *
+matGetString(MATFile *pMF, const char *name)
+{
+	if (!pMF || !name) return NULL;
+	mx_ref_mat_var *v = mx_ref_mat_find_var(pMF, name);
+	if (!v || !v->value || v->value->class_id != mxCHAR_CLASS) return NULL;
+	int64_t n = mx_ref_numel(v->value);
+	char *out = (char *) malloc((size_t) n + 1);
+	if (!out) return NULL;
+	memcpy(out, v->value->pr, (size_t) n);
+	out[n] = '\0';
+	return out;
+}
+
+int
+matPutString(MATFile *pMF, const char *name, const char *str)
+{
+	if (!pMF || !name || !str) return 1;
+	mxArray *a = mxCreateString(str);
+	int rc = matPutVariable(pMF, name, a);
+	mxDestroyArray(a);
+	return rc;
+}
+
 #endif /* MX_REF_C */

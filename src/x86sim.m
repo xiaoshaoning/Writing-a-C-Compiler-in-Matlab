@@ -21,7 +21,7 @@ function varargout = x86sim(sfile, inputs)
 % function boundaries, so names are compared as code vectors.
 
 global MEMSZ DATA_BASE CODE_BASE STACK_TOP MHEAP
-global mem symnames symvals clnames clvals code regs xmms zf sf cf of pf fids simdone sim_mex_locked
+global mem symnames symvals clnames clvals code regs xmms zf sf cf of pf fids simdone sim_mex_locked sim_mat
 MEMSZ  = 4 * 1024 * 1024;
 DATA_BASE = 4096;
 CODE_BASE = DATA_BASE + MEMSZ;
@@ -1403,6 +1403,156 @@ elseif cv_eq(namecodes, cv_of('_read'))
 elseif cv_eq(namecodes, cv_of('_close'))
     fd = double(regs(2));
     regs(1) = int64(sim_close(fd));
+elseif cv_eq(namecodes, cv_of('matOpen'))
+    p = double(regs(2)); mp = double(regs(3));
+    fname = cv_char(mem_strcodes(p));
+    modec = cv_char(mem_strcodes(mp));
+    global sim_mat
+    if isempty(sim_mat), sim_mat = struct(); end
+    % reuse a store with the same filename (the corpus roundtrips: a
+    % close followed by a reopen of the same name sees the variables)
+    id = 0;
+    nm = '';
+    fn = fieldnames(sim_mat);
+    for k = 1:numel(fn)
+        if strcmp(sim_mat.(fn{k}).filename, fname)
+            id = str2double(fn{k}(2:end));
+            nm = fn{k};
+            break;
+        end
+    end
+    if id == 0
+        id = numel(fn) + 1;
+        nm = sprintf('m%d', id);
+        sim_mat.(nm).filename = fname;
+        sim_mat.(nm).vars = struct();
+    end
+    sim_mat.(nm).mode = modec;
+    sim_mat.(nm).iter = 0;
+    regs(1) = int64(id);
+elseif cv_eq(namecodes, cv_of('matClose'))
+    regs(1) = int64(0);   % virtual store: kept for the roundtrip
+elseif cv_eq(namecodes, cv_of('matPutVariable'))
+    global sim_mat
+    mf = double(regs(2));
+    nm2 = cv_char(mem_strcodes(double(regs(3))));
+    pa = double(regs(9));
+    sim_mat.(sprintf('m%d', mf)).vars.(nm2) = sim_mx_dup(pa);
+    regs(1) = int64(0);
+elseif cv_eq(namecodes, cv_of('matPutVariableAsGlobal'))
+    global sim_mat
+    mf = double(regs(2));
+    nm2 = cv_char(mem_strcodes(double(regs(3))));
+    pa = double(regs(9));
+    sim_mat.(sprintf('m%d', mf)).vars.(nm2) = sim_mx_dup(pa);
+    regs(1) = int64(0);
+elseif cv_eq(namecodes, cv_of('matPutString'))
+    global sim_mat
+    mf = double(regs(2));
+    nm2 = cv_char(mem_strcodes(double(regs(3))));
+    strp = double(regs(9));
+    sc = mem_strcodes(strp);
+    h = sim_mx_new(4, [1 max(1, numel(sc))], 0);
+    pr = double(sim_load64(h + 56));
+    for k = 1:numel(sc)
+        sim_storeN(pr + (k - 1) * 8, sc(k), 8);
+    end
+    sim_mat.(sprintf('m%d', mf)).vars.(nm2) = h;
+    regs(1) = int64(0);
+elseif cv_eq(namecodes, cv_of('matGetVariable')) || ...
+        cv_eq(namecodes, cv_of('matGetVariableInfo'))
+    global sim_mat
+    mf = double(regs(2));
+    nm2 = cv_char(mem_strcodes(double(regs(3))));
+    vnm = sprintf('m%d', mf);
+    if isfield(sim_mat, vnm) && isfield(sim_mat.(vnm).vars, nm2)
+        regs(1) = int64(sim_mx_dup(sim_mat.(vnm).vars.(nm2)));
+    else
+        regs(1) = int64(0);
+    end
+elseif cv_eq(namecodes, cv_of('matGetNextVariable')) || ...
+        cv_eq(namecodes, cv_of('matGetNextVariableInfo'))
+    global sim_mat
+    mf = double(regs(2));
+    npp = double(regs(3));
+    vnm = sprintf('m%d', mf);
+    vnames = fieldnames(sim_mat.(vnm).vars);
+    it = sim_mat.(vnm).iter + 1;
+    sim_mat.(vnm).iter = it;
+    if it <= numel(vnames)
+        h = sim_mx_dup(sim_mat.(vnm).vars.(vnames{it}));
+        sc = double(vnames{it});
+        addr = sim_malloc(numel(sc) + 1);
+        for k = 1:numel(sc)
+            mem(addr + k) = uint8(sc(k));   % C string: bytes
+        end
+        mem(addr + numel(sc) + 1) = uint8(0);
+        sim_storeN(npp, addr, 8);   % *nameptr = addr
+        regs(1) = int64(h);
+    else
+        regs(1) = int64(0);
+    end
+elseif cv_eq(namecodes, cv_of('matGetDir'))
+    global sim_mat
+    mf = double(regs(2));
+    nump = double(regs(3));
+    vnm = sprintf('m%d', mf);
+    vnames = fieldnames(sim_mat.(vnm).vars);
+    n = numel(vnames);
+    sim_storeN(nump, n, 8);        % *num = count (cc_int int = 8-byte)
+    ptbl = sim_malloc((n + 1) * 8);
+    for k = 1:n
+        sc = double(vnames{k});
+        addr = sim_malloc(numel(sc) + 1);
+        for j = 1:numel(sc)
+            mem(addr + j) = uint8(sc(j));   % C string: bytes
+        end
+        mem(addr + numel(sc) + 1) = uint8(0);
+        sim_storeN(ptbl + (k - 1) * 8, addr, 8);
+    end
+    sim_storeN(ptbl + n * 8, 0, 8);   % NULL terminator
+    regs(1) = int64(ptbl);
+elseif cv_eq(namecodes, cv_of('matGetString'))
+    global sim_mat
+    mf = double(regs(2));
+    nm2 = cv_char(mem_strcodes(double(regs(3))));
+    vnm = sprintf('m%d', mf);
+    if isfield(sim_mat, vnm) && isfield(sim_mat.(vnm).vars, nm2)
+        h = sim_mat.(vnm).vars.(nm2);
+        if double(sim_load64(h + 8)) == 4   % mxCHAR_CLASS
+            pr = double(sim_load64(h + 56));
+            ne = sim_mx_numel(h);
+            addr = sim_malloc(ne + 1);
+            for k = 1:ne
+                mem(addr + k) = uint8(mod(double(sim_load64(pr + (k - 1) * 8)), 256));
+            end
+            mem(addr + ne + 1) = uint8(0);
+            vals = zeros(1, ne);
+    for kk = 1:ne
+        vals(kk) = double(sim_load64(pr + (kk - 1) * 8));
+    end
+            regs(1) = int64(addr);
+        else
+            regs(1) = int64(0);
+        end
+    else
+        regs(1) = int64(0);
+    end
+elseif cv_eq(namecodes, cv_of('matDeleteVariable'))
+    global sim_mat
+    mf = double(regs(2));
+    nm2 = cv_char(mem_strcodes(double(regs(3))));
+    vnm = sprintf('m%d', mf);
+    if isfield(sim_mat, vnm) && isfield(sim_mat.(vnm).vars, nm2)
+        sim_mat.(vnm).vars = rmfield(sim_mat.(vnm).vars, nm2);
+        regs(1) = int64(0);
+    else
+        regs(1) = int64(1);
+    end
+elseif cv_eq(namecodes, cv_of('matGetfp'))
+    regs(1) = int64(0);
+elseif cv_eq(namecodes, cv_of('matSetQuietErrorsOn'))
+    regs(1) = int64(0);
 elseif cv_eq(namecodes, cv_of('sin'))
     regs(1) = sim_dmath1(regs(2), 'sin');
 

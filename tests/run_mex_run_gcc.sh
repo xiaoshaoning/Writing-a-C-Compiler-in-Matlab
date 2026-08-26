@@ -44,6 +44,9 @@ check mxprint      "[a,b] = gcc_ab(mex_run('${C}/tests/mex/mxprint.c'), mex_run(
 check mxpersist_get "[a,b] = gcc_ab(mex_run('${C}/tests/mex/mxpersist.c', 'get'), mex_run('${C}/tests/mex/mxpersist.c', 'get', 'gcc'));"
 check mxpersist_lock "[a,b] = gcc_ab(mex_run('${C}/tests/mex/mxpersist.c', 'lock'), mex_run('${C}/tests/mex/mxpersist.c', 'lock', 'gcc'));"
 check yprime      "[a,b] = gcc_ab(mex_run('${C}/tests/mex/yprime.c', 1.0, [0 1; 0 1]), mex_run('${C}/tests/mex/yprime.c', 1.0, [0 1; 0 1], 'gcc'));"
+check matfile     "[a,b] = gcc_ab(mex_run('${C}/tests/mex/matfile.c', 'v160_ab.mat', 'roundtrip', [1 2 3; 4 5 6]), mex_run('${C}/tests/mex/matfile.c', 'v160_ab.mat', 'roundtrip', [1 2 3; 4 5 6], 'gcc'));"
+check matfile_del  "[a,b] = gcc_ab(mex_run('${C}/tests/mex/matfile.c', 'v160_ab_del.mat', 'delete', 'X'), mex_run('${C}/tests/mex/matfile.c', 'v160_ab_del.mat', 'delete', 'X', 'gcc'));"
+
 check matrixDivide "[a,b] = gcc_ab(mex_run('${C}/tests/mex/matrixDivideComplex.c', [1 2; 3 4], [5 0; 0 5]), mex_run('${C}/tests/mex/matrixDivideComplex.c', [1 2; 3 4], [5 0; 0 5], 'gcc'));"
 
 echo "mex_run gcc cross-track gate: $pass passed, $fail failed"

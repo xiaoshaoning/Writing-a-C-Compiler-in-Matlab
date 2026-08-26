@@ -316,6 +316,25 @@ libfns.mxFree = 'mxFree'; libargt.mxFree = 8; libret.mxFree = 0;
 libfns.mxMalloc = 'mxMalloc'; libargt.mxMalloc = 0; libret.mxMalloc = 8;
 libfns.mxCalloc = 'mxCalloc'; libargt.mxCalloc = [0 0]; libret.mxCalloc = 8;
 libfns.strcat = 'strcat'; libargt.strcat = [8 8]; libret.strcat = 8;
+% MAT-file API (libmat): matOpen/matClose/matGetD/matGetV/matPutV/etc.
+% All pointer-heavy (char* names, MATFile*, mxArray*, char**); the few
+% int returns (matPutVariable/matDeleteVariable/matClose) drive the
+% corpus's rc comparisons.  libfns maps to the real names; x86sim
+% implements them against a virtual per-filename store.
+libfns.matOpen = 'matOpen'; libargt.matOpen = [8 8]; libret.matOpen = 8;
+libfns.matClose = 'matClose'; libargt.matClose = 8; libret.matClose = 0;
+libfns.matGetDir = 'matGetDir'; libargt.matGetDir = [8 8]; libret.matGetDir = 8;
+libfns.matGetVariable = 'matGetVariable'; libargt.matGetVariable = [8 8]; libret.matGetVariable = 8;
+libfns.matGetNextVariable = 'matGetNextVariable'; libargt.matGetNextVariable = [8 8]; libret.matGetNextVariable = 8;
+libfns.matGetVariableInfo = 'matGetVariableInfo'; libargt.matGetVariableInfo = [8 8]; libret.matGetVariableInfo = 8;
+libfns.matGetNextVariableInfo = 'matGetNextVariableInfo'; libargt.matGetNextVariableInfo = [8 8]; libret.matGetNextVariableInfo = 8;
+libfns.matPutVariable = 'matPutVariable'; libargt.matPutVariable = [8 8 8]; libret.matPutVariable = 0;
+libfns.matPutVariableAsGlobal = 'matPutVariableAsGlobal'; libargt.matPutVariableAsGlobal = [8 8 8]; libret.matPutVariableAsGlobal = 0;
+libfns.matDeleteVariable = 'matDeleteVariable'; libargt.matDeleteVariable = [8 8]; libret.matDeleteVariable = 0;
+libfns.matGetString = 'matGetString'; libargt.matGetString = [8 8]; libret.matGetString = 8;
+libfns.matPutString = 'matPutString'; libargt.matPutString = [8 8 8]; libret.matPutString = 0;
+libfns.matGetfp = 'matGetfp'; libargt.matGetfp = 8; libret.matGetfp = 8;
+libfns.matSetQuietErrorsOn = 'matSetQuietErrorsOn'; libargt.matSetQuietErrorsOn = 0; libret.matSetQuietErrorsOn = 4;
 fptypes = struct();   % user function -> vector of parameter type codes
 libcalls = struct();  % 'name_nargs' -> 1 for every shim used (emitted)
 out = {};       % emitted assembly lines (cell; tabs are literal in em)
