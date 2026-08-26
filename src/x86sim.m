@@ -1619,6 +1619,14 @@ elseif cv_eq(namecodes, cv_of('strcpy'))
         mem(d + k) = uint8(sc(k));
     end
     regs(1) = int64(d);
+elseif cv_eq(namecodes, cv_of('strncpy'))
+    d = double(regs(2)); s2 = double(regs(3)); n = double(regs(9));
+    sc = mem_strcodes(s2);
+    nc = min(numel(sc), n);
+    for k = 1:nc
+        mem(d + k) = uint8(sc(k));
+    end
+    regs(1) = int64(d);
 elseif cv_eq(namecodes, cv_of('strncmp'))
     a = mem_strcodes(double(regs(2)));
     b = mem_strcodes(double(regs(3)));

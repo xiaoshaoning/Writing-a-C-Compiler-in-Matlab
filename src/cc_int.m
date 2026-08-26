@@ -308,6 +308,7 @@ libargt.mexPutVariable = [8 8 8];                 libret.mexPutVariable = 0;
 libfns.strcmp = 'strcmp'; libargt.strcmp = [8 8]; libret.strcmp = 0;
 libfns.strlen = 'strlen'; libargt.strlen = 8;    libret.strlen = 0;
 libfns.strcpy = 'strcpy'; libargt.strcpy = [8 8]; libret.strcpy = 8;
+libfns.strncpy = 'strncpy'; libargt.strncpy = [8 8 0]; libret.strncpy = 8;
 libfns.memcpy = 'memcpy'; libargt.memcpy = [8 8 0]; libret.memcpy = 8;
 libfns.strncmp = 'strncmp'; libargt.strncmp = [8 8 0]; libret.strncmp = 0;
 libfns.malloc = 'malloc'; libargt.malloc = 0; libret.malloc = 8;
