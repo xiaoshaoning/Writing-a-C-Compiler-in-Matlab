@@ -110,3 +110,10 @@ Required runtime for the sim_num64 fix to take effect: MATLAB_in_c build
 v1.3.47+ (earlier runtimes re-rounded the large int64 in conversion/index
 writes, which the committed double-domain sim_num64 happened to mask). See
 MATLAB_in_c `docs/MATLAB_RUNTIME_BUGS.md` entry 6.9.
+
+Cross-checked against the independent `matlab_in_rust` interpreter
+(D:\Projects\codes\matlab_in_rust\target\release\matlab.exe): it renders
+%.17g of 0.1 / 1-3 / 123.456789 identically to the fixed sim, agrees 0.1 ==
+1.0/10.0, and nibble-composes 0.1's pattern to 4591870180066957722 exactly as
+v1.3.47 + the sim_num64 fix now do. So the fixes converge on genuinely correct
+MATLAB semantics, not an incidental match.
