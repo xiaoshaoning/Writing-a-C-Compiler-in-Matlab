@@ -77,9 +77,20 @@ pass 2 data-emit + `movsd` mem operand is the next step.
 - Neither bug is caught by the current suite because its double corpus uses
   only magnitude-exact literals and omits global doubles.
 
-## Next step
+## Status (updated 2026-09-06)
 
-Apply the `sim_num64` half-split fix (Bug A), then trace Bug B's global-double
-data path. Both should be regression-tested by adding the two repro cases
-(`pfmt.c`, `pza.c`) to the differential corpus so future `d*` work can't
-silently regress dense literals or global doubles again.
+Bug A is **fixed** - see `docs/2026-09-06-correctness-review-doubles-deep.md`.
+Two defects stacked: (1) `sim_num64`'s double-domain accumulator rounded
+>2^53 literal patterns; (2) `printf`/`mexPrintf` passed the >2^53 register
+pattern through `double()` before `sim_bits2d`, corrupting high-precision
+float output even for exact values. Both are fixed in `src/x86sim.m`
+(commit 5c31063) on the MATLAB_in_C v1.3.47+ runtime; pfmt/divprint now
+match real gcc byte-for-byte and the double corpus is 10/10.
+
+## Remaining
+
+Bug B - the `.quad`-global read/write defect (`long gl=100000` -> 160,
+global doubles read as 0) is still untraced. Add the two repro cases
+(`pfmt.c`, `pza.c`) to the differential corpus once Bug B is fixed so
+future `d*` work can't silently regress dense literals or global doubles
+again.
