@@ -52,8 +52,8 @@ Building compilers/interpreters in MATLAB, following two classic tutorials:
 2. **Interpreter track** (`xc.m`) — lotabout's
    [write-a-C-interpreter](https://github.com/lotabout/write-a-C-interpreter):
    a C interpreter with a custom VM, ported to MATLAB — complete: lexer,
-   recursive-descent parser, 38-opcode stack VM, syscalls. Design and
-   implementation plan: [docs/2026-08-10-xc-matlab-port-plan.md](docs/2026-08-10-xc-matlab-port-plan.md).
+   recursive-descent parser, 38-opcode stack VM, syscalls. Current status:
+   [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md).
 
 ## Layout
 
@@ -77,13 +77,11 @@ tests/
                       gcc-gated in the suite)
     hello.c           fibonacci demo — xc.m acceptance program
 docs/
-  2026-08-10-xc-matlab-port-plan.md        implementation plan
-  2026-08-15-codebase-review.md           review + fix-plan links
-  2026-08-15-fix-plan.md                  phased fix plan (Phases A–E)
-  PROJECT_STATUS.md                      current project status
-  2026-08-16-reference-cross-check.md    reference xc.c parity verification
-  2026-08-16-compiler-optimization-plan.md  optimizer phases A–F + results
-  2026-08-10-matlab-clone-bug-report.md  bugs found in the MATLAB clone (internal, gitignored)
+  PROJECT_STATUS.md                       current project status
+  2026-08-16-reference-cross-check.md     reference xc.c parity verification
+  2026-08-16-compiler-optimization-plan.md optimizer phases A–F + results
+  2026-09-02-over-engineering-audit.md    over-engineering audit (ponytail-audit)
+  2026-08-10-matlab-clone-bug-report.md   bugs found in the MATLAB clone (internal, gitignored)
 ```
 
 ## Usage

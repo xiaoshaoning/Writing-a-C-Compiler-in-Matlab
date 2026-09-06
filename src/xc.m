@@ -27,7 +27,7 @@ function exit_code = xc(varargin)
 %
 % Phase 0 scaffold: shared state, memory segments, argument handling and
 % source loading are in place. The lexer/parser/VM pipeline is built in
-% Phases 1-6 (see docs/2026-08-10-xc-matlab-port-plan.md).
+% Phases 1-6 (see docs/PROJECT_STATUS.md).
 
 % ---- shared interpreter state (mirrors xc.c globals) ----
 global token token_val src si line          % lexer

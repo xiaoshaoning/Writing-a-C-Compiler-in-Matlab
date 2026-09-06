@@ -10,7 +10,7 @@ function outs = mex_run_gcc(srcfile, ins)
 % thing is compiled with real gcc, run natively, and the dump is parsed
 % back into MATLAB arrays.  The caller compares these against the
 % x86sim track's outputs: the two tracks share one contract and must
-% agree (docs/2026-08-16-mex-support-plan.md §6).
+% agree (see the mex_run gcc cross-track gate in PROJECT_STATUS.md).
 %
 % NOTE: every local carries the mr_ prefix (clone callee-workspace leak
 % quirk; see mex_run.m).

@@ -3,7 +3,7 @@ function outs = mex_run(srcfile, varargin)
 %
 %   outs = mex_run('src.c', x1, x2, ...)          % compile track (default)
 %   outs = mex_run('src.c', x1, x2, 'compile')    % explicit
-%   outs = mex_run('src.c', x1, x2, 'gcc')        % reference track (TBD)
+%   outs = mex_run('src.c', x1, x2, 'gcc')        % reference track
 %
 % The driver assembles the mx declaration preamble (mx_preamble) + the
 % MEX source + a synthetic harness `main`, compiles the whole thing with
@@ -28,7 +28,7 @@ end
 flag = 'compile';
 if ~isempty(varargin) && ischar(varargin{end}) && ...
         (strcmp(varargin{end}, 'compile') || strcmp(varargin{end}, 'gcc') || ...
-         strcmp(varargin{end}, 'interpret') || strcmp(varargin{end}, 'compilecheck'))
+         strcmp(varargin{end}, 'compilecheck'))
     flag = varargin{end};
     varargin(end) = [];
 end

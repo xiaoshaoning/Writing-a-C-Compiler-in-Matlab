@@ -485,7 +485,7 @@ end
 function b = pp_eq(a, s)
 % pp_eq — code-vector equality with a literal (the literal stays inside
 % this helper, so it is never mangled by the clone).
-b = numel(a) == numel(s) && all(a == double(s));
+b = cv_eq(a, double(s));
 end
 
 function b = cv_eq(a, b)
