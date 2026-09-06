@@ -1772,11 +1772,8 @@ b = int64(bits);
 end
 
 function v = sim_dtrunc(x)
-if isnan(x) || isinf(x)
-    v = x;
-else
-    v = fix(x);
-end
+% C trunc toward zero (verfied: clone fix() is NaN/Inf-safe, same as MATLAB)
+v = fix(x);
 end
 
 function v = sim_dcbrt(x)
