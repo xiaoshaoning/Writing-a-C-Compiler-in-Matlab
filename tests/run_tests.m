@@ -684,6 +684,8 @@ cctests = {
         'cc18_ucmp.c',      1;   % unsigned compare >= 2^32 (64-bit borrow)
         'cc18_printfX.c',   0;   % %X uppercase (stdout checked in the sim group)
         'cc18_printf05.c',  0;   % %05d sign placement (stdout checked in the sim group)
+        'dreg_denselit.c',  42;  % Bug A: dense-double literal vs 1/10 (sim_num64 + v1.3.47)
+        'dreg_globallong.c', 42;  % Bug B: .quad numeric globals store their full width
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
@@ -915,6 +917,21 @@ cctests = {
     catch e
         [npass nfail] = addcheck(npass, nfail, false, ...
             sprintf('x86sim %%05d: %s', e.message));
+    end
+
+    % dense-double high-precision print (Bug A): %.17g of a dense literal
+    % and of division results must match real gcc. Regression guard for the
+    % sim_num64 parse fix + the printf-arg transport fix.
+    try
+        delete('tmp_cc.s');
+        cc_int('tests/programs/dreg_denseprint.c', 'tmp_cc.s');
+        dd = evalc('ddr = x86sim(''tmp_cc.s'')');
+        gold = sprintf('a=0.10000000000000001\nc=3.1415926535897931\nd=0.33333333333333331');
+        [npass nfail] = addcheck(npass, nfail, strcmp(dd, gold), ...
+            'x86sim dense-double %.17g print matches gcc');
+    catch e
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            sprintf('x86sim dense-print: %s', e.message));
     end
 
     % x86sim stdout parity: the same printing programs must produce the same

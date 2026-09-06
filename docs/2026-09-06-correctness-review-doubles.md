@@ -97,9 +97,14 @@ width via sim_storeN. gint '7 100000', pza globals, and pz 10/3 all match
 gcc on v1.3.47.
 
 **Still open, separate from Bug A/B: the 4th+ double in one printf call is
-mis-rendered.** With all values fixed, `printf("%.17g %.17g %.17g %.17g",
-gh,g2,g3,g/h)` renders the arg at integer position 4 (the first that comes
-from the simulated stack, ai>=3 -> sim_load64(rsp+32+8k)) with the low
-mantissa bits lost (3.33...4849 instead of ...3335); calls with 1/2/3
-doubles are exact. Not yet traced; likely the multi-arg float printf
-shim/stack read, not value transport.
+mis-rendered.** Root-caused: cc_int's multi-arg printf shim shuffles the
+5th+ vararg as raw bits via an integer `movq %r10, addr`, and sim_storeN
+(v used for integer reg -> memory movs) does `double(v)` first, rounding a
+>2^53 double-pattern register to its nearest double and losing the low
+mantissa bits (10/3's 0x400AAAAAAAAAAAB stores as 0x400AAAAAAAAAAC00).
+printf calls with at most 3 doubles keep the value in rdx/r8/r9 (argvals,
+exact via the Bug A fix) and are correct; only the arg that gets spilled to
+the stack by the shim (the 4th+ double) is affected. Verified real gcc is
+correct for the same source, so this is purely sim-side. Fix would be an
+exact >2^53 int64 -> bytes store in sim_storeN (its double() currently
+rounds), a core primitive change not yet attempted.
