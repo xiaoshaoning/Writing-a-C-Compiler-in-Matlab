@@ -89,8 +89,17 @@ match real gcc byte-for-byte and the double corpus is 10/10.
 
 ## Remaining
 
-Bug B - the `.quad`-global read/write defect (`long gl=100000` -> 160,
-global doubles read as 0) is still untraced. Add the two repro cases
-(`pfmt.c`, `pza.c`) to the differential corpus once Bug B is fixed so
-future `d*` work can't silently regress dense literals or global doubles
-again.
+**Bug B - .quad numeric globals - FIXED (commit 6228ea1).** Root cause was
+in x86sim's pass-2 data emit: it called sim_store_bytes(addr, v), which
+writes numel(v) == 1 bytes, so a scalar .quad stored only its low byte
+(100000 -> 160; .quad double patterns read as 0). Now stores the directive
+width via sim_storeN. gint '7 100000', pza globals, and pz 10/3 all match
+gcc on v1.3.47.
+
+**Still open, separate from Bug A/B: the 4th+ double in one printf call is
+mis-rendered.** With all values fixed, `printf("%.17g %.17g %.17g %.17g",
+gh,g2,g3,g/h)` renders the arg at integer position 4 (the first that comes
+from the simulated stack, ai>=3 -> sim_load64(rsp+32+8k)) with the low
+mantissa bits lost (3.33...4849 instead of ...3335); calls with 1/2/3
+doubles are exact. Not yet traced; likely the multi-arg float printf
+shim/stack read, not value transport.

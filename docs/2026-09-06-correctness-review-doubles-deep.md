@@ -99,9 +99,12 @@ corpus differential (dsmoke/dcmp/dmore*/dneg/d2and/cc10_cadd/dmath) is
 mxchar(%s) via mex_run unchanged. These fixes require the v1.3.47+ runtime
 (older runtimes re-round the exact int64 on reg/index writes).
 
-Bug B (`.quad`-global width/load, `long gl=100000` -> 160, global doubles 0)
-and the low-byte `.quad`-global issue remain separate and untraced; not
-re-checked against v1.3.47 yet.
+Bug B (the `.quad` numeric-data bug, `long gl=100000` -> 160, .quad-double
+globals incl. arrays -> 0) is FIXED (commit 6228ea1): pass-2 numeric data
+used sim_store_bytes(addr, scalar) which wrote one byte; it now stores the
+directive width (e{2}) via sim_storeN. Separate residual still open: the
+4th+ double in a single printf is mis-rendered (low mantissa bits lost);
+not a value-transport bug.
 
 Required runtime for the sim_num64 fix to take effect: MATLAB_in_c build
 v1.3.47+ (earlier runtimes re-rounded the large int64 in conversion/index
