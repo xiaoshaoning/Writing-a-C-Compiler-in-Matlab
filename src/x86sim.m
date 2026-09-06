@@ -213,7 +213,12 @@ for k = 1:numel(pending)
         ad = sym_get(v);
         sim_storeN(e{1}, ad, 8);
     else
-        sim_store_bytes(e{1}, v);
+        % a numeric literal: store the full directive width (e{2})
+        % bytes. sim_store_bytes writes numel(v) bytes (one per element),
+        % so a scalar .quad wrote only its low byte (100000 -> 160, a
+        % 0x4024... double pattern -> 0), corrupting every multi-byte
+        % global (.long/.quad ints AND .quad double-pattern globals).
+        sim_storeN(e{1}, v, e{2});
     end
 end
 
