@@ -857,7 +857,7 @@ elseif strcmp(nm, 'mxAssert')
     end
 elseif strcmp(nm, 'mexPrintf')
     fmt = mem_strcodes(double(regs(2)));
-    n = sim_printf(fmt, double(regs(3)), double(regs(9)), double(regs(10)));
+    n = sim_printf(fmt, regs(3), regs(9), regs(10));
     regs(1) = int64(n);
 elseif strcmp(nm, 'mexEvalString')
     regs(1) = int64(0);
@@ -1361,7 +1361,7 @@ function sim_libcall(namecodes)
 global regs mem fids simdone xmms
 if cv_eq(namecodes, cv_of('printf'))
     fmt = mem_strcodes(double(regs(2)));
-    n = sim_printf(fmt, double(regs(3)), double(regs(9)), double(regs(10)));
+    n = sim_printf(fmt, regs(3), regs(9), regs(10));
     regs(1) = int64(n);
 elseif cv_eq(namecodes, cv_of('malloc')) || cv_eq(namecodes, cv_of('mxMalloc'))
     sz = double(regs(2));
@@ -2425,24 +2425,46 @@ end
 end
 
 function v = sim_num64(tok)
-% sim_num64 — parse a 64-bit literal EXACTLY (in the double domain: every
-% power of two is exact, so hex and in-range decimal patterns round-trip;
-% int64 accumulation would overflow through the clone's lossy int64 ops).
+% sim_num64 parse a 64-bit literal EXACTLY. The old double-domain
+% accumulator v = v*16 + d rounded the running value as soon as it passed
+% 2^53, corrupting every dense double-literal pattern (0.1's
+% 0x3FB999999999999A parsed to ...312 instead of ...722). Nibbles are
+% folded exactly into an int64, one term at a time like sim_load64, never
+% exceeding 2^63; a 16-digit pattern's top nibble can set bit 63, so fold
+% its low 3 bits and add int64min (exact int64 transport needs the
+% MATLAB_in_C v1.3.47+ runtime; older runtimes re-rounded large int64 in
+% cell/index reads and writes).
 if numel(tok) >= 2 && tok(1) == 48 && (tok(2) == 120 || tok(2) == 88)
-    v = 0;
-    for k = 3:numel(tok)
-        c = tok(k);
-        if c >= 48 && c <= 57
-            d = c - 48;
-        elseif c >= 97 && c <= 102
-            d = c - 87;
-        else
-            d = c - 55;
-        end
-        v = v * 16 + d;
+    dig = tok(3:end);
+    n = numel(dig);
+    d15 = 0;
+    if n == 16
+        c = dig(1);
+        if c >= 48 && c <= 57, d15 = c - 48;
+        elseif c >= 97 && c <= 102, d15 = c - 87;
+        else, d15 = c - 55; end
+        dig = dig(2:end);
     end
-    if v >= 9223372036854775808
-        v = v - 18446744073709551616;
+    mag = int64(0);
+    bit = int64(1);
+    for k = numel(dig):-1:1
+        c = dig(k);
+        if c >= 48 && c <= 57, d = c - 48;
+        elseif c >= 97 && c <= 102, d = c - 87;
+        else, d = c - 55; end
+        mag = mag + int64(d) * bit;
+        bit = bit * int64(16);
+    end
+    if n == 16
+        P260 = int64(1152921504606846976);   % 2^60
+        if d15 >= 8
+            mag = mag + int64(d15 - 8) * P260;
+            v = mag + int64(-9223372036854775808);   % set bit 63
+        else
+            v = mag + int64(d15) * P260;
+        end
+    else
+        v = mag;
     end
 else
     v = str2double(cv_char(tok));
