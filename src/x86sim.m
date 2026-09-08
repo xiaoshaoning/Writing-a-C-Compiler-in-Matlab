@@ -360,7 +360,7 @@ elseif m == 39           % sarq (arithmetic)
     c = mod(sim_opval(a), 64);
     sim_opstore(b, bitshift(sim_opval(b), -c, 'int64'), 64);
 elseif m == 44           % shrq (logical, unsigned)
-    c = mod(sim_opval(a), 64);
+    c = double(mod(sim_opval(a), 64));
     u = mod(double(sim_opval(b)), 18446744073709551616);
     sim_opstore(b, int64(floor(u / 2^c)), 64);
 elseif m == 18           % cmpq
