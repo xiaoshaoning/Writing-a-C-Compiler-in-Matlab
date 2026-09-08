@@ -1874,7 +1874,7 @@ end
 function parse_statement()
 % statement := declaration | '{' statement* '}' | if | while | for | do |
 % break | continue | return | expr ';'
-global token idname typedefs src si lvars lvartype lvararr lvarstruct lvarstride
+global token token_val idname typedefs src si lvars lvartype lvararr lvarstruct lvarstride
 if token == 131 || token == 134 || token == 178 || token == 188 || ...  % int/char/struct/unsigned
    token == 189 || token == 190 || token == 191 || token == 192 || ... % double/const/register/static
    (token == 150 && isfield(typedefs, idname))            % typedef'd type
