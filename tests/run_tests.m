@@ -1087,6 +1087,12 @@ cctests = {
 
 
 fprintf('run_tests: %d tests, %d passed, %d failed\n', npass + nfail, npass, nfail);
+fid = fopen('run_tests.log', 'a');
+if fid > 0
+    fprintf(fid, 'run_tests: %d tests, %d passed, %d failed\n', ...
+        npass + nfail, npass, nfail);
+    fclose(fid);
+end
 if nfail > 0
     error(sprintf('run_tests: %d failures', nfail));
 end
@@ -1096,9 +1102,20 @@ function [npass, nfail] = addcheck(npass, nfail, cond, name)
 if cond
     fprintf('PASS  %s\n', name);
     npass = npass + 1;
+    tag = 'PASS';
 else
     fprintf('FAIL  %s\n', name);
     nfail = nfail + 1;
+    tag = 'FAIL';
+end
+% Incremental log: the engine buffers stdout until process exit, so a
+% run killed mid-way (host suspend) loses every PASS/FAIL line. Append
+% each check to run_tests.log (fclose flushes) so partial runs leave a
+% readable record up to the kill point.
+fid = fopen('run_tests.log', 'a');
+if fid > 0
+    fprintf(fid, '%s  %s\n', tag, name);
+    fclose(fid);
 end
 end
 
