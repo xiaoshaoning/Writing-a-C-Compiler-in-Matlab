@@ -2295,7 +2295,10 @@ function insn = sim_parse_insn(L)
 % index (see the table in sim_exec).
 [m, rest] = sim_split_first(L);
 if isempty(rest)
-    insn = {0, {0}, {0}};
+    % no-operand instruction (ret, cqto, ...): map the mnemonic itself.
+    % A hard {0,{0},{0}} made 'ret' execute as a movq with empty operands
+    % (the C runtime only masked this through CRLF/NUL file accidents).
+    insn = {sim_mnemonic(m), {0}, {0}};
     return;
 end
 parts = sim_split_ops(rest);
