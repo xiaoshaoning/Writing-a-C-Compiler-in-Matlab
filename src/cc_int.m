@@ -58,7 +58,7 @@ function cc_int(varargin)
 global src si token token_val token_dval token_isflt idname strtext out fname lbl lvars lvartype ...
        lvararr fbytes funcs fret called retlbl cfn globals gtype garr glist ...
        strs nstr etype ltype cret loopctx stags sdefs nstid estruc ...
-       lvarstruct gstruct typedefs enums lvarstride gstride bstride glabels sret sretsize libfns libcalls ginit fptypes libargt libret
+       lvarstruct gstruct typedefs enums lvarstride gstride bstride glabels sret sretsize sretbase libfns libcalls ginit fptypes libargt libret curarrsz cvoid fparams frettype
 
 if nargin ~= 2 && nargin ~= 3
     error('USAGE: cc_int in.c out.s');
@@ -940,7 +940,7 @@ function [base, stdef] = parse_basetype()
 % parse_basetype — parse int/char/struct tag; returns the base type code
 % (0 int, 1 char, 1000+2*stid struct) and, for a struct type DEFINITION at
 % file scope, a cell {tag, members} for the caller to register.
-global token idname stags enums
+global token idname stags enums typedefs
 base = 0;
 stdef = 0;
 while token == 190 || token == 191 || token == 192   % const / register / static: no-ops
@@ -1035,7 +1035,7 @@ function def = parse_struct_members()
 % members := (type ('*')* name (('[' size ']')? …) ';')* '}' — returns
 % {size, membermap, names}; membermap maps member name -> {offset, type};
 % names lists the members in declaration order (for initializers).
-global token idname stags
+global token idname stags token_val
 membermap = struct();
 mnames = {};
 off = 0;
@@ -1180,7 +1180,7 @@ function vals = parse_arr_init(dims, lvl)
 % {{1,2},{3}} on int[2][3] gives [1 2 0 3 0 0]. Returns the flattened
 % values for the sub-array dims(lvl:end) (zero-padded; the string form
 % returns the raw character codes).
-global token strtext
+global token strtext token_val token_isflt
 S = prod(dims(min(lvl, numel(dims)):end));
 vals = zeros(1, S);
 i = 0;
@@ -1343,7 +1343,7 @@ function parse_globals(name, base, depth, fptr)
 % global: name (('[' size ']')* | ('=' const|string|{…})? ) (',' name …)? ';'
 % — collected for the .comm/.data section emitted at the end of the file.
 % fptr: 1 for a global function pointer `type (*name)(params)`.
-global token idname strtext globals gtype garr gstruct glist gstride gvararrsz out ginit token_isflt token_dval
+global token idname strtext globals gtype garr gstruct glist gstride gvararrsz out ginit token_isflt token_dval token_val
 while true
     if isfield(globals, name)
         fail(sprintf('duplicate global %s', name));
@@ -1594,7 +1594,7 @@ function vals = parse_struct_init(sbase)
 % member values in declaration order; a nested struct member takes a
 % nested `{…}`. Returns the flattened leaf values (missing members -> 0
 % via the caller's byte layout).
-global token sdefs
+global token sdefs token_val
 next();                     % '{'
 stid = (sbase - 1000) / 2;
 names = sdefs{stid}{3};
@@ -1773,6 +1773,7 @@ end
 end
 
 function skip_prototype()
+global token
 % skip_prototype — consume a function prototype's parameter list
 % `(int a, char *b, …)` without binding anything.
 expect(40);
@@ -2112,7 +2113,7 @@ function parse_switch()
 % stmts)* '}' — the value is kept in %r10; the dispatch (cmpq/je per case)
 % is spliced before the case bodies, whose lines are buffered during the
 % parse. break targets the switch end; continue the enclosing loop.
-global token out loopctx enums idname
+global token out loopctx enums idname token_val
 next();                     % 'switch'
 expect(40);
 parse_expr();
@@ -2211,7 +2212,7 @@ function parse_return_statement()
 % return := 'return' expr ';' — value in rax (zero-extended for char
 % functions; for struct functions, the value is copied to the hidden return
 % slot and rax = the slot address), jump to the function's epilogue label.
-global retlbl cret cvoid sret sretbase
+global retlbl cret cvoid sret sretbase out sretsize
 if cvoid
     expect(130);
     expect(59);             % 'return;' — no value
@@ -2247,7 +2248,7 @@ end
 function parse_declaration()
 % declaration := type ('*')* name (('[' size ']')? (',' …)*) ('=' expr)? ';'
 % — storage: char 1 byte, int/pointer 8, struct its size, arrays n*elem.
-global token idname lvars lvartype lvararr lvarstruct lvarstride lvararrsz fbytes
+global token idname lvars lvartype lvararr lvarstruct lvarstride lvararrsz fbytes token_val
 [base, stdef] = parse_basetype();
 if isa(stdef, 'cell')
     % a local struct definition: register the tag, then either the ';'
@@ -2452,7 +2453,7 @@ function parse_assignment()
 % the address is pushed, the RHS evaluated, then stored, so the value (in
 % eax) is the RHS — `y = x = 5` chains work. Compound ops load-modify-store
 % and scale by the element size for pointer `+=`/`-=`.
-global token out ltype etype sdefs bstride
+global token out ltype etype sdefs bstride curarrsz
 parse_conditional();
 while token == 61 || (token >= 160 && token <= 169)
     op = token;
@@ -3031,7 +3032,7 @@ function parse_unary()
 % decay (no load, estruc = 1 for struct values).
 global token token_val token_dval token_isflt idname strtext lvars lvartype lvararr lvarstruct ...
        globals gtype garr gstruct funcs fret frettype fparams called ltype libfns libcalls ...
-       etype estruc lvarstride gstride bstride lvararrsz gvararrsz curarrsz si typedefs fbytes fptypes libargt libret
+       etype estruc lvarstride gstride bstride lvararrsz gvararrsz curarrsz si typedefs fbytes fptypes libargt libret enums out
 ops = [];
 while token == 45 || token == 126 || token == 33 || token == 43 || ...   % - ~ ! +
       token == 38 || token == 42 || token == 170 || token == 171          % & * ++ --
