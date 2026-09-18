@@ -19,3 +19,7 @@ tests/_probe_tmp.txt
 /tests/programs/tmp_mxrun_*_gcc.*
 /tests/tmp_mxrun_*_gcc.*
 run_tests.log
+
+# check_globals self-test fixture (delete() may be a no-op on the runtime)
+tmp_globals_selftest.m
+tmp_gccd_out.txt

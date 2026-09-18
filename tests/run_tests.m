@@ -920,13 +920,30 @@ cctests = {
     end
 
     % dense-double high-precision print (Bug A): %.17g of a dense literal
-    % and of division results must match real gcc. Regression guard for the
-    % sim_num64 parse fix + the printf-arg transport fix.
+    % and of division results must match real gcc. When gcc is present the
+    % expectation is gcc's own stdout of the same source, so there is no
+    % hand-copied gold to drift (the stored string is the gcc-less fallback).
     try
         delete('tmp_cc.s');
         cc_int('tests/programs/dreg_denseprint.c', 'tmp_cc.s');
         dd = evalc('ddr = x86sim(''tmp_cc.s'')');
+        dd(dd == char(13)) = [];
         gold = sprintf('a=0.10000000000000001\nc=3.1415926535897931\nd=0.33333333333333331\n');
+        if gcc_ok == 0
+            delete('tmp_gccd.exe');
+            if system([gcc, ' tests/programs/dreg_denseprint.c -o tmp_gccd.exe']) == 0 ...
+                    && exist('tmp_gccd.exe', 'file') == 2
+                system('.\tmp_gccd.exe > tmp_gccd_out.txt');
+                fid = fopen('tmp_gccd_out.txt', 'r');
+                if fid > 0
+                    gold = char(fread(fid, inf, 'uint8')');
+                    fclose(fid);
+                    gold(gold == char(13)) = [];
+                end
+                delete('tmp_gccd_out.txt');
+            end
+            delete('tmp_gccd.exe');
+        end
         [npass nfail] = addcheck(npass, nfail, strcmp(dd, gold), ...
             'x86sim dense-double %.17g print matches gcc');
     catch e
@@ -1062,6 +1079,54 @@ cctests = {
          '\tpopq\t%rbx', '\tmovq\t%rax, (%rbx)'}, ...
         {'\tmovq\t%rax, %r8', '\tmovq\t%rax, (%r8)'}, {'\tpopq\t%rbx'}, ...
         'ppunit store-spill-addq');
+
+    % static globals audit: every function must declare the file-globals
+    % it touches. Real MATLAB scopes are isolated, so a missing declaration
+    % (read before any local assignment) is a runtime error that the
+    % lenient clones hide -- see check_globals.m. The checker is itself
+    % self-tested on a synthetic violation so a broken checker cannot
+    % pass silently.
+    gsrc = {};
+    gdir = dir('src');              % the clone's dir() rejects wildcards
+    for gj = 1:numel(gdir)
+        gnm = gdir(gj).name;
+        if numel(gnm) > 2 && strcmp(gnm(end-1:end), '.m')
+            gsrc{end+1} = ['src/' gnm];
+        end
+    end
+    for gk = 1:numel(gsrc)
+        try
+            gb = check_globals(gsrc{gk});
+            [npass nfail] = addcheck(npass, nfail, isempty(gb), ...
+                sprintf('globals audit %s', gsrc{gk}));
+            for gq = 1:numel(gb)
+                fprintf('   %s\n', gb{gq});
+            end
+        catch e
+            [npass nfail] = addcheck(npass, nfail, false, ...
+                sprintf('globals audit %s: %s', gsrc{gk}, e.message));
+        end
+    end
+    gsf = 'tmp_globals_selftest.m';
+    gf = fopen(gsf, 'w');
+    fprintf(gf, 'function gs_main()\n');
+    fprintf(gf, 'global gshared\n');
+    fprintf(gf, 'gshared = 1;\n');
+    fprintf(gf, 'gs_helper();\n');
+    fprintf(gf, 'end\n');
+    fprintf(gf, 'function gs_helper()\n');
+    fprintf(gf, 'disp(gshared);\n');
+    fprintf(gf, 'end\n');
+    fclose(gf);
+    try
+        gb = check_globals(gsf);
+        [npass nfail] = addcheck(npass, nfail, numel(gb) == 1, ...
+            'globals audit self-test (synthetic violation caught)');
+    catch e
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            sprintf('globals audit self-test: %s', e.message));
+    end
+    delete(gsf);
 
     % function called with the wrong number of arguments errors
     try
