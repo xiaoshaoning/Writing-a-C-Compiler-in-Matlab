@@ -465,3 +465,25 @@ both interpreters. A follow-up audit of undeclared file globals fixed 19
 references across 11 cc_int.m functions (`7db5dfe`, `5ed841d`). The
 engine-compat thread recorded here remains closed; item-by-item
 resolution lives in docs/2026-09-07-x86sim-peephole-divergences.md.
+
+## Postscript 2 — 2026-09-14: current engine cannot complete the full suite
+
+Ran the suite on the Sep-14 build (target/release/matlab.exe, rebuilt
+2026-09-14 00:27) in both documented invocation modes, on an idle host:
+
+- Batch mode (`-batch "run('tests/run_tests.m')"`) reaches **588 checks
+  with 0 failures** (groups 1-9 plus the whole gcc/cc_int corpus track
+  through stress2), then the process dies.
+- Script mode (`matlab.exe tests/run_tests.m`) dies reproducibly at **47
+  checks** (the group-7 -> group-8 boundary), never getting further.
+- Isolated repros: `xc('tests/programs/stress.c')` completes (rc=5467);
+  `xc('tests/programs/stress2.c')` alone runs >9 min with a flat ~8 MB
+  working set (pathological slowness or a loop). The suite's first
+  section after row 588 runs xc(stress2.c) for cross-track parity — the
+  likely stall point.
+
+The engine is parity-clean through 588 rows (0 fails) but cannot finish
+this harness until script-mode stability and the stress2 path are fixed.
+For a complete harness result use the C clone: v1.3.53 runs the whole
+suite (767 tests, 584 passed, 183 failed, all clone-side — see
+docs/2026-09-07-x86sim-peephole-divergences.md).
