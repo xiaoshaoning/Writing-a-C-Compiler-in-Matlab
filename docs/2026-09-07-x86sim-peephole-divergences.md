@@ -11,14 +11,23 @@ the divergence sits. `R` = matlab_in_rust engine, `C` = v1.3.47 clone.
 
 Items A1 and A2 were already fixed and suite-guarded in this repo BEFORE
 this doc was written (the doc's residual runs used the isolated
-D:/tmp/cciso copy, which predated them): A1 dense `%.17g` print is fixed
-by `5c31063` and asserted at `tests/run_tests.m:922` (dreg_denseprint.c,
-gold string), A2 `%X` uppercase by the 2026-08-18 fix round (`5645461`)
+D:/tmp/cciso copy, which predated them): A1 dense `%.17g` print values are
+fixed by `5c31063` (the guard's gold string itself needed a
+missing-trailing-newline fix later — `b5af653`), A2 `%X` uppercase by the
+2026-08-18 fix round (`5645461`)
 and asserted at run_tests.m:905; the x86sim no-operand fix landed as
 `1fd742b`. A3 below is a genuine x86sim.m bug fixed here with a one-liner.
 Item C's state-carrying hypothesis is falsified: peephole_pass.m has no
 globals or persistent state (all helpers are pure, argument-passed), so
 the observed ppunit order-dependence was engine-side, not this repo's.
+
+Later update 2026-09-19: the clone lineage caught up. v1.3.53 and
+v1.3.68 both scored 584/767 (183 fails: 161 cross-track parity + 20
+`cc_int ... bad expression` parse gaps + A1 + B); v1.3.72 fixed every one
+of the parity and parse-gap rows, scoring 765/767 with only A1 and B
+left. A1's last remnant was the guard itself (see the A1 section), fixed
+in `b5af653`; v1.3.72 is therefore 766/767, leaving only B. Host table in
+Context below.
 
 ## A. x86sim print/execution gaps (R == C; upstream, need real MATLAB)
 
@@ -26,24 +35,24 @@ Both interpreters agree with each other and disagree with gcc/real
 MATLAB. Fixes live in `src/x86sim.m` and must be validated under real
 MATLAB.
 
-### A1. dense double %.17g print — `dreg_denseprint.c` (Bug A)
+### A1. dense double %.17g print — `dreg_denseprint.c` (Bug A) — RESOLVED
 
-run_tests sim group, expect gcc's stdout:
-`a=0.10000000000000001\nc=3.1415926535897931\nd=0.33333333333333331`
-Fails identically under R and C. Repro:
-```
-cc_int('tests/programs/dreg_denseprint.c','t.s'); evalc('x86sim(''t.s'')')
-```
-Suspect: the sim's double print path (%.17g shortests via sim_num64 /
-printf-arg transport) still loses an ulp somewhere (engine prints
-0.1000000000000000055-family digits).
+The sim's double-print values were fixed by `5c31063` (sim_num64 parse +
+printf-arg transport): cc_int + x86sim now prints gcc's exact
+`a=0.10000000000000001`, `c=3.1415926535897931`, `d=0.33333333333333331`
+on every host (v1.3.72 clone and the Rust engine, verified 2026-09-19).
+The check still failed because the guard's gold string omitted the
+program's trailing newline (`dreg_denseprint.c` prints three `...\n`
+lines, so gcc's stdout ends with `\n`); fixed in `b5af653`. Not a
+runtime divergence at all — a broken assertion.
 
-### A2. %X uppercase — `cc18_printfX.c`
+### A2. %X uppercase — `cc18_printfX.c` — no longer failing
 
 `printf("%X", v)` for a value with hex digits above 9 must print
-uppercase (suite expects captured stdout `FF`). FAILed in R's completed
-run; not present in C's fail list — needs a clean single-process rerun to
-confirm whether this is A-class or order-dependent (see C).
+uppercase (suite expects captured stdout `FF`). It FAILed in one R run
+(possibly order-dependent, per C) but does not fail under v1.3.53/68/72,
+whose completed runs show the `x86sim %X uppercase` check PASSing. The
+`5645461` fix (2026-08-18) is the likely resolution; no repro remains.
 
 ### A3. unsigned shift — `cc18_unsigned.c` — RESOLVED (2026-09-08)
 
@@ -101,10 +110,16 @@ peephole_pass.m (del/foldmap arrays, mnemonic tables) for reset-on-entry.
 
 ## Context
 
-- C clone full run: 768 tests, 577 passed, 191 failed (its own broad
-  interpreter gaps on the newest cc_int.m grammar, e.g. many
-  `cc_int cc10_charret.c: bad expression` rows — unrelated to the tail
-  above).
-- R engine full run: 769 tests, 761 passed, 8 failed (the 8 = A1, A2,
-  A3, output-parity p6_printf2, B corpus, C ppunit, + 1 double-count).
-  R == C on every remaining tail item except B's magnitude.
+- C clone full run, newer releases (2026-09-19): v1.3.72 = 767 tests,
+  766 passed, 1 failed (only B); v1.3.68 and v1.3.53 = 584 passed / 183
+  failed; v1.3.47 (the run behind this doc) = 577 passed / 191 failed.
+  The whole clone-side tail — the 161 cross-track parity rows and the 20
+  `cc_int ... bad expression` parse gaps — is gone as of v1.3.72.
+- R engine full run: never completed on the Sep-14 build — batch mode
+  reaches 588 checks with 0 failures (through the whole gcc corpus track)
+  then the process dies; script mode dies at 47; `xc(stress2.c)` alone
+  runs >9 min at a flat ~8 MB RSS. See
+  docs/2026-09-06-rust-engine-compat.md (Postscript 2). The earlier
+  769/761/8 run was on the 2026-09-07 engine (before those regressions).
+- Only item B (the peephole fold gap vs real MATLAB, 10896 vs 10822)
+  remains open on the best host, and it needs a real-MATLAB oracle.
