@@ -926,7 +926,7 @@ cctests = {
         delete('tmp_cc.s');
         cc_int('tests/programs/dreg_denseprint.c', 'tmp_cc.s');
         dd = evalc('ddr = x86sim(''tmp_cc.s'')');
-        gold = sprintf('a=0.10000000000000001\nc=3.1415926535897931\nd=0.33333333333333331');
+        gold = sprintf('a=0.10000000000000001\nc=3.1415926535897931\nd=0.33333333333333331\n');
         [npass nfail] = addcheck(npass, nfail, strcmp(dd, gold), ...
             'x86sim dense-double %.17g print matches gcc');
     catch e
