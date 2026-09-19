@@ -453,6 +453,7 @@ if c >= '0' && c <= '9'
         for k = ostart:si-1
             v = bitor(bitshift(v, 3, 'int64'), int64(double(src(k)) - 48));
         end
+        lex_suffix();
         token = 128;                % Num
         token_val = v;
         token_isflt = 0;
@@ -495,6 +496,7 @@ if c >= '0' && c <= '9'
     for k = sstart:si-1
         v = v * int64(10) + int64(double(src(k)) - 48);
     end
+    lex_suffix();
     token = 128;                % Num
     token_val = v;
     token_isflt = 0;
@@ -3908,8 +3910,24 @@ for k = hstart:si-1
     end
     v = bitor(bitshift(v, 4, 'int64'), int64(hd));
 end
+lex_suffix();
 token = 128;                % Num
 token_val = v;
 token_isflt = 0;
 b = 1;
+end
+
+function lex_suffix()
+% lex_suffix - consume C integer-suffix letters (u/U/l/L) after a number.
+% The value is unchanged: a constant's width and unsignedness come from the
+% declared type, so '5u', '0xFFu', '10L' and '7UL' only have to lex.
+global src si
+while si <= numel(src)
+    c = src(si);
+    if c == 'u' || c == 'U' || c == 'l' || c == 'L'
+        si = si + 1;
+    else
+        break;
+    end
+end
 end

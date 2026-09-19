@@ -691,6 +691,7 @@ cctests = {
         'cc20_litwide.c', 7;      % full-width hex + octal (compiler track only)
         'cc21_width.c', 173;      % local short/long, truncation, sizeof (compiler track only)
         'cc22_escapes.c', 27;     % char/string escape sequences
+        'cc23_suffix.c', 72;      % integer constant suffixes (u/U/l/L)
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
@@ -709,6 +710,7 @@ cctests = {
         'cc19_hex.c',
         'cc20_litforms.c',
         'cc22_escapes.c',
+        'cc23_suffix.c',
         'cc13_mdim.c', 'cc13_mdim2.c', 'cc13_mdim3.c', 'cc13_si1.c', 'cc13_si2.c', 'cc13_si3.c',
         'cc13_si5.c', 'cc13_sinit.c', 'cc2_lnat.c', 'cc2_lnat0.c', 'cc2_lnatneg.c', 'cc2_neg.c',
         'cc2_neg0.c', 'cc2_negnot.c', 'cc2_nested.c', 'cc2_not.c', 'cc2_not0.c', 'cc2_pos.c',
@@ -1016,7 +1018,8 @@ cctests = {
     % (28) then added 109 for the alternative literal bases (octal, and
     % full-width hex/octal). cc21_width.c (101) added the narrow-width
     % declarations/casts/sizeof, so the total is 11148. cc22_escapes.c
-    % (93) added the escape sequences, so the total is 11241. See
+    % (93) added the escape sequences, and cc23_suffix.c (71) the integer
+    % suffixes, so the total is 11312. See
     % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
@@ -1038,8 +1041,8 @@ cctests = {
         [npass nfail] = addcheck(npass, nfail, false, ...
             sprintf('instr count hello.c: %s', e.message));
     end
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 11241, ...
-        sprintf('instr regression: corpus %d <= 11241', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 11312, ...
+        sprintf('instr regression: corpus %d <= 11312', ic_total));
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 72, ...
         sprintf('instr regression: hello.c %d <= 72', ic_hello));
 

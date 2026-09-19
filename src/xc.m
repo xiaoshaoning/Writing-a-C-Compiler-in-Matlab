@@ -677,6 +677,7 @@ while true
                 si = si + 1;
             end
         end
+        lex_suffix();
         token = 128;   % Num
         return;
     elseif token == 47                   % '/'
@@ -2583,4 +2584,19 @@ for k = 0:cnt-1
     end
 end
 ax = 0;
+end
+
+function lex_suffix()
+% lex_suffix - consume C integer-suffix letters (u/U/l/L) after a number.
+% The value is unchanged: a constant's width and unsignedness come from the
+% declared type, so '5u', '0xFFu', '10L' and '7UL' only have to lex.
+global src si
+while si < numel(src)
+    c = double(src(si+1));
+    if c == 117 || c == 85 || c == 108 || c == 76   % u U l L
+        si = si + 1;
+    else
+        break;
+    end
+end
 end
