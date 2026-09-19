@@ -581,13 +581,10 @@ elseif c == 34                  % '"': string literal
         end
         si = si + 1;
         if v == 92              % backslash escape
-            if si <= numel(src)
-                v = src(si);
-                si = si + 1;
-                if v == 110
-                    v = char(10);
-                end
+            if si > numel(src)
+                fail('unterminated string literal');
             end
+            [v, si] = c_unescape(src, si);
         end
         strtext = [strtext, double(v)];
     end
@@ -602,14 +599,15 @@ elseif c == 39                  % '\'': char literal
     if si > numel(src)
         fail('unterminated char literal');
     end
-    v = double(src(si));
-    si = si + 1;
-    if v == 92 && si <= numel(src)   % backslash escape
+    if double(src(si)) == 92         % backslash escape
+        si = si + 1;                % the escape character
+        [v, si] = c_unescape(src, si);
+        if v < 0
+            fail('unterminated char literal');
+        end
+    else
         v = double(src(si));
         si = si + 1;
-        if v == 110
-            v = 10;             % '\n'
-        end
     end
     if si > numel(src) || double(src(si)) ~= 39
         fail('unterminated char literal');

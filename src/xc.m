@@ -722,15 +722,12 @@ while true
                 break;
             end
             si = si + 1;
-            if v == 92                   % '\' escape (only 'n' -> newline)
-                if si >= numel(src)
+            if v == 92                   % '\' escape
+                if si + 1 > numel(src)
                     break;
                 end
-                v = double(src(si+1));
-                si = si + 1;
-                if v == 110              % 'n'
-                    v = 10;
-                end
+                [v, n2] = c_unescape(src, si + 1);
+                si = n2 - 1;
             end
             token_val = v;
             if q == 34
@@ -906,12 +903,12 @@ nfail = nfail + lex_case('0 123 0x1F 017 0X2a 65535', ...
     [Num Num Num Num Num Num], 'numbers dec/hex/oct', ...
     'vals', [0 123 31 15 42 65535]);
 
-% 5) strings + char literals (escape: \n only)
+% 5) strings + char literals (escapes: \n, \\, \t)
 BS = char(92); SQ = char(39);
 % strings now NUL-terminated in mem: "abc" at 0-3, "a\nb" at 4-7
-nfail = nfail + lex_case(['"abc" "a' BS 'nb" ' SQ 'x' SQ ' ' SQ BS 'n' SQ ' ' SQ BS BS SQ], ...
-    [34 34 Num Num Num], 'strings and char literals', ...
-    'vals', [0 4 120 10 92], 'mem', {0, [97 98 99 0 97 10 98 0]});
+nfail = nfail + lex_case(['"abc" "a' BS 'nb" ' SQ 'x' SQ ' ' SQ BS 'n' SQ ' ' SQ BS BS SQ ' ' SQ BS 't' SQ], ...
+    [34 34 Num Num Num Num], 'strings and char literals', ...
+    'vals', [0 4 120 10 92 9], 'mem', {0, [97 98 99 0 97 10 98 0]});
 
 % 6) comments and # skip + line counting
 nfail = nfail + lex_case(['int a; // comment' char(10) '#define X 1' char(10) 'int b;'], ...
