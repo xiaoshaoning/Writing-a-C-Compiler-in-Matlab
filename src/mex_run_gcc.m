@@ -296,7 +296,11 @@ function [mr_v, mr_i] = mr_parse_one(mr_s, mr_i)
 		[mr_ne, mr_i] = mr_parse_int(mr_s, mr_i);
 		mr_v = cell(1, mr_ne);
 		for mr_k = 1:mr_ne
-			[mr_v{mr_k}, mr_i] = mr_parse_one(mr_s, mr_i);
+			% a scalar temp, not [mr_v{mr_k}, mr_i] = ...: the clone
+			% reshapes mr_v to NxN when a multi-output assignment targets
+			% a cell element (see the mex_run gcc cell/sparse gate)
+			[mr_ev, mr_i] = mr_parse_one(mr_s, mr_i);
+			mr_v{mr_k} = mr_ev;
 		end
 	elseif strcmp(mr_tok, 'ST')
 		[mr_nf, mr_i] = mr_parse_int(mr_s, mr_i);
@@ -404,7 +408,9 @@ function [mr_v, mr_i] = mr_parse_sparse(mr_s, mr_i)
 	mv = zeros(1, 0);
 	for mr_k = 1:mr_nz
 		mr_c = 1;
-		while mr_c <= mr_n && mr_jc(mr_c + 1) <= mr_k
+		% jc is 0-based cumulative (jc[c+1] <= k, k 0-based); mr_k is
+		% 1-based, hence the -1 (see mx_ref.c's own reader)
+		while mr_c <= mr_n && mr_jc(mr_c + 1) <= mr_k - 1
 			mr_c = mr_c + 1;
 		end
 		mi(end + 1) = mr_ir(mr_k) + 1;
