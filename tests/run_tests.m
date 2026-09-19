@@ -686,6 +686,7 @@ cctests = {
         'cc18_printf05.c',  0;   % %05d sign placement (stdout checked in the sim group)
         'dreg_denselit.c',  42;  % Bug A: dense-double literal vs 1/10 (sim_num64 + v1.3.47)
         'dreg_globallong.c', 42;  % Bug B: .quad numeric globals store their full width
+        'cc19_hex.c', 76;         % hexadecimal integer literals
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
@@ -701,6 +702,7 @@ cctests = {
         'cc11_preinc.c', 'cc11_preval.c', 'cc11_ptr.c', 'cc11_ptr2.c', 'cc11_ptr3.c', 'cc11_ptrarith.c',
         'cc11_ptrparam.c', 'cc11_ptrsub.c', 'cc11_strlen.c', 'cc11_strlit.c', 'cc11_swap.c', 'cc11_tern.c',
         'cc11_tern2.c', 'cc11_tern3.c', 'cc13_enum.c', 'cc13_enum2.c', 'cc13_ginit.c', 'cc13_init.c',
+        'cc19_hex.c',
         'cc13_mdim.c', 'cc13_mdim2.c', 'cc13_mdim3.c', 'cc13_si1.c', 'cc13_si2.c', 'cc13_si3.c',
         'cc13_si5.c', 'cc13_sinit.c', 'cc2_lnat.c', 'cc2_lnat0.c', 'cc2_lnatneg.c', 'cc2_neg.c',
         'cc2_neg0.c', 'cc2_negnot.c', 'cc2_nested.c', 'cc2_not.c', 'cc2_not0.c', 'cc2_pos.c',
@@ -989,7 +991,8 @@ cctests = {
     % newer clones fold ~28 more than the v1.3.25 measurement that set
     % 10822, so the measured total is 10896. Re-baselined; the value is
     % host-dependent (v1.3.47 reports one more), and it is a clone-lineage
-    % baseline, not a real-MATLAB number. See
+    % baseline, not a real-MATLAB number. cc19_hex.c (hex literals) added
+    % 42, so the total is 10938. See
     % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
@@ -1011,8 +1014,8 @@ cctests = {
         [npass nfail] = addcheck(npass, nfail, false, ...
             sprintf('instr count hello.c: %s', e.message));
     end
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 10896, ...
-        sprintf('instr regression: corpus %d <= 10896', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 10938, ...
+        sprintf('instr regression: corpus %d <= 10938', ic_total));
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 72, ...
         sprintf('instr regression: hello.c %d <= 72', ic_hello));
 

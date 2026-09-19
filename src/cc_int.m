@@ -433,6 +433,42 @@ c = src(si);
 if c >= '0' && c <= '9'
     isflt = 0;
     sstart = si;
+    % hex literal: 0x / 0X + hex digits (C90 hexadecimal constants).  The
+    % value is accumulated with bitshift/bitor so it wraps mod 2^64 like
+    % C, not saturating like int64 */+ would.
+    if src(si) == '0' && si + 1 <= numel(src) && ...
+            (src(si+1) == 'x' || src(si+1) == 'X')
+        si = si + 2;
+        hstart = si;
+        while si <= numel(src)
+            hc = src(si);
+            if (hc >= '0' && hc <= '9') || (hc >= 'a' && hc <= 'f') || ...
+                    (hc >= 'A' && hc <= 'F')
+                si = si + 1;
+            else
+                break;
+            end
+        end
+        if si == hstart
+            fail('hex literal needs at least one digit');
+        end
+        v = int64(0);
+        for k = hstart:si-1
+            hc = src(k);
+            if hc >= '0' && hc <= '9'
+                hd = double(hc) - 48;
+            elseif hc >= 'a' && hc <= 'f'
+                hd = double(hc) - 87;
+            else
+                hd = double(hc) - 55;
+            end
+            v = bitor(bitshift(v, 4, 'int64'), int64(hd));
+        end
+        token = 128;                % Num
+        token_val = v;
+        token_isflt = 0;
+        return;
+    end
     while si <= numel(src) && src(si) >= '0' && src(si) <= '9'
         si = si + 1;
     end
