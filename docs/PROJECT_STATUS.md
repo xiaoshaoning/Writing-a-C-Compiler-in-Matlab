@@ -261,8 +261,9 @@ stdout parity). Writing it found:
   `num2str(v, '%.0f')` — the clone ignores the format and prints %g, so
   values past ~1e5 came out scientific (`9.8765e+08`). The corpus never
   printed values that large. Fixed with a manual `sim_decstr`.
-- **compiler dialect note:** `cc_int` has no hex literals (`0xAAAA` is a
-  parse error) — stress2 uses the decimal value; a documented gap.
+- **compiler dialect note:** `cc_int` had no hex literals (`0xAAAA` was a
+  parse error) — stress2 used the decimal value. Closed 2026-09-19; see
+  the hex entry below.
 
 Suite 744 → 748; the instruction-count baseline rose to 10,898 with
 stress2 included.
@@ -369,6 +370,17 @@ expectation is now gcc's own stdout rather than a hand-copied string
 (`4d07835`). `run_tests` appends every check to `run_tests.log`
 (`5036aca`) so a run killed by a host suspend still leaves its record.
 
+**Hex literals + full green (2026-09-19).** `cc_int` now lexes C90
+hexadecimal integer constants (`0x`/`0X` + hex digits) in every constant
+context — expressions, global initializers, array sizes and initializers,
+enum values — accumulated with `bitshift`/`bitor` so full-width values
+wrap mod 2^64 like C rather than saturating (`0xFFFFFFFFFFFFFFFF` is `-1`
+as a bit pattern); a bare `0x` errors. Integer suffixes (`0xFFu`) remain
+unsupported, as they already were for decimals. `tests/programs/cc19_hex.c`
+(exit 76, gcc-verified) joins the gcc exit-code, x86sim corpus and
+cross-track parity groups; the instruction ceiling was re-baselined to
+10938. The suite is **777/777** on v1.3.72.
+
 ## Deliverables
 
 | Phase | Scope | Commit |
@@ -392,6 +404,7 @@ and the runtime library are the changelog entries above:
 | cc16 | struct-returning fptrs, local structs/enums, string→char[] | `840193b` |
 | cc17 | runtime library shims (printf/malloc/memset/memcmp/exit/open/read/close) | `7813eb7` |
 | cc18 | pointer-returning fptrs, compound literals, `unsigned` | *this round* |
+| cc19 | hexadecimal integer literals | `0230f27` |
 | double | SSE value model in `cc_int` + `x86sim` + gcc-parity corpus | `e2b4c8d` |
 | mex | in-memory `mxArray` ABI, `mex_run` driver, gcc reference track | `e502237`…`6276c06` |
 | parity | cross-track exit-code parity (187) + output parity (53, 47/47 matchable `pp_*`) | `04da1b7` `57e2fae` |
@@ -484,8 +497,10 @@ features outside the scope of both the port and the reference dialect
 (structs, unions, `switch`, `for`/`do-while` loops, preprocessor macros, …)
 are unsupported. The compiler track (`cc_int.m`) supports all of those plus
 structs; the cc18 round closed its last three documented gaps
-(pointer-returning function pointers, compound literals, `unsigned` types).
-Calls through pointers always use the interpreter-style stack convention.
+(pointer-returning function pointers, compound literals, `unsigned` types),
+and the cc19 round added hexadecimal integer literals — the last known
+compiler-track dialect gap. Calls through pointers always use the
+interpreter-style stack convention.
 
 - The `-s` mnemonic column is padded manually to match the reference's
   `%8.4s` output (the runtime pads to width but not to string precision)
