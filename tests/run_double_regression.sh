@@ -1,8 +1,8 @@
 #!/bin/bash
 # regression batch for cc_int/x86sim double support (ME-1) vs gcc
-cd /d/Projects/github/xiaoshaoning/Writing-a-C-Compiler-in-Matlab || exit 1
-M=/d/Projects/codes/MATLAB_in_c/matlab.exe
-S='D:/Projects/github/xiaoshaoning/Writing-a-C-Compiler-in-Matlab'
+cd "${CC_REPO:-/d/Projects/github/xiaoshaoning/Writing-a-C-Compiler-in-Matlab}" || exit 1
+M="${MATLAB:-/d/Projects/codes/MATLAB_in_c/matlab.exe}"
+S="${CC_REPO:-D:/Projects/github/xiaoshaoning/Writing-a-C-Compiler-in-Matlab}"
 pass=0; fail=0
 for c in cc10_cadd dsmoke dcmp dneg dmore dmore2 dmore3 dmore4 dand dge d2and dand4 dmath; do
   $M -e "addpath('${S}/src'); cc_int('${S}/tests/programs/${c}.c', 'D:/tmp/${c}.s'); x = x86sim('D:/tmp/${c}.s'); fprintf('SIM_EXIT=%d', x);" > /d/tmp/out.txt 2>&1
@@ -21,3 +21,4 @@ for c in cc10_cadd dsmoke dcmp dneg dmore dmore2 dmore3 dmore4 dand dge d2and da
   fi
 done
 echo "double regression: $pass passed, $fail failed"
+exit $fail

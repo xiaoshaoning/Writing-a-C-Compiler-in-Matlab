@@ -3,9 +3,9 @@
 # must return identical outputs on the shared MEX corpus (the compiler
 # project's group-11 sources + the main repo's B+ parity corpus, minus the
 # mexCallMATLAB-dependent one that needs a MATLAB host).
-cd /d/Projects/github/xiaoshaoning/Writing-a-C-Compiler-in-Matlab || exit 1
-M=/d/Projects/codes/MATLAB_in_C/matlab.exe
-S='D:/Projects/github/xiaoshaoning/Writing-a-C-Compiler-in-Matlab'
+cd "${CC_REPO:-/d/Projects/github/xiaoshaoning/Writing-a-C-Compiler-in-Matlab}" || exit 1
+M="${MATLAB:-/d/Projects/codes/MATLAB_in_C/matlab.exe}"
+S="${CC_REPO:-D:/Projects/github/xiaoshaoning/Writing-a-C-Compiler-in-Matlab}"
 C='D:/Projects/codes/MATLAB_in_C'
 pass=0; fail=0
 

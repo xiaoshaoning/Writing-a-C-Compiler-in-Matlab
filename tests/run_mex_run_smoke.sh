@@ -1,9 +1,9 @@
 #!/bin/bash
 # ME-3 gate: mex_run('src.c', ...) — the full gcc-free pipeline returns the
 # expected output arrays.
-cd /d/Projects/github/xiaoshaoning/Writing-a-C-Compiler-in-Matlab || exit 1
-M=/d/Projects/codes/MATLAB_in_C/matlab.exe
-S='D:/Projects/github/xiaoshaoning/Writing-a-C-Compiler-in-Matlab'
+cd "${CC_REPO:-/d/Projects/github/xiaoshaoning/Writing-a-C-Compiler-in-Matlab}" || exit 1
+M="${MATLAB:-/d/Projects/codes/MATLAB_in_C/matlab.exe}"
+S="${CC_REPO:-D:/Projects/github/xiaoshaoning/Writing-a-C-Compiler-in-Matlab}"
 pass=0; fail=0
 
 check() {
@@ -29,3 +29,4 @@ check mxchar   "'hi'"               "out1=prefix:hi "
 check mxmath   "[0.5 1 4 0.25]"     "out1=[1.18653 1.84147 1.2432 0.747404 ] "
 
 echo "mex_run gate: $pass passed, $fail failed"
+exit $fail

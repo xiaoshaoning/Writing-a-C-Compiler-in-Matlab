@@ -275,12 +275,25 @@ corpus whose exit codes/outputs are cross-verified against the reference
 build, a gcc-gated group that compiles and runs the assembly-track
 programs, a cross-track parity group that runs the shared corpus through
 BOTH the interpreter and the compiler and asserts they agree, an
-instruction-count regression, and the optimizer's per-rule unit
-fixtures):
+instruction-count regression, a static globals audit, and the optimizer's
+per-rule unit fixtures):
 
 ```
 matlab.bat tests/run_tests.m
 ```
+
+The whole verification — the suite plus the four MEX/double gates
+(`run_double_regression`, `run_mx_smoke`, `run_mex_run_smoke`,
+`run_mex_run_gcc`, the last an oracle diffing the compile track against
+`mex_run(..., 'gcc')`) — is one command:
+
+```
+bash tests/run_all.sh
+```
+
+It resolves the runtime from `$MATLAB` (else `matlab` on PATH, else the
+clone build), derives the repo path from its own location, and exits
+non-zero if any part fails.
 
 Or in `-batch` mode (the clone does not resolve a script's local functions
 when the script is run by name after `addpath`, so invoke the file with `run`):
