@@ -1469,7 +1469,7 @@ for k = 1:numel(glist)
         end
         em(sprintf('	.globl	%s', nm));
         em(sprintf('%s:', nm));
-        if ~ischar(v) && numel(v) >= 1 && v(1) == double('S')
+        if ~ischar(v) && ~iscell(v) && numel(v) >= 1 && v(1) == double('S')
             % string-literal pointer initializer (marker 'S' + text)
             em(sprintf('	.quad	%s', new_str(v(2:end))));
         elseif iscell(v) && strcmp(v{1}, 'F')
