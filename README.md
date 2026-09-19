@@ -67,13 +67,13 @@ src/
 LICENSE, README.md
 
 tests/
-  run_tests.m         test harness (780 checks: probe gate, VM, lexer,
+  run_tests.m         test harness (782 checks: probe gate, VM, lexer,
                       program corpus, syscall/acceptance, cc_int/gcc,
                       x86sim, cross-track parity, instruction-count
                       regression, peephole-pass unit fixtures)
   programs/           test C programs
     return_2.c        return 2; (part 1 of the Norasandler series)
-    cc2_*.c–cc20_*.c  unary … literal-forms programs (parts 2-18 plus
+    cc2_*.c–cc21_*.c  unary … literal-forms / width programs (parts 2-18 plus
                       extensions, gcc-gated in the suite)
     hello.c           fibonacci demo — xc.m acceptance program
 docs/
@@ -112,7 +112,8 @@ plus a runtime library: `printf` (full CRT formats), `malloc`, `memset`,
 `memcmp`, `exit`, and `open`/`read`/`close` — and pointer-returning
 function pointers (`int *(*fp)(int *)`), C99 compound literals
 (`(struct P){…}`, `(int[]){…}`), `unsigned` types (unsigned division,
-comparisons, and `>>`), and hexadecimal and octal integer literals.
+comparisons, and `>>`), hexadecimal and octal integer literals, and the
+narrow fixed-width types (`short`/`word`/`long`).
 
 For example, recursion + `printf`:
 
@@ -145,11 +146,12 @@ int main() {
 → `p=(3,4) fp=15 A`. Exit codes are the program's `return` value (or
 `exit(n)`), truncated to the low 8 bits.
 
-`tests/programs/cc2_*.c`–`cc20_*.c` are self-contained examples of each
+`tests/programs/cc2_*.c`–`cc21_*.c` are self-contained examples of each
 feature; `cc17_shim.c` shows `malloc`/`memset`/`memcmp`/`exit` together,
 and `cc18_*.c` covers pointer-returning fptrs, compound literals, and
-`unsigned`; `cc19_hex.c` and `cc20_litforms.c` cover hex and octal. The
-full 780-check
+`unsigned`; `cc19_hex.c`–`cc20_litforms.c` cover the literal bases and
+`cc21_width.c` the narrow widths. The
+full 782-check
 suite (both tracks, cross-track parity,
 stdout parity, instruction-count regression, optimizer unit fixtures, and
 the static globals audit):
@@ -271,7 +273,7 @@ otherwise bleed into each other). The dialect is feature-complete against its
 documented scope; remaining C features (structs, unions, `switch`,
 `for`/`do-while`, …) are outside both the port and the reference dialect.
 
-Tests (780 checks — probe gate, VM selftest, lexer selftest, the program
+Tests (782 checks — probe gate, VM selftest, lexer selftest, the program
 corpus whose exit codes/outputs are cross-verified against the reference
 build, a gcc-gated group that compiles and runs the assembly-track
 programs, a cross-track parity group that runs the shared corpus through

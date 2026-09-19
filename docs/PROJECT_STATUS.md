@@ -394,6 +394,19 @@ exit 104 on gcc, x86sim and parity) and `cc20_litwide.c` (full-width
 hex/octal wrap to the all-ones pattern; compiler track only, exit 7).
 Ceiling 10938 → 11047; suite **780/780**.
 
+**Width-type locals, casts and sizeof (2026-09-19).** `parse_basetype` had
+long accepted `short` (2-byte), `word` (4-byte) and `long` (8-byte), but
+the places that decide "is this a type?" — `parse_statement`'s declaration
+dispatch, `parse_for`'s init, `is_cast` and `sizeof(type)` — omitted
+tokens 193/194/195, so `short s = 3;` failed while globals of those types
+worked. All four now accept them (`is_cast`/`sizeof` also gained
+`unsigned`). Two related bugs fell out: `sizeof(short)` returned 8 (the
+narrow bases had no size mapping; now 1/2/4/8 for char/short/word/int)
+and a cast to short/word did not truncate (`(short)0x10003` stayed 65539;
+now masked to 16/32 bits). Guards: `cc21_width.c` (exit 173, gcc + x86sim)
+and the simulator-only `cc21_wordloc.c` (`word` is a cc_int extension, not
+C). Ceiling 11047 → 11148; suite **782/782**.
+
 ## Deliverables
 
 | Phase | Scope | Commit |
@@ -419,6 +432,7 @@ and the runtime library are the changelog entries above:
 | cc18 | pointer-returning fptrs, compound literals, `unsigned` | *this round* |
 | cc19 | hexadecimal integer literals | `0230f27` |
 | cc20 | octal literals (silent-miscompile fix) + literal-forms corpus | `1a5b710` |
+| cc21 | local short/word/long declarations, casts, sizeof | `dd7fb97` |
 | double | SSE value model in `cc_int` + `x86sim` + gcc-parity corpus | `e2b4c8d` |
 | mex | in-memory `mxArray` ABI, `mex_run` driver, gcc reference track | `e502237`…`6276c06` |
 | parity | cross-track exit-code parity (187) + output parity (53, 47/47 matchable `pp_*`) | `04da1b7` `57e2fae` |
@@ -426,7 +440,7 @@ and the runtime library are the changelog entries above:
 
 ## Verification
 
-- **Test suite**: `tests/run_tests.m` — **780/780** on the C clone
+- **Test suite**: `tests/run_tests.m` — **782/782** on the C clone
   v1.3.74. Groups: runtime-primitive
   gate (probe), 30-case VM selftest, 9-case lexer selftest, program
   corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke, the gcc-gated
@@ -440,7 +454,7 @@ and the runtime library are the changelog entries above:
   appended to `run_tests.log` as it runs, so a killed run still leaves a
   record.
 - **Hosts** (2026-09-19): the suite runs on the custom C clone and on the
-  matlab_in_rust engine. Full runs — v1.3.74 = 780/780; earlier v1.3.72 =
+  matlab_in_rust engine. Full runs — v1.3.74 = 782/782; earlier v1.3.72 =
   775/774/1, v1.3.53 and v1.3.68 = 584 passed / 183 failed, v1.3.47 =
   577 / 191. The engine
   (2026-09-14 build) reaches 588 checks with 0 failures and then dies in
@@ -545,7 +559,7 @@ report.
 ## Running
 
 ```
-D:\...\matlab.bat tests/run_tests.m          # full suite (780 checks)
+D:\...\matlab.bat tests/run_tests.m          # full suite (782 checks)
 D:\...\matlab.bat -batch "addpath('src'); xc('tests/programs/hello.c')"   # acceptance program
 D:\...\matlab.bat -batch "addpath('src'); xc('-s', 'tests/programs/hello.c')"  # compile dump
 D:\...\matlab.bat -batch "addpath('src'); xc('-d', 'tests/programs/hello.c')"  # trace
