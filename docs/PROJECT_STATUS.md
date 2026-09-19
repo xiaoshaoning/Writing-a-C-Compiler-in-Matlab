@@ -407,6 +407,21 @@ now masked to 16/32 bits). Guards: `cc21_width.c` (exit 173, gcc + x86sim)
 and the simulator-only `cc21_wordloc.c` (`word` is a cc_int extension, not
 C). Ceiling 11047 → 11148; suite **782/782**.
 
+**Escape sequences + integer suffixes (2026-09-19).** Only `\n` was
+decoded in char and string literals; every other escape dropped the
+backslash and kept the next character, so `'\t'` was 116 and `"\t"`
+printed `t` — silent wrong data on both tracks (gcc's 153 came out 409).
+The new `src/c_unescape.m` owns the table (simple escapes, octal `\NNN`,
+hex `\xNN`, unknown keeps the character) and both lexers call it.
+Integer constant suffixes (`5u`, `0xFFu`, `10L`, `7UL`, `3llu`) are also
+accepted now — previously the lexer stopped at the digits and failed on
+the trailing identifier — via a shared-shape `lex_suffix()`; the value is
+unchanged since width and unsignedness come from the declared type.
+Guards: `cc22_escapes.c` (exit 27; char values via the exit code, string
+bytes via stdout, in the gcc/parity/output-parity groups) and
+`cc23_suffix.c` (exit 72, gcc + parity). Ceiling 11148 → 11312; suite
+**789/789**.
+
 ## Deliverables
 
 | Phase | Scope | Commit |
@@ -433,6 +448,8 @@ and the runtime library are the changelog entries above:
 | cc19 | hexadecimal integer literals | `0230f27` |
 | cc20 | octal literals (silent-miscompile fix) + literal-forms corpus | `1a5b710` |
 | cc21 | local short/word/long declarations, casts, sizeof | `dd7fb97` |
+| cc22 | escape sequences (both tracks) | `0dc3320` |
+| cc23 | integer constant suffixes (both tracks) | `f06ee02` |
 | double | SSE value model in `cc_int` + `x86sim` + gcc-parity corpus | `e2b4c8d` |
 | mex | in-memory `mxArray` ABI, `mex_run` driver, gcc reference track | `e502237`…`6276c06` |
 | parity | cross-track exit-code parity (187) + output parity (53, 47/47 matchable `pp_*`) | `04da1b7` `57e2fae` |
@@ -440,7 +457,7 @@ and the runtime library are the changelog entries above:
 
 ## Verification
 
-- **Test suite**: `tests/run_tests.m` — **782/782** on the C clone
+- **Test suite**: `tests/run_tests.m` — **789/789** on the C clone
   v1.3.74. Groups: runtime-primitive
   gate (probe), 30-case VM selftest, 9-case lexer selftest, program
   corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke, the gcc-gated
@@ -454,7 +471,7 @@ and the runtime library are the changelog entries above:
   appended to `run_tests.log` as it runs, so a killed run still leaves a
   record.
 - **Hosts** (2026-09-19): the suite runs on the custom C clone and on the
-  matlab_in_rust engine. Full runs — v1.3.74 = 782/782; earlier v1.3.72 =
+  matlab_in_rust engine. Full runs — v1.3.74 = 789/789; earlier v1.3.72 =
   775/774/1, v1.3.53 and v1.3.68 = 584 passed / 183 failed, v1.3.47 =
   577 / 191. The engine
   (2026-09-14 build) reaches 588 checks with 0 failures and then dies in
@@ -559,7 +576,7 @@ report.
 ## Running
 
 ```
-D:\...\matlab.bat tests/run_tests.m          # full suite (782 checks)
+D:\...\matlab.bat tests/run_tests.m          # full suite (789 checks)
 D:\...\matlab.bat -batch "addpath('src'); xc('tests/programs/hello.c')"   # acceptance program
 D:\...\matlab.bat -batch "addpath('src'); xc('-s', 'tests/programs/hello.c')"  # compile dump
 D:\...\matlab.bat -batch "addpath('src'); xc('-d', 'tests/programs/hello.c')"  # trace
