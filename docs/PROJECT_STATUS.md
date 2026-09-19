@@ -1,4 +1,4 @@
-# Project Status — 2026-08-10
+# Project Status — last updated 2026-09-19
 
 ## Summary
 
@@ -326,6 +326,49 @@ cross-checked) produced one round of fixes:
   10,715 → 10,822 with the new programs. Verified end-to-end on the
   v1.3.25 release build.
 
+**Double support (2026-08-19).** `cc_int` and `x86sim` gained a
+floating-point value model end to end: `double` literals/locals/params
+and their arithmetic, comparisons and casts emit and execute SSE
+instructions, and the simulator carries an `xmm` register file. A
+gcc-parity double corpus plus `tests/run_double_regression.sh` guard it.
+
+**MEX/mx layer + the gcc reference oracle (2026-08-20 → 2026-08-26).**
+The compiler grew an in-memory `mxArray` ABI with `mx*`/`mex*` stubs
+inside `x86sim` and a driver, `mex_run`, that assembles `mx_preamble` +
+a MEX source + a synthetic `main`, compiles it with `cc_int` and runs it
+in the simulator — MEX code executes with no external C compiler.
+`mex_run(..., 'gcc')` compiles the SAME source with real gcc and the two
+are diffed, so the simulator is checked against a compiler-independent
+oracle rather than a hand-written expectation (`tests/run_mex_run_gcc.sh`
+and the mx/matfile/`strncpy` gates hold the corpus, 20/20 A/B). Along the
+way `cc_int` gained C block scoping (sibling blocks may reuse names),
+`static` functions, enum case labels, `mxClassID`/width typedefs, and
+`x86sim` exact 4-byte `movl` loads and 8-byte char/logical slots;
+mex-mode pass 1 was made ~100x faster.
+
+**x86sim Bug A/B + no-operand dispatch (2026-09-06 → 09-08).** Dense
+`double` literals and high-precision `%.17g` printf were fixed
+(`5c31063`), as was a `.quad`/`.long` numeric global that stored only its
+low byte (`6228ea1`), each with regression corpus and direct sim checks
+(`3b9c466`). `1fd742b` maps no-operand instructions to their mnemonic so
+`ret` no longer mis-dispatches; `6b84eda` removed dead code and
+superseded plan docs.
+
+**Correctness round (2026-09-08 → 09-19).** An unsigned shift whose
+count is a raw int64 register (`shrq %cl`) did the division with
+round-half semantics only on the clones; the count is now forced double
+(`6a73590`). `parse_statement`'s label-peek read `token_val` without
+declaring it global (`7db5dfe`), and a static audit then found 19 more
+references to file-globals that functions did not declare (`5ed841d`) —
+legal only under the clones' caller-chained scoping, an error under real
+MATLAB's isolated function scopes. That audit is now a permanent guard,
+`tests/check_globals.m`, run over every `src/*.m` with its own self-test
+(`4d07835`). The dense-`%.17g` guard's gold string was missing the
+program's trailing newline (`b5af653`), and with gcc present the
+expectation is now gcc's own stdout rather than a hand-copied string
+(`4d07835`). `run_tests` appends every check to `run_tests.log`
+(`5036aca`) so a run killed by a host suspend still leaves its record.
+
 ## Deliverables
 
 | Phase | Scope | Commit |
@@ -349,22 +392,36 @@ and the runtime library are the changelog entries above:
 | cc16 | struct-returning fptrs, local structs/enums, string→char[] | `840193b` |
 | cc17 | runtime library shims (printf/malloc/memset/memcmp/exit/open/read/close) | `7813eb7` |
 | cc18 | pointer-returning fptrs, compound literals, `unsigned` | *this round* |
+| double | SSE value model in `cc_int` + `x86sim` + gcc-parity corpus | `e2b4c8d` |
+| mex | in-memory `mxArray` ABI, `mex_run` driver, gcc reference track | `e502237`…`6276c06` |
 | parity | cross-track exit-code parity (187) + output parity (53, 47/47 matchable `pp_*`) | `04da1b7` `57e2fae` |
 | verify | reference cross-check + ENT dump fix | `f697b72` |
 
 ## Verification
 
-- **Test suite**: `tests/run_tests.m` — **764/764** on the target runtime
-  (the full group set: runtime-primitive gate (probe), 30-case VM selftest,
-  9-case lexer selftest, program corpus (p3–p6, pp), syscall/acceptance,
-  `-s`/`-d` smoke, the gcc-gated assembly-track group + cross-track parity
-  + output parity, the gcc-free x86sim corpus group — `x86sim.m` runs all
-  293 compiler programs without gcc — the instruction-count regression,
-  and the peephole-pass unit fixtures). Since the 2026-08-18 fix round the
-  gcc-free groups run even when gcc is absent (they no longer sit inside
-  the gcc gate), and the harness invokes the compiled exe as `.\tmp_cc.exe`
-  so cmd's current-directory exe lookup works even under
-  `NoDefaultCurrentDirectoryInExePath`.
+- **Test suite**: `tests/run_tests.m` — **775 checks (774 pass, 1 fail)**
+  on the C clone v1.3.72; the one failure is the peephole corpus
+  instruction-count ceiling (see Open items). Groups: runtime-primitive
+  gate (probe), 30-case VM selftest, 9-case lexer selftest, program
+  corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke, the gcc-gated
+  assembly-track group + cross-track parity + output parity, the gcc-free
+  x86sim corpus group (`x86sim.m` runs every compiler program without
+  gcc), the instruction-count regression, the peephole-pass unit
+  fixtures, and the static globals audit. Since the 2026-08-18 fix round
+  the gcc-free groups run even when gcc is absent, and the harness
+  invokes the compiled exe as `.\tmp_cc.exe` (cmd's current-directory
+  exe lookup under `NoDefaultCurrentDirectoryInExePath`). Every check is
+  appended to `run_tests.log` as it runs, so a killed run still leaves a
+  record.
+- **Hosts** (2026-09-19): the suite runs on the custom C clone and on the
+  matlab_in_rust engine. Full runs — v1.3.72 = 775/774/1; v1.3.53 and
+  v1.3.68 = 584 passed / 183 failed; v1.3.47 = 577 / 191. The engine
+  (2026-09-14 build) reaches 588 checks with 0 failures and then dies in
+  the stress2/output-parity section (script mode dies at 47) — see
+  `docs/2026-09-06-rust-engine-compat.md`. No runnable MathWorks MATLAB
+  is installed on the development machine (the R2023b install is a stub
+  with no `matlab.exe`), so the suite's "green oracle" is still
+  unverified on it.
 - **Reference cross-check**: the reference `xc.c` built with gcc 15.2.0
   (`C:\msys64\ucrt64\bin\gcc.exe`). Every corpus program's exit code is
   identical to the reference; `-s` instruction dumps are byte-identical
@@ -374,6 +431,21 @@ and the runtime library are the changelog entries above:
   is asserted in the suite with its full expected output.
 - **Regression**: the probe gate re-verifies the primitives the port depends
   on before every run, so a runtime behavior regression fails loudly.
+
+## Open items (2026-09-19)
+
+- **Peephole fold gap vs real MATLAB (item B).** The corpus instruction
+  count under both clones and the Rust engine is 10896, above the 10822
+  ceiling recorded under real MATLAB — some fold rules fire less under
+  the interpreters. Resolving it needs the real-MATLAB oracle.
+- **Real-MATLAB validation.** No runnable MathWorks MATLAB is installed
+  here, so the real-MATLAB-green claim rests on the recorded 10822
+  ceiling and on clone hosts. Repairing R2023b would settle item B and
+  every "needs real MATLAB" note in `docs/`.
+- **matlab_in_rust engine.** Cannot complete this harness: script mode
+  dies at check 47, batch mode reaches 588 with 0 failures then dies, and
+  `xc(stress2.c)` stalls. Engine-side; recorded in
+  `docs/2026-09-06-rust-engine-compat.md`.
 
 ## Post-parity features (beyond the reference)
 
@@ -448,7 +520,7 @@ report.
 ## Running
 
 ```
-D:\...\matlab.bat tests/run_tests.m          # full suite (764 checks)
+D:\...\matlab.bat tests/run_tests.m          # full suite (775 checks)
 D:\...\matlab.bat -batch "addpath('src'); xc('tests/programs/hello.c')"   # acceptance program
 D:\...\matlab.bat -batch "addpath('src'); xc('-s', 'tests/programs/hello.c')"  # compile dump
 D:\...\matlab.bat -batch "addpath('src'); xc('-d', 'tests/programs/hello.c')"  # trace
