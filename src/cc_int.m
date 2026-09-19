@@ -431,75 +431,7 @@ if si > numel(src)
 end
 c = src(si);
 if c >= '0' && c <= '9'
-    isflt = 0;
-    sstart = si;
-    if lex_hex()
-        return;
-    end
-    % octal integer: a leading 0 followed by a digit (C90). 0.5 and 0e1
-    % are floats and 0x.. is hex, so only a following digit makes it
-    % octal; 8/9 are not octal digits and are an error like gcc's.
-    if src(si) == '0' && si + 1 <= numel(src) && ...
-            src(si+1) >= '0' && src(si+1) <= '9'
-        si = si + 1;
-        ostart = si;
-        while si <= numel(src) && src(si) >= '0' && src(si) <= '9'
-            if src(si) > '7'
-                fail('invalid digit in octal literal');
-            end
-            si = si + 1;
-        end
-        v = int64(0);
-        for k = ostart:si-1
-            v = bitor(bitshift(v, 3, 'int64'), int64(double(src(k)) - 48));
-        end
-        lex_suffix();
-        token = 128;                % Num
-        token_val = v;
-        token_isflt = 0;
-        return;
-    end
-    while si <= numel(src) && src(si) >= '0' && src(si) <= '9'
-        si = si + 1;
-    end
-    if si <= numel(src) && src(si) == 46   % '.'
-        isflt = 1;
-        si = si + 1;
-        while si <= numel(src) && src(si) >= '0' && src(si) <= '9'
-            si = si + 1;
-        end
-    end
-    if si <= numel(src) && (src(si) == 101 || src(si) == 69)  % e E
-        p = si + 1;
-        if p <= numel(src) && (src(p) == 43 || src(p) == 45)
-            p = p + 1;
-        end
-        dig = 0;
-        while p <= numel(src) && src(p) >= '0' && src(p) <= '9'
-            p = p + 1;
-            dig = 1;
-        end
-        if dig
-            isflt = 1;
-            si = p;
-        end
-    end
-    if isflt
-        d = str2double(char(src(sstart:si-1)));
-        token = 128;                 % Num
-        token_val = typecast(d, 'int64');   % the IEEE bit pattern
-        token_dval = d;
-        token_isflt = 1;
-        return;
-    end
-    v = int64(0);
-    for k = sstart:si-1
-        v = v * int64(10) + int64(double(src(k)) - 48);
-    end
-    lex_suffix();
-    token = 128;                % Num
-    token_val = v;
-    token_isflt = 0;
+    lex_number();
     return;
 elseif (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
     start = si;
@@ -3931,3 +3863,81 @@ while si <= numel(src)
     end
 end
 end
+function lex_number()
+% lex_number - scan one number literal and set the Num token. next()
+% calls this when the current character is a digit: hex (lex_hex),
+% octal (a leading 0 followed by a digit), decimal, an optional
+% fraction/exponent making it a double, and an optional integer suffix
+% (lex_suffix). token is 128, token_val is the integer (or the IEEE bit
+% pattern of a double), and token_dval/token_isflt are set for a float.
+global src si token token_val token_dval token_isflt
+    isflt = 0;
+    sstart = si;
+    if lex_hex()
+        return;
+    end
+    % octal integer: a leading 0 followed by a digit (C90). 0.5 and 0e1
+    % are floats and 0x.. is hex, so only a following digit makes it
+    % octal; 8/9 are not octal digits and are an error like gcc's.
+    if src(si) == '0' && si + 1 <= numel(src) && ...
+            src(si+1) >= '0' && src(si+1) <= '9'
+        si = si + 1;
+        ostart = si;
+        while si <= numel(src) && src(si) >= '0' && src(si) <= '9'
+            if src(si) > '7'
+                fail('invalid digit in octal literal');
+            end
+            si = si + 1;
+        end
+        v = int64(0);
+        for k = ostart:si-1
+            v = bitor(bitshift(v, 3, 'int64'), int64(double(src(k)) - 48));
+        end
+        lex_suffix();
+        token = 128;                % Num
+        token_val = v;
+        token_isflt = 0;
+        return;
+    end
+    while si <= numel(src) && src(si) >= '0' && src(si) <= '9'
+        si = si + 1;
+    end
+    if si <= numel(src) && src(si) == 46   % '.'
+        isflt = 1;
+        si = si + 1;
+        while si <= numel(src) && src(si) >= '0' && src(si) <= '9'
+            si = si + 1;
+        end
+    end
+    if si <= numel(src) && (src(si) == 101 || src(si) == 69)  % e E
+        p = si + 1;
+        if p <= numel(src) && (src(p) == 43 || src(p) == 45)
+            p = p + 1;
+        end
+        dig = 0;
+        while p <= numel(src) && src(p) >= '0' && src(p) <= '9'
+            p = p + 1;
+            dig = 1;
+        end
+        if dig
+            isflt = 1;
+            si = p;
+        end
+    end
+    if isflt
+        d = str2double(char(src(sstart:si-1)));
+        token = 128;                 % Num
+        token_val = typecast(d, 'int64');   % the IEEE bit pattern
+        token_dval = d;
+        token_isflt = 1;
+        return;
+    end
+    v = int64(0);
+    for k = sstart:si-1
+        v = v * int64(10) + int64(double(src(k)) - 48);
+    end
+    lex_suffix();
+    token = 128;                % Num
+    token_val = v;
+    token_isflt = 0;
+    return;end

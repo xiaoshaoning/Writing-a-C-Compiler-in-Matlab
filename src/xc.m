@@ -644,41 +644,7 @@ while true
         token = 133;                 % Id
         return;
     elseif token >= 48 && token <= 57
-        % number: dec (1-9...), hex (0x...), oct (0...)
-        token_val = int64(token - 48);
-        if token_val > 0
-            while si < numel(src)
-                c = double(src(si+1));
-                if c < 48 || c > 57
-                    break;
-                end
-                token_val = token_val * int64(10) + int64(c - 48);
-                si = si + 1;
-            end
-        elseif si < numel(src) && (double(src(si+1)) == 120 || double(src(si+1)) == 88)
-            % hex (0x / 0X)
-            si = si + 1;
-            while si < numel(src)
-                t = double(src(si+1));
-                if ~((t >= 48 && t <= 57) || (t >= 97 && t <= 102) || (t >= 65 && t <= 70))
-                    break;
-                end
-                token_val = token_val * int64(16) + int64(mod(t,16) + 9*(t >= 65));
-                si = si + 1;
-            end
-        else
-            % oct (0...7)
-            while si < numel(src)
-                c = double(src(si+1));
-                if c < 48 || c > 55
-                    break;
-                end
-                token_val = token_val * int64(8) + int64(c - 48);
-                si = si + 1;
-            end
-        end
-        lex_suffix();
-        token = 128;   % Num
+        lex_number();
         return;
     elseif token == 47                   % '/'
         if si < numel(src) && double(src(si+1)) == 47
@@ -2599,4 +2565,46 @@ while si < numel(src)
         break;
     end
 end
+end
+function lex_number()
+% lex_number - scan one number literal (decimal, hex 0x.., octal 0..)
+% and set the Num token. next() calls this when the current character
+% is a digit; token_val is the value and any integer suffix is consumed.
+global src si token token_val
+        % number: dec (1-9...), hex (0x...), oct (0...)
+        token_val = int64(token - 48);
+        if token_val > 0
+            while si < numel(src)
+                c = double(src(si+1));
+                if c < 48 || c > 57
+                    break;
+                end
+                token_val = token_val * int64(10) + int64(c - 48);
+                si = si + 1;
+            end
+        elseif si < numel(src) && (double(src(si+1)) == 120 || double(src(si+1)) == 88)
+            % hex (0x / 0X)
+            si = si + 1;
+            while si < numel(src)
+                t = double(src(si+1));
+                if ~((t >= 48 && t <= 57) || (t >= 97 && t <= 102) || (t >= 65 && t <= 70))
+                    break;
+                end
+                token_val = token_val * int64(16) + int64(mod(t,16) + 9*(t >= 65));
+                si = si + 1;
+            end
+        else
+            % oct (0...7)
+            while si < numel(src)
+                c = double(src(si+1));
+                if c < 48 || c > 55
+                    break;
+                end
+                token_val = token_val * int64(8) + int64(c - 48);
+                si = si + 1;
+            end
+        end
+        lex_suffix();
+        token = 128;   % Num
+        return;
 end
