@@ -436,6 +436,28 @@ if c >= '0' && c <= '9'
     if lex_hex()
         return;
     end
+    % octal integer: a leading 0 followed by a digit (C90). 0.5 and 0e1
+    % are floats and 0x.. is hex, so only a following digit makes it
+    % octal; 8/9 are not octal digits and are an error like gcc's.
+    if src(si) == '0' && si + 1 <= numel(src) && ...
+            src(si+1) >= '0' && src(si+1) <= '9'
+        si = si + 1;
+        ostart = si;
+        while si <= numel(src) && src(si) >= '0' && src(si) <= '9'
+            if src(si) > '7'
+                fail('invalid digit in octal literal');
+            end
+            si = si + 1;
+        end
+        v = int64(0);
+        for k = ostart:si-1
+            v = bitor(bitshift(v, 3, 'int64'), int64(double(src(k)) - 48));
+        end
+        token = 128;                % Num
+        token_val = v;
+        token_isflt = 0;
+        return;
+    end
     while si <= numel(src) && src(si) >= '0' && src(si) <= '9'
         si = si + 1;
     end
