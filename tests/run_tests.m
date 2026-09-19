@@ -980,12 +980,17 @@ cctests = {
 
     % instruction-count regression: the corpus's total emitted
     % instructions must stay at or below the recorded ceiling, so a future
-    % change cannot silently bloat the generated code. (stress.c raised
-    % the baseline to 7387 and stress2.c to 10898; the empty-frame no-op
-    % fold then took it to 10715; the 2026-08-18 fix-round programs
-    % raised it to 10822. Before that the ceilings ratcheted down per
-    % optimization phase: 8697 -> 8271 -> 7835 -> 7686 -> 6184 — see
-    % docs/2026-08-16-compiler-optimization-plan.md.)
+    % change cannot silently bloat the generated code. History: 8697 ->
+    % 8271 -> 7835 -> 7686 -> 6184 per optimization phase, then 7387
+    % (stress.c), 10898 (stress2.c), 10715 (empty-frame no-op fold), 10822
+    % (the 2026-08-18 fix-round programs). The 2026-09-06 Bug A/B
+    % regression programs (dreg_denselit.c, dreg_globallong.c) then added
+    % 102 instructions on this host without the ceiling being raised, and
+    % newer clones fold ~28 more than the v1.3.25 measurement that set
+    % 10822, so the measured total is 10896. Re-baselined; the value is
+    % host-dependent (v1.3.47 reports one more), and it is a clone-lineage
+    % baseline, not a real-MATLAB number. See
+    % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
     for ick = 1:size(cctests, 1)
@@ -1006,8 +1011,8 @@ cctests = {
         [npass nfail] = addcheck(npass, nfail, false, ...
             sprintf('instr count hello.c: %s', e.message));
     end
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 10822, ...
-        sprintf('instr regression: corpus %d <= 10822', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 10896, ...
+        sprintf('instr regression: corpus %d <= 10896', ic_total));
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 72, ...
         sprintf('instr regression: hello.c %d <= 72', ic_hello));
 

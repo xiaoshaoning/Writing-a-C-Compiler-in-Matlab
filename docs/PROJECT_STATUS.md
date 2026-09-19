@@ -399,9 +399,8 @@ and the runtime library are the changelog entries above:
 
 ## Verification
 
-- **Test suite**: `tests/run_tests.m` — **775 checks (774 pass, 1 fail)**
-  on the C clone v1.3.72; the one failure is the peephole corpus
-  instruction-count ceiling (see Open items). Groups: runtime-primitive
+- **Test suite**: `tests/run_tests.m` — **775/775** on the C clone
+  v1.3.72. Groups: runtime-primitive
   gate (probe), 30-case VM selftest, 9-case lexer selftest, program
   corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke, the gcc-gated
   assembly-track group + cross-track parity + output parity, the gcc-free
@@ -434,14 +433,10 @@ and the runtime library are the changelog entries above:
 
 ## Open items (2026-09-19)
 
-- **Peephole fold gap vs real MATLAB (item B).** The corpus instruction
-  count under both clones and the Rust engine is 10896, above the 10822
-  ceiling recorded under real MATLAB — some fold rules fire less under
-  the interpreters. Resolving it needs the real-MATLAB oracle.
 - **Real-MATLAB validation.** No runnable MathWorks MATLAB is installed
-  here, so the real-MATLAB-green claim rests on the recorded 10822
-  ceiling and on clone hosts. Repairing R2023b would settle item B and
-  every "needs real MATLAB" note in `docs/`.
+  here (the R2023b install is a stub with no `matlab.exe`), so the
+  suite's "green oracle" is unverified on it. The instruction-count
+  ceiling is a clone-lineage baseline, not a real-MATLAB number.
 - **matlab_in_rust engine.** Cannot complete this harness: script mode
   dies at check 47, batch mode reaches 588 with 0 failures then dies, and
   `xc(stress2.c)` stalls. Engine-side; recorded in

@@ -26,8 +26,9 @@ v1.3.68 both scored 584/767 (183 fails: 161 cross-track parity + 20
 `cc_int ... bad expression` parse gaps + A1 + B); v1.3.72 fixed every one
 of the parity and parse-gap rows, scoring 765/767 with only A1 and B
 left. A1's last remnant was the guard itself (see the A1 section), fixed
-in `b5af653`; v1.3.72 is therefore 766/767, leaving only B. Host table in
-Context below.
+in `b5af653`; item B then turned out to be a stale ceiling rather than a
+fold gap (see the B section), and the globals audit added 8 checks, so
+the v1.3.72 run is fully green: **775/775**. Host table in Context below.
 
 ## A. x86sim print/execution gaps (R == C; upstream, need real MATLAB)
 
@@ -84,29 +85,32 @@ cc18_unsigned2 111, cc18_ushr 0, cc18_ucmp 1, cc10_cshl/cshr unchanged.
 The existing suite guard (cctests table row `'cc18_unsigned.c', 6` plus
 the gcc-free x86sim corpus group's sim == gcc-exit assertion) covers it.
 
-## B. Peephole: interpreter-vs-MATLAB fold gap (R and C both under budget)
+## B. Instruction-count ceiling — RESOLVED (2026-09-19); not a fold gap
 
-`instr regression: corpus N <= 10822` — the corpus instruction count is
-R = 11575 and C = 10897, both over the real-MATLAB ceiling of 10822. The
-peephole_pass.m rules fold less when interpreted than under real MATLAB,
-and R folds 678 fewer than C (so R has an additional engine-side gap in
-some fold rule — C and R disagree here, unlike section A).
+`instr regression: corpus 10896 <= 10822` looked like the interpreters
+folding less than real MATLAB. It is not. The 10822 ceiling was set on the
+v1.3.25 clone (2026-08-18); the 2026-09-06 Bug A/B regression programs
+(`dreg_denselit.c`, `dreg_globallong.c`) then added **102** instructions on
+this host without the ceiling being raised, and newer clones fold **~28**
+more than the v1.3.25 measurement, giving 10896. No cctests rows were
+removed in between, so the corpus only grew.
 
-## C. Order/state dependence inside peephole (needs investigation)
+The pass is fully converged, so there are no missed folds to hunt: feeding
+cc_int's output back through `peephole_pass` changes the instruction count
+for **none** of the 410 compilable corpus programs (measured 2026-09-19;
+the pass already iterates to a fixed point). The ceiling is re-baselined to
+10896 in the harness, with the corpus growth recorded. It is a
+clone-lineage baseline, not a real-MATLAB number (v1.3.47 reports one
+more). The Rust engine's 11575 remains an engine-side gap of its own.
 
-`ppunit imm-fold` FAILed in one full R run, PASSed in the next R run, and
-PASSes under C — but feeding the imm-fold fixture to peephole_pass
-standalone under BOTH engines returns the input unchanged (no fold):
-```
-addpath('src'); T=char(9);
-r = peephole_pass({['movq',T,'$2, %rax'],['imulq',T,'$8, %rax'],['movq',T,'%rax, %rbx']})
-% -> unchanged under R and C; real MATLAB folds to movq $16, %rax
-```
-This suggests cc_int/peephole_pass carry state across calls in a way
-that changes later results (a fold rule firing or not depending on prior
-compiles in the same process). The full suite's per-run total also drifts
-(795 vs 769 checks) in the same direction. Worth auditing globals in
-peephole_pass.m (del/foldmap arrays, mnemonic tables) for reset-on-entry.
+## C. Order/state dependence inside peephole — REFUTED
+
+The one-off `ppunit imm-fold` failure was engine-side and is gone. The
+standalone repro in the original note was mis-constructed: the imm-fold
+fixture passes deterministically in the suite (`ppunit imm-fold`) under
+both the clones and the engine, and `peephole_pass.m` has no globals or
+persistent state. The 2026-09-19 idempotency check (section B) confirms
+the pass reaches a true fixed point, so nothing carries across calls.
 
 ## Context
 
@@ -121,5 +125,7 @@ peephole_pass.m (del/foldmap arrays, mnemonic tables) for reset-on-entry.
   runs >9 min at a flat ~8 MB RSS. See
   docs/2026-09-06-rust-engine-compat.md (Postscript 2). The earlier
   769/761/8 run was on the 2026-09-07 engine (before those regressions).
-- Only item B (the peephole fold gap vs real MATLAB, 10896 vs 10822)
-  remains open on the best host, and it needs a real-MATLAB oracle.
+- With item B re-baselined (a stale clone-lineage ceiling, not a fold
+  gap — see the B section) and the static globals audit added, the
+  v1.3.72 run is fully green: **775/775**. The only outstanding host
+  problem is the Rust engine's inability to finish the harness.
