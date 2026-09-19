@@ -689,6 +689,7 @@ cctests = {
         'cc19_hex.c', 76;         % hexadecimal integer literals
         'cc20_litforms.c', 104;   % decimal / hex / octal literals (shared dialect)
         'cc20_litwide.c', 7;      % full-width hex + octal (compiler track only)
+        'cc21_width.c', 173;      % local short/long, truncation, sizeof (compiler track only)
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
@@ -923,6 +924,19 @@ cctests = {
         [npass nfail] = addcheck(npass, nfail, false, ...
             sprintf('x86sim %%05d: %s', e.message));
     end
+    % local width-type declarations through the simulator only: 'word' is
+    % a cc_int extension, so gcc cannot be the oracle and the interpreter
+    % has no short/word/long at all (see tests/programs/cc21_wordloc.c)
+    try
+        delete('tmp_cc.s');
+        cc_int('tests/programs/cc21_wordloc.c', 'tmp_cc.s');
+        wloc = x86sim('tmp_cc.s');
+        [npass nfail] = addcheck(npass, nfail, wloc == 0, ...
+            'cc_int local word/short/long declarations (sim only)');
+    catch e
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            sprintf('local width types: %s', e.message));
+    end
 
     % dense-double high-precision print (Bug A): %.17g of a dense literal
     % and of division results must match real gcc. When gcc is present the
@@ -997,7 +1011,8 @@ cctests = {
     % baseline, not a real-MATLAB number. cc19_hex.c (hex literals) added
     % 42, so the total is 10938. cc20_litforms.c (81) and cc20_litwide.c
     % (28) then added 109 for the alternative literal bases (octal, and
-    % full-width hex/octal), so the total is 11047. See
+    % full-width hex/octal). cc21_width.c (101) added the narrow-width
+    % declarations/casts/sizeof, so the total is 11148. See
     % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
@@ -1019,8 +1034,8 @@ cctests = {
         [npass nfail] = addcheck(npass, nfail, false, ...
             sprintf('instr count hello.c: %s', e.message));
     end
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 11047, ...
-        sprintf('instr regression: corpus %d <= 11047', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 11148, ...
+        sprintf('instr regression: corpus %d <= 11148', ic_total));
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 72, ...
         sprintf('instr regression: hello.c %d <= 72', ic_hello));
 

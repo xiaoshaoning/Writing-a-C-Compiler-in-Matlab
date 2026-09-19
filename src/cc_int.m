@@ -1903,6 +1903,7 @@ function parse_statement()
 global token token_val idname typedefs src si lvars lvartype lvararr lvarstruct lvarstride
 if token == 131 || token == 134 || token == 178 || token == 188 || ...  % int/char/struct/unsigned
    token == 189 || token == 190 || token == 191 || token == 192 || ... % double/const/register/static
+   token == 193 || token == 194 || token == 195 || ...                % short/word/long
    (token == 150 && isfield(typedefs, idname))            % typedef'd type
     parse_declaration();
 elseif token == 123         % '{': block — C scopes block locals: a
@@ -2062,6 +2063,7 @@ expect(40);
 if token ~= 59              % ';': optional init
     if token == 131 || token == 134 || token == 178 || token == 188 || ...
        token == 189 || token == 190 || token == 191 || token == 192 || ...
+       token == 193 || token == 194 || token == 195 || ...
        (token == 150 && isfield(typedefs, idname))
         parse_declaration();      % `for (mwSize i = 0; ...)`; consumes ';'
     else
@@ -3072,7 +3074,8 @@ if token == 40              % '(': a cast (type)unary or parenthesised expr
     save_id = idname;
     next();
     is_cast = (token == 131 || token == 134 || token == 178 || token == 187 || ...
-              token == 189 || ...
+              token == 188 || token == 189 || ...
+              token == 193 || token == 194 || token == 195 || ...
               (token == 150 && isfield(typedefs, idname)));
     si = save_si; token = save_tok; token_val = save_tv; idname = save_id;
     if is_cast
@@ -3204,16 +3207,24 @@ if token == 40              % '(': a cast (type)unary or parenthesised expr
                 if etype ~= 6
                     em('\tcvtsi2sdq\t%rax, %xmm0');
                 end
-            elseif (cbase == 0 || cbase == 5 || cbase == 7 || cbase == 9) ...
-                    && cdepth == 0 && etype == 6
-                % (int)x / (unsigned)x / (int16_t)x / (int32_t)x :
-                % double -> int (truncate toward 0)
-                em('\tcvttsd2siq\t%xmm0, %rax');
             elseif cbase == 1 && cdepth == 0
                 if etype == 6
                     em('\tcvttsd2siq\t%xmm0, %rax');
                 end
                 em('\tmovsbl\t%al, %eax');   % truncate to a signed char
+            elseif cbase == 7 && cdepth == 0
+                if etype == 6
+                    em('\tcvttsd2siq\t%xmm0, %rax');
+                end
+                em('\tmovzwl\t%ax, %eax');   % truncate to 16 bits
+            elseif cbase == 9 && cdepth == 0
+                if etype == 6
+                    em('\tcvttsd2siq\t%xmm0, %rax');
+                end
+                em('\tmovl\t%eax, %eax');    % truncate to 32 bits
+            elseif (cbase == 0 || cbase == 5) && cdepth == 0 && etype == 6
+                % (int)x / (unsigned)x : double -> int (truncate toward 0)
+                em('\tcvttsd2siq\t%xmm0, %rax');
             end
             etype = cbase + 2 * cdepth;
             estruc = 0;
@@ -3260,16 +3271,21 @@ elseif token == 183         % sizeof: type or expression
         estruc = 0;
     elseif token == 40
         next();
-        if token == 131 || token == 134 || token == 178 || token == 189   % a type
+        if token == 131 || token == 134 || token == 178 || token == 188 || ...
+                token == 189 || token == 193 || token == 194 || token == 195   % a type
             [base, stdef] = parse_basetype();
             depth = 0;
             while token == 42       % '*'
                 depth = depth + 1;
                 next();
             end
-            if base == 1 && depth == 0
+            if depth == 0 && base == 1
                 sz = 1;
-            elseif base >= 1000 && depth == 0
+            elseif depth == 0 && base == 7
+                sz = 2;                 % short
+            elseif depth == 0 && base == 9
+                sz = 4;                 % word
+            elseif depth == 0 && base >= 1000
                 sz = ssize_of(base);
             else
                 sz = 8;
@@ -3286,6 +3302,10 @@ elseif token == 183         % sizeof: type or expression
                 sz = curarrsz;      % a whole array: its total byte size
             elseif estruc
                 sz = ssize_of(etype);
+            elseif etype == 7
+                sz = 2;             % short
+            elseif etype == 9
+                sz = 4;             % word
             else
                 sz = 8;
             end
