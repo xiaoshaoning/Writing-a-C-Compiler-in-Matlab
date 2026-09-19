@@ -381,6 +381,19 @@ unsupported, as they already were for decimals. `tests/programs/cc19_hex.c`
 cross-track parity groups; the instruction ceiling was re-baselined to
 10938. The suite is **777/777** on v1.3.72.
 
+**Octal miscompile fixed + literal-forms corpus (2026-09-19).** A
+leading-zero integer was read as decimal, so `0777 & 0xFF` compiled to
+`777 & 0xFF` = 9 instead of octal `511 & 255` = 255 — a silent wrong-code
+miscompile (gcc and the interpreter both gave 255). The lexer now reads
+`0[0-7]+` as base 8, rejects 8/9 with gcc's `invalid digit in octal
+literal`, and wraps full-width values mod 2^64 like hex. Because the
+corpus had no octal (nor, before cc19, hex) literal, the bug survived;
+two guard programs now cover the bases: `cc20_litforms.c`
+(decimal/hex/octal in expressions, a global, an array size and an enum;
+exit 104 on gcc, x86sim and parity) and `cc20_litwide.c` (full-width
+hex/octal wrap to the all-ones pattern; compiler track only, exit 7).
+Ceiling 10938 → 11047; suite **780/780**.
+
 ## Deliverables
 
 | Phase | Scope | Commit |
@@ -405,6 +418,7 @@ and the runtime library are the changelog entries above:
 | cc17 | runtime library shims (printf/malloc/memset/memcmp/exit/open/read/close) | `7813eb7` |
 | cc18 | pointer-returning fptrs, compound literals, `unsigned` | *this round* |
 | cc19 | hexadecimal integer literals | `0230f27` |
+| cc20 | octal literals (silent-miscompile fix) + literal-forms corpus | `1a5b710` |
 | double | SSE value model in `cc_int` + `x86sim` + gcc-parity corpus | `e2b4c8d` |
 | mex | in-memory `mxArray` ABI, `mex_run` driver, gcc reference track | `e502237`…`6276c06` |
 | parity | cross-track exit-code parity (187) + output parity (53, 47/47 matchable `pp_*`) | `04da1b7` `57e2fae` |
@@ -412,8 +426,8 @@ and the runtime library are the changelog entries above:
 
 ## Verification
 
-- **Test suite**: `tests/run_tests.m` — **775/775** on the C clone
-  v1.3.72. Groups: runtime-primitive
+- **Test suite**: `tests/run_tests.m` — **780/780** on the C clone
+  v1.3.74. Groups: runtime-primitive
   gate (probe), 30-case VM selftest, 9-case lexer selftest, program
   corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke, the gcc-gated
   assembly-track group + cross-track parity + output parity, the gcc-free
@@ -426,8 +440,9 @@ and the runtime library are the changelog entries above:
   appended to `run_tests.log` as it runs, so a killed run still leaves a
   record.
 - **Hosts** (2026-09-19): the suite runs on the custom C clone and on the
-  matlab_in_rust engine. Full runs — v1.3.72 = 775/774/1; v1.3.53 and
-  v1.3.68 = 584 passed / 183 failed; v1.3.47 = 577 / 191. The engine
+  matlab_in_rust engine. Full runs — v1.3.74 = 780/780; earlier v1.3.72 =
+  775/774/1, v1.3.53 and v1.3.68 = 584 passed / 183 failed, v1.3.47 =
+  577 / 191. The engine
   (2026-09-14 build) reaches 588 checks with 0 failures and then dies in
   the stress2/output-parity section (script mode dies at 47) — see
   `docs/2026-09-06-rust-engine-compat.md`. No runnable MathWorks MATLAB
@@ -498,8 +513,8 @@ features outside the scope of both the port and the reference dialect
 are unsupported. The compiler track (`cc_int.m`) supports all of those plus
 structs; the cc18 round closed its last three documented gaps
 (pointer-returning function pointers, compound literals, `unsigned` types),
-and the cc19 round added hexadecimal integer literals — the last known
-compiler-track dialect gap. Calls through pointers always use the
+and the cc19 round added hexadecimal integer literals, the cc20 round
+octal — closing the compiler-track dialect gaps in the number lexer. Calls through pointers always use the
 interpreter-style stack convention.
 
 - The `-s` mnemonic column is padded manually to match the reference's
@@ -530,7 +545,7 @@ report.
 ## Running
 
 ```
-D:\...\matlab.bat tests/run_tests.m          # full suite (775 checks)
+D:\...\matlab.bat tests/run_tests.m          # full suite (780 checks)
 D:\...\matlab.bat -batch "addpath('src'); xc('tests/programs/hello.c')"   # acceptance program
 D:\...\matlab.bat -batch "addpath('src'); xc('-s', 'tests/programs/hello.c')"  # compile dump
 D:\...\matlab.bat -batch "addpath('src'); xc('-d', 'tests/programs/hello.c')"  # trace
