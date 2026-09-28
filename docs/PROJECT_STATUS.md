@@ -481,7 +481,9 @@ and the runtime library are the changelog entries above:
   program fine, so it is the interpreter (a ~0.2 s per-call VM path; see
   issue 1 of the filed engine bug report). The corpus instruction total is
   identical on both engines (11402) after the peephole rule-3 fix (§E of
-  `docs/2026-09-07-x86sim-peephole-divergences.md`). Earlier runs — v1.3.72
+  `docs/2026-09-07-x86sim-peephole-divergences.md`), and the emitted
+  assembly is byte-identical across the two engines for all 302 corpus
+  programs — a verified second oracle for the compiler track. Earlier runs — v1.3.72
   = 775/774/1, v1.3.53 and v1.3.68 = 584 / 183 failed, v1.3.47 = 577 / 191.
   No runnable MathWorks MATLAB is installed on the development machine
   (the R2023b install is a stub with no `matlab.exe`), so the suite's

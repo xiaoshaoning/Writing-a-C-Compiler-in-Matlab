@@ -99,9 +99,12 @@ gcc prog.s -o prog.exe
 ./prog.exe            (bash)  /  prog.exe, then echo %errorlevel% (cmd)
 ```
 
-**Requirements:** the custom MATLAB clone (`matlab.bat`) and MSYS2 gcc (the
-emitted assembly is COFF — it needs a Windows binutils). The `addpath('src')`
-is required in `-batch` mode; in cmd the exit code is `%errorlevel%`.
+**Requirements:** a MATLAB-compatible runtime and MSYS2 gcc (the
+emitted assembly is COFF — it needs a Windows binutils). Both the custom C
+clone (`matlab.bat`) and the Rust engine (`matlab_in_rust`) run the suite;
+set `MATLAB=<path to matlab.exe>` (`tests/env.sh` honours it). The
+`addpath('src')` is required in `-batch` mode; in cmd the exit code is
+`%errorlevel%`.
 
 **What it compiles:** the full Norasandler series (parts 1–17) — expressions
 with C precedence, `if`/`while`/`for`/`do`/`switch`, functions (recursion,
@@ -299,6 +302,13 @@ bash tests/run_all.sh
 It resolves the runtime from `$MATLAB` (else `matlab` on PATH, else the
 clone build), derives the repo path from its own location, and exits
 non-zero if any part fails.
+
+The Rust engine is a supported runtime and a verified second oracle for the
+compiler track: all 302 corpus programs emit **byte-identical** assembly
+through `cc_int` + `peephole_pass` on both engines. Its interpreter is still
+too slow for one call-heavy program (`stress2.c`), so the suite stops at 588
+checks there; the three engine gaps and their repros are filed in the engine
+repo and summarised in `docs/2026-09-06-rust-engine-compat.md`.
 
 Or in `-batch` mode:
 
