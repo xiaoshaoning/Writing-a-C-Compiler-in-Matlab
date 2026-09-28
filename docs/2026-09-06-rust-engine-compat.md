@@ -487,3 +487,26 @@ this harness until script-mode stability and the stress2 path are fixed.
 For a complete harness result use the C clone: v1.3.53 runs the whole
 suite (767 tests, 584 passed, 183 failed, all clone-side — see
 docs/2026-09-07-x86sim-peephole-divergences.md).
+
+## Postscript 3 — 2026-09-28 engine build
+
+The engine is substantially more compatible. It now matches real MATLAB on
+the semantics the older clones got wrong: `strcmp` returns logical and is
+element-wise over a cell, `dir` accepts wildcards, the cell-element
+multi-output assignment keeps its shape, `mod(int64,int64)` returns int64,
+and mixed cell/scalar operands raise.
+
+The harness therefore gets much further: **588 checks, 0 failures**, then it
+hangs on the same place — `xc('tests/programs/stress2.c')` (the *compiler*
+track runs `stress2.c` fine, so it is the interpreter path). Everything
+before it, including `probe_primitives`, the `-s`/`-d` smoke groups, the
+gcc-free x86sim corpus and `xc(stress.c)` parity, passes.
+
+The gcc cross-track gate also fails two cases on this build:
+
+- `mxsparse_get`: `Undefined function for input arguments of type 'double'.`
+- `matfile` / `matfile_del`: `SFA1 unsupported struct field assignment target`
+
+The other 18 cross-track cases, the double regression (13/13) and both
+smoke gates (6/6) pass. Engine-side gaps; the repo cannot work around them
+without dropping coverage.
