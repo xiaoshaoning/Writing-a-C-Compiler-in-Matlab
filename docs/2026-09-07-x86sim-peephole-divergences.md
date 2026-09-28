@@ -112,6 +112,19 @@ both the clones and the engine, and `peephole_pass.m` has no globals or
 persistent state. The 2026-09-19 idempotency check (section B) confirms
 the pass reaches a true fixed point, so nothing carries across calls.
 
+## D. Rule 6 folded a full-width immediate into memory — FIXED (2026-09-28)
+
+Fold rule 6 (`movq $N, %rax ; movq %rax, mem` -> `movq $N, mem`) applied
+to any immediate. x86-64's `movq`-to-memory encoding takes only a
+sign-extended imm32, so above 2^31 the emitted line is not assemblable:
+`gcc -c` rejects `movq $9223372036854775806, -32(%rbp)` (exit 1). The
+simulator accepted it, so the corpus only caught it once `cc24_wide.c`
+(64-bit decimal literals above 2^53) joined the corpus and the corpus
+check assembles every program with gcc. The fold now requires
+-2^31 <= N <= 2^31-1; a full-width immediate stays in `%rax`
+(`movq $imm64, %rax` promotes to `movabs`, which GAS accepts). Corpus
+ceiling 11312 -> 11402.
+
 ## Context
 
 - C clone full run, newer releases (2026-09-19): v1.3.72 = 767 tests,
@@ -119,12 +132,14 @@ the pass reaches a true fixed point, so nothing carries across calls.
   failed; v1.3.47 (the run behind this doc) = 577 passed / 191 failed.
   The whole clone-side tail — the 161 cross-track parity rows and the 20
   `cc_int ... bad expression` parse gaps — is gone as of v1.3.72.
-- R engine full run: never completed on the Sep-14 build — batch mode
-  reaches 588 checks with 0 failures (through the whole gcc corpus track)
-  then the process dies; script mode dies at 47; `xc(stress2.c)` alone
-  runs >9 min at a flat ~8 MB RSS. See
-  docs/2026-09-06-rust-engine-compat.md (Postscript 2). The earlier
-  769/761/8 run was on the 2026-09-07 engine (before those regressions).
+- R engine full run (2026-09-28 build): much more compatible — matches
+  real MATLAB on cell/`strcmp`/`dir`/reshape semantics and the harness
+  reaches **588 checks with 0 failures**, then hangs on
+  `xc('tests/programs/stress2.c')` (the compiler track runs that program
+  fine). The gcc cross-track gate also fails `mxsparse_get` and
+  `matfile`/`matfile_del`. Earlier (Sep-14 build): batch mode reached 588
+  then died, script mode died at 47, `xc(stress2.c)` ran >9 min at a flat
+  ~8 MB RSS. See docs/2026-09-06-rust-engine-compat.md.
 - With item B re-baselined (a stale clone-lineage ceiling, not a fold
   gap — see the B section) and the static globals audit added, the
   v1.3.72 run is fully green: **775/775**. The only outstanding host

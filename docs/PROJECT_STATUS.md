@@ -419,8 +419,11 @@ the trailing identifier — via a shared-shape `lex_suffix()`; the value is
 unchanged since width and unsignedness come from the declared type.
 Guards: `cc22_escapes.c` (exit 27; char values via the exit code, string
 bytes via stdout, in the gcc/parity/output-parity groups) and
-`cc23_suffix.c` (exit 72, gcc + parity). Ceiling 11148 → 11312; suite
-**789/789**.
+`cc23_suffix.c` (exit 72, gcc + parity). `cc24_wide.c` (exit 96,
+compiler-track only) closes the 64-bit decimal literals above 2^53 —
+emission, the immediate parse, the 64-bit store and `%ld` are all int64
+-exact now, and the peephole no longer folds a full-width immediate into
+-memory. Ceiling 11148 → 11312 → **11402**; suite **791/791**.
 
 ## Deliverables
 
@@ -457,8 +460,8 @@ and the runtime library are the changelog entries above:
 
 ## Verification
 
-- **Test suite**: `tests/run_tests.m` — **789/789** on the C clone
-  v1.3.74. Groups: runtime-primitive
+- **Test suite**: `tests/run_tests.m` — **791/791** on the C clone
+  (v1.3.76 tag and the Sep 27 build). Groups: runtime-primitive
   gate (probe), 30-case VM selftest, 9-case lexer selftest, program
   corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke, the gcc-gated
   assembly-track group + cross-track parity + output parity, the gcc-free
@@ -470,16 +473,16 @@ and the runtime library are the changelog entries above:
   exe lookup under `NoDefaultCurrentDirectoryInExePath`). Every check is
   appended to `run_tests.log` as it runs, so a killed run still leaves a
   record.
-- **Hosts** (2026-09-19): the suite runs on the custom C clone and on the
-  matlab_in_rust engine. Full runs — v1.3.74 = 789/789; earlier v1.3.72 =
-  775/774/1, v1.3.53 and v1.3.68 = 584 passed / 183 failed, v1.3.47 =
-  577 / 191. The engine
-  (2026-09-14 build) reaches 588 checks with 0 failures and then dies in
-  the stress2/output-parity section (script mode dies at 47) — see
-  `docs/2026-09-06-rust-engine-compat.md`. No runnable MathWorks MATLAB
-  is installed on the development machine (the R2023b install is a stub
-  with no `matlab.exe`), so the suite's "green oracle" is still
-  unverified on it.
+- **Hosts** (2026-09-28): the suite runs on the custom C clone and on the
+  matlab_in_rust engine. The C clone (v1.3.76 tag and the Sep 27 build) =
+  **791/791** plus the four gates. The Rust engine (2026-09-28 build)
+  reaches 588 checks with 0 failures and then hangs on
+  `xc('tests/programs/stress2.c')` — the *compiler* track runs that same
+  program fine, so it is the interpreter. Earlier runs — v1.3.72 =
+  775/774/1, v1.3.53 and v1.3.68 = 584 / 183 failed, v1.3.47 = 577 / 191.
+  No runnable MathWorks MATLAB is installed on the development machine
+  (the R2023b install is a stub with no `matlab.exe`), so the suite's
+  "green oracle" is still unverified on it.
 - **Reference cross-check**: the reference `xc.c` built with gcc 15.2.0
   (`C:\msys64\ucrt64\bin\gcc.exe`). Every corpus program's exit code is
   identical to the reference; `-s` instruction dumps are byte-identical
@@ -496,10 +499,14 @@ and the runtime library are the changelog entries above:
   here (the R2023b install is a stub with no `matlab.exe`), so the
   suite's "green oracle" is unverified on it. The instruction-count
   ceiling is a clone-lineage baseline, not a real-MATLAB number.
-- **matlab_in_rust engine.** Cannot complete this harness: script mode
-  dies at check 47, batch mode reaches 588 with 0 failures then dies, and
-  `xc(stress2.c)` stalls. Engine-side; recorded in
-  `docs/2026-09-06-rust-engine-compat.md`.
+- **matlab_in_rust engine.** The current build is much more compatible
+  (matches real MATLAB on cell/`strcmp`/`dir`/reshape semantics, and
+  passes 588/588 checks) but still cannot complete the harness:
+  `xc('tests/programs/stress2.c')` hangs (the compiler track runs the
+  same program fine). The gcc cross-track gate also fails two cases
+  (`mxsparse_get`: "Undefined function ... type 'double'"; `matfile` /
+  `matfile_del`: "SFA1 unsupported struct field assignment target").
+  Engine-side; recorded in `docs/2026-09-06-rust-engine-compat.md`.
 
 ## Post-parity features (beyond the reference)
 
@@ -561,9 +568,19 @@ via `cdivmod` (exact double math, values < 2^53 — `word_store` asserts the
 bound). The port targets the current runtime; historical behavior gaps and
 their resolutions are tracked in the (internal, gitignored) runtime bug
 report. The suite is verified green on both the released `v1.3.76` tag and
-the current build (789/789 plus the four gates), which is why a few
+the current build (791/791 plus the four gates), which is why a few
 workarounds whose original reason is fixed upstream are kept — they cost a
 few lines and keep older runtimes working.
+64-bit integers are transported exactly end-to-end: a decimal literal is
+accumulated in `int64` by the lexer, emitted from the exact `int64`,
+parsed back byte-exactly by `x86sim` (`sim_num64`/`sim_storeN`), and
+printed by `sim_decstr`/`fmt_int` in `int64` (INT64_MIN included). The
+peephole never folds a full-width immediate into a memory operand, since
+x86-64's `movq`-to-memory takes only a sign-extended imm32. The current
+clone also enforces real MATLAB's rules the older clones ignored —
+`evalc` echoes an unsuppressed assignment, integer arrays cannot be
+combined with a non-scalar double array, and one function convention per
+file — so the harness and probe now respect them.
 
 ## Resolved items
 
@@ -580,7 +597,7 @@ few lines and keep older runtimes working.
 ## Running
 
 ```
-D:\...\matlab.bat tests/run_tests.m          # full suite (789 checks)
+D:\...\matlab.bat tests/run_tests.m          # full suite (791 checks)
 D:\...\matlab.bat -batch "addpath('src'); xc('tests/programs/hello.c')"   # acceptance program
 D:\...\matlab.bat -batch "addpath('src'); xc('-s', 'tests/programs/hello.c')"  # compile dump
 D:\...\matlab.bat -batch "addpath('src'); xc('-d', 'tests/programs/hello.c')"  # trace
