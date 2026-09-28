@@ -478,8 +478,12 @@ and the runtime library are the changelog entries above:
   **791/791** plus the four gates. The Rust engine (2026-09-29 build)
   reaches 588 checks with 0 failures and then hangs on
   `xc('tests/programs/stress2.c')` — the *compiler* track runs that same
-  program fine, so it is the interpreter (a ~0.2 s per-call VM path; see
-  issue 1 of the filed engine bug report). The corpus instruction total is
+  program fine, so it is the interpreter. Root cause (filed as issue 1 of
+  the engine bug report): an indexed write into a large **global** array
+  copies the whole array, and the VM's `mem` is one such global, so every
+  interpreter store is O(|mem|) and store-heavy programs go quadratic
+  (9.2 ms per element write at 2M elements vs 0.0024 ms on the C clone; a
+  local array is fine). The corpus instruction total is
   identical on both engines (11402) after the peephole rule-3 fix (§E of
   `docs/2026-09-07-x86sim-peephole-divergences.md`), and the emitted
   assembly is byte-identical across the two engines for all 302 corpus

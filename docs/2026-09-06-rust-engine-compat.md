@@ -527,9 +527,14 @@ The three engine gaps remain on this build and are filed with minimal repros
 in the engine repo as
 `docs/BUG_REPORT_RUST_2026-09-29_compiler_harness_compat.md`:
 
-1. interpreter function calls cost ~0.2 s each (a flat 200-call loop: 37.6 s
-   vs 2.3 s on the C clone), so `xc('tests/programs/stress2.c')` runs >9 min
-   at a flat ~8 MB and the harness hangs at check 588;
+1. an indexed write into a large **global** array copies the whole array
+   (9.2 ms per element write at 2M elements vs 0.0024 ms on the C clone; the
+   same loop on a local array is 0.027 s). The interpreter's `mem` is one
+   such global and every store opcode writes it eight times, so
+   store-heavy programs go quadratic: `xc('tests/programs/stress2.c')` runs
+   >9 min at a flat ~8 MB and the harness hangs at check 588. The symptom
+   looks like slow calls (200 C-level calls = 37.6 s), but MATLAB-level
+   calls are the same speed on both engines;
 2. `find`/`nonzeros`/`sum`/`double`/transpose fail on a sparse double
    (`Undefined function for input arguments of type 'double'`), failing the
    `mxsparse_get` cross-track case;
