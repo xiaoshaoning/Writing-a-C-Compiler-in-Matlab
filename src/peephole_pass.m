@@ -271,8 +271,8 @@ for k = 1:n
         [pmnem, parg1] = pp_parts(prev);
         if pp_isinstr(prev) && pp_eq(pmnem, 'movq') && numel(parg1) >= 2 && ...
            parg1(1) == 36 && numel(parg1) >= 3
-            pv = str2double(char(parg1(2:end-1)));
-            v = str2double(char(arg1(2:end-1)));
+            pv = pp_imm(parg1);
+            v = pp_imm(arg1);
             if ~isnan(pv) && ~isnan(v)
                 if pp_eq(mnem, 'addq'), nv = pv + v;
                 elseif pp_eq(mnem, 'subq'), nv = pv - v;
@@ -427,6 +427,24 @@ for k = 1:numel(hay) - numel(needle) + 1
         return;
     end
 end
+end
+
+function v = pp_imm(op)
+% pp_imm — the value of a '$N' immediate operand. op may still carry the
+% rest of the line after the operand (pp_parts returns it that way), so
+% stop at the first comma. A lenient runtime's str2double would otherwise
+% parse the leading digits and the fold would fire only there.
+v = NaN;
+if numel(op) < 2 || op(1) ~= 36          % '$'
+    return;
+end
+c = find(op == 44);                      % ','
+if isempty(c)
+    e = numel(op);
+else
+    e = c(1) - 1;
+end
+v = str2double(char(op(2:e)));
 end
 
 function v = pp_disp(op)
