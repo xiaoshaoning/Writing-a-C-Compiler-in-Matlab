@@ -2,8 +2,7 @@
 %
 % Run from the project root:
 %   matlab.bat tests/run_tests.m
-% or (batch mode — the clone does not resolve a script's local functions when
-% the script is run by name after addpath, so invoke the file with run()):
+% or, equivalently, in batch mode:
 %   matlab.bat -batch "run('tests/run_tests.m');"
 %
 % Exits non-zero if any test fails.
@@ -1122,7 +1121,8 @@ cctests = {
     % self-tested on a synthetic violation so a broken checker cannot
     % pass silently.
     gsrc = {};
-    gdir = dir('src');              % the clone's dir() rejects wildcards
+    gdir = dir('src');              % older runtimes reject dir() wildcards
+                                    % (the current build accepts 'src/*.m')
     for gj = 1:numel(gdir)
         gnm = gdir(gj).name;
         if numel(gnm) > 2 && strcmp(gnm(end-1:end), '.m')

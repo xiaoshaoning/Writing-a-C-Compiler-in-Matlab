@@ -300,8 +300,7 @@ It resolves the runtime from `$MATLAB` (else `matlab` on PATH, else the
 clone build), derives the repo path from its own location, and exits
 non-zero if any part fails.
 
-Or in `-batch` mode (the clone does not resolve a script's local functions
-when the script is run by name after `addpath`, so invoke the file with `run`):
+Or in `-batch` mode:
 
 ```
 matlab.bat -batch "run('tests/run_tests.m');"

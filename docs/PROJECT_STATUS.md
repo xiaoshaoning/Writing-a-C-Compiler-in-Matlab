@@ -548,8 +548,9 @@ and the cc19 round added hexadecimal integer literals, the cc20 round
 octal — closing the compiler-track dialect gaps in the number lexer. Calls through pointers always use the
 interpreter-style stack convention.
 
-- The `-s` mnemonic column is padded manually to match the reference's
-  `%8.4s` output (the runtime pads to width but not to string precision)
+- The `-s` mnemonic column is padded manually to reproduce the reference's
+  `%8.4s` over its 4-char mnemonic field (`'LEA '` -> `'    LEA '`), which
+  matches byte-for-byte on every runtime
 
 ## Runtime notes
 
@@ -559,7 +560,10 @@ rounding, bitwise ops preserve the sign bit. VM DIV/MOD keep C truncation
 via `cdivmod` (exact double math, values < 2^53 — `word_store` asserts the
 bound). The port targets the current runtime; historical behavior gaps and
 their resolutions are tracked in the (internal, gitignored) runtime bug
-report.
+report. The suite is verified green on both the released `v1.3.76` tag and
+the current build (789/789 plus the four gates), which is why a few
+workarounds whose original reason is fixed upstream are kept — they cost a
+few lines and keep older runtimes working.
 
 ## Resolved items
 

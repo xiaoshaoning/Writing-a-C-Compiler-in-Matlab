@@ -296,9 +296,9 @@ function [mr_v, mr_i] = mr_parse_one(mr_s, mr_i)
 		[mr_ne, mr_i] = mr_parse_int(mr_s, mr_i);
 		mr_v = cell(1, mr_ne);
 		for mr_k = 1:mr_ne
-			% a scalar temp, not [mr_v{mr_k}, mr_i] = ...: the clone
-			% reshapes mr_v to NxN when a multi-output assignment targets
-			% a cell element (see the mex_run gcc cell/sparse gate)
+			% a scalar temp, not [mr_v{mr_k}, mr_i] = ...: older clones
+			% reshape mr_v to NxN when a multi-output assignment targets a
+			% cell element (fixed in the current clone; see the gcc gate)
 			[mr_ev, mr_i] = mr_parse_one(mr_s, mr_i);
 			mr_v{mr_k} = mr_ev;
 		end

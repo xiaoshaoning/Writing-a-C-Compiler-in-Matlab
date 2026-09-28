@@ -1253,8 +1253,9 @@ function nl_line()
 global assembly line old_src old_text src si text ti
 if assembly
     % -s dump: source line + instructions emitted since the last line.
-    % The runtime's fprintf ignores %8.4s width/precision, so the mnemonic
-    % column is padded manually to match the reference.
+    % The reference prints each mnemonic as a 4-char field through %8.4s
+    % ('LEA ' -> '    LEA '); emit that 8-wide field directly so the dump
+    % matches the reference byte-for-byte on every runtime.
     fprintf('%d: %s', line, src(old_src+1 : si));
     old_src = si;
     while old_text < ti
