@@ -14,7 +14,7 @@ m = zeros(1, 16, 'uint8');
 m(3) = 7;
 [npass nfail] = addcheck(npass, nfail, m(3) == 7, 'uint8 element assign');
 
-m(2:5) = zeros(1, 4, 'uint8') + [1 2 3 4];
+m(2:5) = uint8([1 2 3 4]);
 [npass nfail] = addcheck(npass, nfail, isequal(double(m(2:5)), [1 2 3 4]), ...
                          'uint8 slice assign');
 
@@ -157,6 +157,7 @@ catch e
 end
 
 fprintf('probe_primitives: %d passed, %d failed\n', npass, nfail);
+end
 
 % ---------------------------------------------------------------------------
 function [npass, nfail] = addcheck(npass, nfail, cond, name)

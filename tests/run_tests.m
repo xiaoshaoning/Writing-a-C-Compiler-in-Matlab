@@ -41,7 +41,7 @@ end
 
 % -s compiles without executing (returns 0, prints source lines)
 try
-    out = evalc('rc = xc(''-s'', ''tests/programs/return_2.c'')');
+    out = evalc('rc = xc(''-s'', ''tests/programs/return_2.c'');');
     [npass nfail] = addcheck(npass, nfail, rc == 0, 'xc(-s) compiles, exit 0');
     [npass nfail] = addcheck(npass, nfail, ...
                              ~isempty(strfind(out, '1: int main()')), ...
@@ -63,7 +63,7 @@ end
 
 % --- group 4: Phase 2 lexer selftest + -s dump format ---
 try
-    out = evalc('rc = xc(''--lex-selftest'')');
+    out = evalc('rc = xc(''--lex-selftest'');');
     fprintf('%s', out);   % keep per-case PASS/FAIL + dump lines visible
     [npass nfail] = addcheck(npass, nfail, rc == 0, 'xc --lex-selftest (lexer)');
     [npass nfail] = addcheck(npass, nfail, ...
@@ -99,7 +99,7 @@ ptests = {
 };
 for k = 1:size(ptests, 1)
     try
-        out = evalc(sprintf('rc = xc(''tests/programs/%s'')', ptests{k,1}));
+        out = evalc(sprintf('rc = xc(''tests/programs/%s'');', ptests{k,1}));
         [npass nfail] = addcheck(npass, nfail, rc == ptests{k,2}, ...
             sprintf('%s -> exit %d', ptests{k,1}, ptests{k,2}));
     catch e
@@ -122,7 +122,7 @@ ftests = {
 };
 for k = 1:size(ftests, 1)
     try
-        out = evalc(sprintf('rc = xc(''tests/programs/%s'')', ftests{k,1}));
+        out = evalc(sprintf('rc = xc(''tests/programs/%s'');', ftests{k,1}));
         [npass nfail] = addcheck(npass, nfail, rc == ftests{k,2}, ...
             sprintf('%s -> exit %d', ftests{k,1}, ftests{k,2}));
     catch e
@@ -149,7 +149,7 @@ xtests = {
 };
 for k = 1:size(xtests, 1)
     try
-        out = evalc(sprintf('rc = xc(''tests/programs/%s'')', xtests{k,1}));
+        out = evalc(sprintf('rc = xc(''tests/programs/%s'');', xtests{k,1}));
         [npass nfail] = addcheck(npass, nfail, rc == xtests{k,2}, ...
             sprintf('%s -> exit %d', xtests{k,1}, xtests{k,2}));
     catch e
@@ -176,7 +176,7 @@ stests = {
 };
 for k = 1:size(stests, 1)
     try
-        out = evalc(sprintf('rc = xc(''tests/programs/%s'')', stests{k,1}));
+        out = evalc(sprintf('rc = xc(''tests/programs/%s'');', stests{k,1}));
         [npass nfail] = addcheck(npass, nfail, rc == stests{k,2} && ...
                                  strcmp(out, [stests{k,3}]), ...
             sprintf('%s -> exit %d, stdout match', stests{k,1}, stests{k,2}));
@@ -188,7 +188,7 @@ end
 
 % -d execution trace works end-to-end
 try
-    out = evalc('rc = xc(''-d'', ''tests/programs/return_2.c'')');
+    out = evalc('rc = xc(''-d'', ''tests/programs/return_2.c'');');
     [npass nfail] = addcheck(npass, nfail, rc == 2, 'xc(-d) traces, exit 2');
     [npass nfail] = addcheck(npass, nfail, ...
                              ~isempty(strfind(out, '> ENT')) && ...
@@ -248,7 +248,7 @@ ptests9 = {
 };
 for k = 1:size(ptests9, 1)
     try
-        out = evalc(sprintf('rc = xc(''tests/programs/%s'')', ptests9{k,1}));
+        out = evalc(sprintf('rc = xc(''tests/programs/%s'');', ptests9{k,1}));
         [npass nfail] = addcheck(npass, nfail, rc == ptests9{k,2}, ...
             sprintf('%s -> exit %d', ptests9{k,1}, ptests9{k,2}));
     catch e
@@ -258,7 +258,7 @@ for k = 1:size(ptests9, 1)
 end
 % %s in printf (width preserved) — stdout check
 try
-    out = evalc('rc = xc(''tests/programs/pp_s.c'')');
+    out = evalc('rc = xc(''tests/programs/pp_s.c'');');
     [npass nfail] = addcheck(npass, nfail, rc == 0 && ...
         strcmp(out, ['[abc][x 42][   hi]' char(10) 'exit(0)']), ...
         'pp_s.c %s with width');
@@ -269,7 +269,7 @@ end
 
 % printf with length modifiers (%ls, %ld) — stdout check
 try
-    out = evalc('rc = xc(''tests/programs/pp_prtflen.c'')');
+    out = evalc('rc = xc(''tests/programs/pp_prtflen.c'');');
     [npass nfail] = addcheck(npass, nfail, rc == 0 && ...
         strcmp(out, ['hi 42' char(10) 'exit(0)']), ...
         'pp_prtflen.c %ls/%ld normalization');
@@ -280,7 +280,7 @@ end
 
 % %n writes the running count; %p prints a hex pointer — stdout checks
 try
-    out = evalc('rc = xc(''tests/programs/pp_npercent.c'')');
+    out = evalc('rc = xc(''tests/programs/pp_npercent.c'');');
     [npass nfail] = addcheck(npass, nfail, rc == 3 && ...
         strcmp(out, ['abc' 'exit(3)']), 'pp_npercent.c %%n running count');
 catch e
@@ -288,7 +288,7 @@ catch e
         sprintf('pp_npercent.c: %s', e.message));
 end
 try
-    out = evalc('rc = xc(''tests/programs/pp_pptr.c'')');
+    out = evalc('rc = xc(''tests/programs/pp_pptr.c'');');
     [npass nfail] = addcheck(npass, nfail, rc == 0 && ...
         ~isempty(strfind(out, 'ptr=0x')), 'pp_pptr.c %%p hex pointer');
 catch e
@@ -298,7 +298,7 @@ end
 
 % dynamic width/precision (%*d, %*s, %-*d, %.Ns) — stdout check
 try
-    out = evalc('rc = xc(''tests/programs/pp_dynwidth.c'')');
+    out = evalc('rc = xc(''tests/programs/pp_dynwidth.c'');');
     [npass nfail] = addcheck(npass, nfail, rc == 0 && ...
         strcmp(out, ['[   42][   hi][he][7    ]' char(10) 'exit(0)']), ...
         'pp_dynwidth.c %%* width/precision');
@@ -309,7 +309,7 @@ end
 
 % & on a non-lvalue errors (strict address-of)
 try
-    out = evalc('rc = xc(''tests/programs/pp_badaddrof.c'')');
+    out = evalc('rc = xc(''tests/programs/pp_badaddrof.c'');');
     [npass nfail] = addcheck(npass, nfail, false, ...
         'pp_badaddrof.c should error');
 catch e
@@ -320,7 +320,7 @@ end
 
 % array initializer errors are clear (too many / bad form)
 try
-    out = evalc('rc = xc(''tests/programs/pp_badarrinit.c'')');
+    out = evalc('rc = xc(''tests/programs/pp_badarrinit.c'');');
     [npass nfail] = addcheck(npass, nfail, false, ...
         'pp_badarrinit.c should error');
 catch e
@@ -331,7 +331,7 @@ end
 
 % char-array string initializer too long errors
 try
-    out = evalc('rc = xc(''tests/programs/pp_badarrinit2.c'')');
+    out = evalc('rc = xc(''tests/programs/pp_badarrinit2.c'');');
     [npass nfail] = addcheck(npass, nfail, false, ...
         'pp_badarrinit2.c should error');
 catch e
@@ -342,7 +342,7 @@ end
 
 % nested-brace initializers enforce the same too-many guard as flat ones
 try
-    out = evalc('rc = xc(''tests/programs/pp_badnestedinit.c'')');
+    out = evalc('rc = xc(''tests/programs/pp_badnestedinit.c'');');
     [npass nfail] = addcheck(npass, nfail, false, ...
         'pp_badnestedinit.c should error');
 catch e
@@ -354,7 +354,7 @@ end
 % & on a bare literal errors (the literal's VALUE used to collide with
 % the LI/LC opcode numbers, silently accepting &(9) and &(10))
 try
-    out = evalc('rc = xc(''tests/programs/pp_badaddrof2.c'')');
+    out = evalc('rc = xc(''tests/programs/pp_badaddrof2.c'');');
     [npass nfail] = addcheck(npass, nfail, false, ...
         'pp_badaddrof2.c should error');
 catch e
@@ -365,7 +365,7 @@ end
 
 % a non-lvalue on the left of '=' errors (same collision let (9) = 5 pass)
 try
-    out = evalc('rc = xc(''tests/programs/pp_badassign.c'')');
+    out = evalc('rc = xc(''tests/programs/pp_badassign.c'');');
     [npass nfail] = addcheck(npass, nfail, false, ...
         'pp_badassign.c should error');
 catch e
@@ -691,6 +691,7 @@ cctests = {
         'cc21_width.c', 173;      % local short/long, truncation, sizeof (compiler track only)
         'cc22_escapes.c', 27;     % char/string escape sequences
         'cc23_suffix.c', 72;      % integer constant suffixes (u/U/l/L)
+        'cc24_wide.c', 96;        % 64-bit decimal literals above 2^53 (compiler track only)
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
@@ -842,7 +843,7 @@ cctests = {
     % interpreter's trailing 'exit(N)' trace is stripped first).
     for ok = 1:numel(ostests)
         try
-            oo = evalc(sprintf('rcx = xc(''tests/programs/%s'')', ostests{ok}));
+            oo = evalc(sprintf('rcx = xc(''tests/programs/%s'');', ostests{ok}));
             op = strfind(oo, 'exit(');
             if ~isempty(op)
                 oo = oo(1:op(end)-1);   % strip the interpreter's exit trace
@@ -911,7 +912,7 @@ cctests = {
     try
         delete('tmp_cc.s');
         cc_int('tests/programs/cc18_printfX.c', 'tmp_cc.s');
-        pxo = evalc('pxr = x86sim(''tmp_cc.s'')');
+        pxo = evalc('pxr = x86sim(''tmp_cc.s'');');
         [npass nfail] = addcheck(npass, nfail, strcmp(pxo, 'FF'), ...
             'x86sim %%X uppercase');
     catch e
@@ -921,7 +922,7 @@ cctests = {
     try
         delete('tmp_cc.s');
         cc_int('tests/programs/cc18_printf05.c', 'tmp_cc.s');
-        p5o = evalc('p5r = x86sim(''tmp_cc.s'')');
+        p5o = evalc('p5r = x86sim(''tmp_cc.s'');');
         [npass nfail] = addcheck(npass, nfail, strcmp(p5o, '-0007'), ...
             'x86sim %%05d sign placement');
     catch e
@@ -949,7 +950,7 @@ cctests = {
     try
         delete('tmp_cc.s');
         cc_int('tests/programs/dreg_denseprint.c', 'tmp_cc.s');
-        dd = evalc('ddr = x86sim(''tmp_cc.s'')');
+        dd = evalc('ddr = x86sim(''tmp_cc.s'');');
         dd(dd == char(13)) = [];
         gold = sprintf('a=0.10000000000000001\nc=3.1415926535897931\nd=0.33333333333333331\n');
         if gcc_ok == 0
@@ -974,6 +975,22 @@ cctests = {
             sprintf('x86sim dense-print: %s', e.message));
     end
 
+    % 64-bit decimal literals above 2^53: the printed digits must be exact
+    % (double-domain emission/parse/store/print rounded them). No gcc
+    % oracle - Windows gcc's long is 32-bit - so the gold is stored here.
+    try
+        delete('tmp_cc.s');
+        cc_int('tests/programs/cc24_wide.c', 'tmp_cc.s');
+        wcout = evalc('wcr = x86sim(''tmp_cc.s'');');
+        wcout(wcout == char(13)) = [];
+        wcgold = sprintf('9007199254740993\n9223372036854775806\n-9223372036854775808\n-9007199254740993\n');
+        [npass nfail] = addcheck(npass, nfail, strcmp(wcout, wcgold), ...
+            'x86sim wide-decimal %ld print exact above 2^53');
+    catch e
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            sprintf('x86sim wide-decimal print: %s', e.message));
+    end
+
     % x86sim stdout parity: the same printing programs must produce the same
     % stdout through the gcc-free simulator as through the interpreter.
     so2 = 0;
@@ -981,8 +998,8 @@ cctests = {
         try
             delete('tmp_cc.s');
             cc_int(['tests/programs/' ostests{s2k}], 'tmp_cc.s');
-            so2o = evalc('s2r = x86sim(''tmp_cc.s'')');
-            so2x = evalc(sprintf('s2x = xc(''tests/programs/%s'')', ostests{s2k}));
+            so2o = evalc('s2r = x86sim(''tmp_cc.s'');');
+            so2x = evalc(sprintf('s2x = xc(''tests/programs/%s'');', ostests{s2k}));
             s2p = strfind(so2x, 'exit(');
             if ~isempty(s2p)
                 so2x = so2x(1:s2p(end)-1);
@@ -1018,7 +1035,9 @@ cctests = {
     % full-width hex/octal). cc21_width.c (101) added the narrow-width
     % declarations/casts/sizeof, so the total is 11148. cc22_escapes.c
     % (93) added the escape sequences, and cc23_suffix.c (71) the integer
-    % suffixes, so the total is 11312. See
+    % suffixes, so the total is 11312. cc24_wide.c (88) added the
+    % above-2^53 decimal literal checks (the peephole no longer folds a
+    % full-width immediate into memory, +2), so the total is 11402. See
     % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
@@ -1040,8 +1059,8 @@ cctests = {
         [npass nfail] = addcheck(npass, nfail, false, ...
             sprintf('instr count hello.c: %s', e.message));
     end
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 11312, ...
-        sprintf('instr regression: corpus %d <= 11312', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 11402, ...
+        sprintf('instr regression: corpus %d <= 11402', ic_total));
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 72, ...
         sprintf('instr regression: hello.c %d <= 72', ic_hello));
 

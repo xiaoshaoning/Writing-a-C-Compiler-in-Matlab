@@ -1343,6 +1343,17 @@ end
 function sim_storeN(addr, v, nbytes)
 global mem
 a = double(addr);
+if isa(v, 'int64')
+    % exact int64 bytes: the double-domain path below rounds above 2^53,
+    % corrupting 64-bit integer stores (e.g. movq $9007199254740993).
+    vv = v;
+    for k = 0:nbytes-1
+        r = mod(vv, int64(256));
+        mem(a + k + 1) = uint8(double(r));
+        vv = (vv - r) / int64(256);
+    end
+    return;
+end
 % byte extraction via double-domain powers of two: exact for any value
 % that is exactly representable as a double (IEEE patterns whose mantissa
 % is sparse round-trip exactly; the clone's int64 bit ops are lossy
@@ -1975,7 +1986,7 @@ while i <= nf
             end
         end
     elseif conv == 100 || conv == 105    % d i
-        txt = fmt_int(double(av), w, prec, left, zero);
+        txt = fmt_int(av, w, prec, left, zero);
     elseif conv == 117          % u
         txt = fmt_int(mod(double(av), 18446744073709551616), w, prec, left, zero);
     elseif conv == 120 || conv == 88     % x X
@@ -2050,12 +2061,12 @@ end
 end
 
 function t = fmt_int(v, w, prec, left, zero)
+v = int64(v);
+s = sim_decstr(v);            % exact, keeps the leading '-' (and INT64_MIN)
 sgn = [];
-if v < 0
-    s = sim_decstr(-v);
+if numel(s) >= 1 && s(1) == 45
     sgn = 45;                  % '-'
-else
-    s = sim_decstr(v);
+    s = s(2:end);
 end
 if prec >= 0
     while numel(s) < prec
@@ -2089,10 +2100,15 @@ end
 end
 
 function t = sim_decstr(v)
-% sim_decstr — the full decimal digits of a value. (The clone's
-% num2str(v, '%.0f') ignores the format and prints %g — scientific past
-% ~1e5 — so large %d/%u values came out as e.g. 9.8765e+08.)
-v = double(v);
+% sim_decstr — the exact decimal digits of a 64-bit value.  Digit
+% extraction runs in int64: a value above 2^53 would be rounded by a
+% double-domain loop (num2str/str2double round there too).
+v = int64(v);
+nmin = int64(-9223372036854775807) - int64(1);
+if v == nmin
+    t = [45, double('9223372036854775808')];   % |INT64_MIN| has no int64 form
+    return;
+end
 if v < 0
     sgn = 45;                  % '-'
     v = -v;
@@ -2104,9 +2120,11 @@ if v == 0
     return;
 end
 digits = [];
+ten = int64(10);
 while v > 0
-    digits = [mod(v, 10), digits];
-    v = floor(v / 10);
+    r = mod(v, ten);
+    digits = [double(r), digits];
+    v = (v - r) / ten;
 end
 t = [sgn, digits + 48];
 end
@@ -2475,7 +2493,24 @@ if numel(tok) >= 2 && tok(1) == 48 && (tok(2) == 120 || tok(2) == 88)
         v = mag;
     end
 else
-    v = str2double(cv_char(tok));
+    % Decimal: str2double rounds above 2^53, so accumulate exactly in
+    % int64.  A leading '-' accumulates negatively so INT64_MIN (whose
+    % magnitude has no int64 form) is still exact.
+    dneg = 0;
+    d0 = 1;
+    if tok(1) == 45
+        dneg = 1;
+        d0 = 2;
+    end
+    v = int64(0);
+    for dk = d0:numel(tok)
+        dd = int64(double(tok(dk)) - 48);
+        if dneg
+            v = v * int64(10) - dd;
+        else
+            v = v * int64(10) + dd;
+        end
+    end
 end
 v = int64(v);
 end

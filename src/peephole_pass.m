@@ -89,11 +89,16 @@ for k = 1:n
         end
     end
     % --- 6. immediate store: movq $N, %rax ; movq %rax, mem ---
+    % Only when N fits a sign-extended imm32: x86-64's movq-to-memory has
+    % no 64-bit immediate form (the assembler rejects it), so a full-width
+    % N must stay in %rax (movq $imm64, %rax promotes to movabs).
     if pp_eq(mnem, 'movq') && k < n && pp_isinstr(lines{k+1})
         [m6, o1, o2] = pp_ops(ln);
         if numel(o1) >= 2 && o1(1) == 36 && pp_eq(o2, '%rax')   % '$'
+            iv6 = str2double(char(o1(2:end)));
             [s6, so1, so2] = pp_ops(lines{k+1});
-            if pp_eq(s6, 'movq') && pp_eq(so1, '%rax') && ...
+            if iv6 >= -2147483648 && iv6 <= 2147483647 && ...
+               pp_eq(s6, 'movq') && pp_eq(so1, '%rax') && ...
                (pp_memrbp(so2) || pp_memrip(so2))
                 foldmap{k} = [9, double('movq'), 9, o1, 44, 32, double(so2)];
                 del(k+1) = 1;

@@ -3175,7 +3175,7 @@ elseif token == 128         % Num
         em('\tmovq\t%rax, %xmm0');
         etype = 6;
     else
-        em(sprintf('\tmovq\t$%d, %%rax', double(token_val)));
+        em(sprintf('\tmovq\t$%d, %%rax', token_val));
         etype = 0;
     end
     estruc = 0;
