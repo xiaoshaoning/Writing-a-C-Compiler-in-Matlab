@@ -473,13 +473,16 @@ and the runtime library are the changelog entries above:
   exe lookup under `NoDefaultCurrentDirectoryInExePath`). Every check is
   appended to `run_tests.log` as it runs, so a killed run still leaves a
   record.
-- **Hosts** (2026-09-28): the suite runs on the custom C clone and on the
+- **Hosts** (2026-09-29): the suite runs on the custom C clone and on the
   matlab_in_rust engine. The C clone (v1.3.76 tag and the Sep 27 build) =
-  **791/791** plus the four gates. The Rust engine (2026-09-28 build)
+  **791/791** plus the four gates. The Rust engine (2026-09-29 build)
   reaches 588 checks with 0 failures and then hangs on
   `xc('tests/programs/stress2.c')` — the *compiler* track runs that same
-  program fine, so it is the interpreter. Earlier runs — v1.3.72 =
-  775/774/1, v1.3.53 and v1.3.68 = 584 / 183 failed, v1.3.47 = 577 / 191.
+  program fine, so it is the interpreter (a ~0.2 s per-call VM path; see
+  issue 1 of the filed engine bug report). The corpus instruction total is
+  identical on both engines (11402) after the peephole rule-3 fix (§E of
+  `docs/2026-09-07-x86sim-peephole-divergences.md`). Earlier runs — v1.3.72
+  = 775/774/1, v1.3.53 and v1.3.68 = 584 / 183 failed, v1.3.47 = 577 / 191.
   No runnable MathWorks MATLAB is installed on the development machine
   (the R2023b install is a stub with no `matlab.exe`), so the suite's
   "green oracle" is still unverified on it.
@@ -493,7 +496,7 @@ and the runtime library are the changelog entries above:
 - **Regression**: the probe gate re-verifies the primitives the port depends
   on before every run, so a runtime behavior regression fails loudly.
 
-## Open items (2026-09-19)
+## Open items (2026-09-29)
 
 - **Real-MATLAB validation.** No runnable MathWorks MATLAB is installed
   here (the R2023b install is a stub with no `matlab.exe`), so the
@@ -506,7 +509,9 @@ and the runtime library are the changelog entries above:
   same program fine). The gcc cross-track gate also fails two cases
   (`mxsparse_get`: "Undefined function ... type 'double'"; `matfile` /
   `matfile_del`: "SFA1 unsupported struct field assignment target").
-  Engine-side; recorded in `docs/2026-09-06-rust-engine-compat.md`.
+  Filed as `BUG_REPORT_RUST_2026-09-29_compiler_harness_compat.md` in the
+  engine repo (with minimal repros); also recorded in
+  `docs/2026-09-06-rust-engine-compat.md`.
 
 ## Post-parity features (beyond the reference)
 

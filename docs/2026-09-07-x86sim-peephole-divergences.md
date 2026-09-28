@@ -101,7 +101,8 @@ for **none** of the 410 compilable corpus programs (measured 2026-09-19;
 the pass already iterates to a fixed point). The ceiling is re-baselined to
 10896 in the harness, with the corpus growth recorded. It is a
 clone-lineage baseline, not a real-MATLAB number (v1.3.47 reports one
-more). The Rust engine's 11575 remains an engine-side gap of its own.
+more). The Rust engine's higher total was the same peephole fold firing only
+on the lenient C clone — see section E.
 
 ## C. Order/state dependence inside peephole — REFUTED
 
@@ -124,6 +125,21 @@ check assembles every program with gcc. The fold now requires
 -2^31 <= N <= 2^31-1; a full-width immediate stays in `%rax`
 (`movq $imm64, %rax` promotes to `movabs`, which GAS accepts). Corpus
 ceiling 11312 -> 11402.
+
+## E. Rule 3's operands were parsed leniently — FIXED (2026-09-29)
+
+Rule 3 (`movq $N, %rax ; addq/subq/imulq $M, %rax`) read its operands as
+`str2double(char(parg1(2:end-1)))`, where `pp_parts` returns the whole
+argument - `'1, %ra'` for `"$1, %rax"`. The C clone's `str2double` parses
+the leading number and ignores the rest (`str2double('1, %r')` = 1), so the
+fold fired there; real MATLAB and the Rust engine return NaN and it did
+not. Same `cc_int`, same `peephole_pass`, different output: 24 corpus
+programs emitted **690** more instructions on the Rust engine (12092 vs
+11402) - e.g. `movq $1,%rax; imulq $24,%rax; movq %rax,%rbx` stayed
+unfolded instead of `movq $24,%rbx`. New `pp_imm()` stops the parse at the
+first comma, so the fold is runtime-independent; the corpus total is 11402
+on both. Found by diffing per-program instruction counts across the two
+runtimes.
 
 ## Context
 

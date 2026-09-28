@@ -510,3 +510,31 @@ The gcc cross-track gate also fails two cases on this build:
 The other 18 cross-track cases, the double regression (13/13) and both
 smoke gates (6/6) pass. Engine-side gaps; the repo cannot work around them
 without dropping coverage.
+
+## Postscript 4 — 2026-09-29 engine build (target/release 01:12)
+
+The compatibility work has paid off in one direction: the engine's
+**instruction total now matches the C clone exactly** (11402 for the whole
+corpus). It had been 690 higher across 24 programs. The difference was not
+the engine — the compiler's peephole rule 3 read its immediate operands with
+`str2double` over `pp_parts`' whole argument (`'1, %ra'` for `"$1, %rax"`),
+and the C clone's lenient `str2double` parses the leading number while real
+MATLAB (and the engine) return NaN, so the fold fired only on the C clone.
+Fixed in `src/peephole_pass.m` with a new `pp_imm()`; see §E of
+`docs/2026-09-07-x86sim-peephole-divergences.md`.
+
+The three engine gaps remain on this build and are filed with minimal repros
+in the engine repo as
+`docs/BUG_REPORT_RUST_2026-09-29_compiler_harness_compat.md`:
+
+1. interpreter function calls cost ~0.2 s each (a flat 200-call loop: 37.6 s
+   vs 2.3 s on the C clone), so `xc('tests/programs/stress2.c')` runs >9 min
+   at a flat ~8 MB and the harness hangs at check 588;
+2. `find`/`nonzeros`/`sum`/`double`/transpose fail on a sparse double
+   (`Undefined function for input arguments of type 'double'`), failing the
+   `mxsparse_get` cross-track case;
+3. `s.(name).field = value` raises `SFA1 unsupported struct field assignment
+   target` (the MAT-file shim's `sim_mat.(nm).filename = fname`), failing
+   `matfile`/`matfile_del`.
+
+Everything else in the harness passes on the engine: 588 checks, 0 failures.
