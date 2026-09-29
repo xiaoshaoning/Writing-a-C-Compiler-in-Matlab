@@ -488,7 +488,7 @@ and the runtime library are the changelog entries above:
   local array is fine). The corpus instruction total is
   identical on both engines (11459) after the peephole rule-3 fix (§E of
   `docs/2026-09-07-x86sim-peephole-divergences.md`), and the emitted
-  assembly is byte-identical across the two engines for all 302 corpus
+  assembly is byte-identical across the two engines for all 303 corpus
   programs — a verified second oracle for the compiler track. Earlier runs — v1.3.72
   = 775/774/1, v1.3.53 and v1.3.68 = 584 / 183 failed, v1.3.47 = 577 / 191.
   No runnable MathWorks MATLAB is installed on the development machine

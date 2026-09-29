@@ -514,8 +514,9 @@ without dropping coverage.
 ## Postscript 4 — 2026-09-29 engine build (target/release 01:12)
 
 The compatibility work has paid off in one direction: the engine's
-**instruction total now matches the C clone exactly** (11402 for the whole
-corpus). It had been 690 higher across 24 programs. The difference was not
+**instruction total now matches the C clone exactly** (11402 at the time,
+11459 after the later cc25_fmt round — the point is that the two agree). It
+had been 690 higher across 24 programs. The difference was not
 the engine — the compiler's peephole rule 3 read its immediate operands with
 `str2double` over `pp_parts`' whole argument (`'1, %ra'` for `"$1, %rax"`),
 and the C clone's lenient `str2double` parses the leading number while real
@@ -545,7 +546,7 @@ in the engine repo as
 Everything else in the harness passes on the engine: 588 checks, 0 failures.
 
 **Byte-identical compiler track (2026-09-29).** With the `pp_imm()` fix in
-place, `cc_int` over all 302 corpus programs emits the same `.s` files on the
+place, `cc_int` over all 303 corpus programs emits the same `.s` files on the
 engine and on the C clone, byte for byte (`diff -rq` of the two dumps reports
 0 differences). The engine is therefore a verified second oracle for the
 compiler track, independently of the interpreter gaps above.

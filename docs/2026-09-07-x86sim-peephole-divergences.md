@@ -137,8 +137,8 @@ not. Same `cc_int`, same `peephole_pass`, different output: 24 corpus
 programs emitted **690** more instructions on the Rust engine (12092 vs
 11402) - e.g. `movq $1,%rax; imulq $24,%rax; movq %rax,%rbx` stayed
 unfolded instead of `movq $24,%rbx`. New `pp_imm()` stops the parse at the
-first comma, so the fold is runtime-independent; the corpus total is 11402
-on both. Found by diffing per-program instruction counts across the two
+first comma, so the fold is runtime-independent; the corpus total then was
+11402 on both (11459 after the cc25_fmt round). Found by diffing per-program instruction counts across the two
 runtimes.
 
 ## Context
