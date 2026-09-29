@@ -421,9 +421,11 @@ Guards: `cc22_escapes.c` (exit 27; char values via the exit code, string
 bytes via stdout, in the gcc/parity/output-parity groups) and
 `cc23_suffix.c` (exit 72, gcc + parity). `cc24_wide.c` (exit 96,
 compiler-track only) closes the 64-bit decimal literals above 2^53 —
-emission, the immediate parse, the 64-bit store and `%ld` are all int64
--exact now, and the peephole no longer folds a full-width immediate into
--memory. Ceiling 11148 → 11312 → **11402**; suite **791/791**.
+emission, the immediate parse, the 64-bit store and `%ld` are all exact in
+int64 now, and the peephole no longer folds a full-width immediate into
+memory. `cc25_fmt.c` (exit 96) closes `%u`/`%x`/`%X`/`%o` (and `%p`) for
+the full unsigned 64-bit pattern. Ceiling 11148 → 11312 → 11402 →
+**11459**; suite **793/793**.
 
 ## Deliverables
 
@@ -460,7 +462,7 @@ and the runtime library are the changelog entries above:
 
 ## Verification
 
-- **Test suite**: `tests/run_tests.m` — **791/791** on the C clone
+- **Test suite**: `tests/run_tests.m` — **793/793** on the C clone
   (v1.3.76 tag and the Sep 27 build). Groups: runtime-primitive
   gate (probe), 30-case VM selftest, 9-case lexer selftest, program
   corpus (p3–p6, pp), syscall/acceptance, `-s`/`-d` smoke, the gcc-gated
@@ -475,7 +477,7 @@ and the runtime library are the changelog entries above:
   record.
 - **Hosts** (2026-09-29): the suite runs on the custom C clone and on the
   matlab_in_rust engine. The C clone (v1.3.76 tag and the Sep 27 build) =
-  **791/791** plus the four gates. The Rust engine (2026-09-29 build)
+  **793/793** plus the four gates. The Rust engine (2026-09-29 build)
   reaches 588 checks with 0 failures and then hangs on
   `xc('tests/programs/stress2.c')` — the *compiler* track runs that same
   program fine, so it is the interpreter. Root cause (filed as issue 1 of
@@ -484,7 +486,7 @@ and the runtime library are the changelog entries above:
   interpreter store is O(|mem|) and store-heavy programs go quadratic
   (9.2 ms per element write at 2M elements vs 0.0024 ms on the C clone; a
   local array is fine). The corpus instruction total is
-  identical on both engines (11402) after the peephole rule-3 fix (§E of
+  identical on both engines (11459) after the peephole rule-3 fix (§E of
   `docs/2026-09-07-x86sim-peephole-divergences.md`), and the emitted
   assembly is byte-identical across the two engines for all 302 corpus
   programs — a verified second oracle for the compiler track. Earlier runs — v1.3.72
@@ -579,7 +581,7 @@ via `cdivmod` (exact double math, values < 2^53 — `word_store` asserts the
 bound). The port targets the current runtime; historical behavior gaps and
 their resolutions are tracked in the (internal, gitignored) runtime bug
 report. The suite is verified green on both the released `v1.3.76` tag and
-the current build (791/791 plus the four gates), which is why a few
+the current build (793/793 plus the four gates), which is why a few
 workarounds whose original reason is fixed upstream are kept — they cost a
 few lines and keep older runtimes working.
 64-bit integers are transported exactly end-to-end: a decimal literal is
@@ -608,7 +610,7 @@ file — so the harness and probe now respect them.
 ## Running
 
 ```
-D:\...\matlab.bat tests/run_tests.m          # full suite (791 checks)
+D:\...\matlab.bat tests/run_tests.m          # full suite (793 checks)
 D:\...\matlab.bat -batch "addpath('src'); xc('tests/programs/hello.c')"   # acceptance program
 D:\...\matlab.bat -batch "addpath('src'); xc('-s', 'tests/programs/hello.c')"  # compile dump
 D:\...\matlab.bat -batch "addpath('src'); xc('-d', 'tests/programs/hello.c')"  # trace
