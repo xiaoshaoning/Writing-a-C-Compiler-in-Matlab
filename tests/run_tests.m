@@ -692,6 +692,7 @@ cctests = {
         'cc22_escapes.c', 27;     % char/string escape sequences
         'cc23_suffix.c', 72;      % integer constant suffixes (u/U/l/L)
         'cc24_wide.c', 96;        % 64-bit decimal literals above 2^53 (compiler track only)
+        'cc25_fmt.c', 96;         % 64-bit %u/%x/%o exact above 2^53 (compiler track only)
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
@@ -805,7 +806,7 @@ cctests = {
     for k = 1:size(cctests, 1)
         try
             got = -999;
-            for attempt = 1:2   % retry: the runtime's system()/gcc flake
+            for attempt = 1:5   % retry: a lingering process can hold tmp_cc.exe so gcc cannot write it (a real assembler error still fails every attempt)
                 delete('tmp_cc.s');
                 delete('tmp_cc.exe');   % no stale exe can leak into this test
                 cc_int(['tests/programs/' cctests{k,1}], 'tmp_cc.s');
@@ -852,7 +853,7 @@ cctests = {
             delete('tmp_cc.exe');
             cc_int(['tests/programs/' ostests{ok}], 'tmp_cc.s');
             st_gcc = -1;
-            for attempt = 1:2   % retry: the runtime's system()/gcc flake
+            for attempt = 1:5   % retry: a lingering process can hold tmp_cc.exe so gcc cannot write it (a real assembler error still fails every attempt)
                 delete('tmp_cc.exe');
                 st_gcc = system([gcc, ' tmp_cc.s -o tmp_cc.exe']);
                 if st_gcc == 0 && exist('tmp_cc.exe', 'file') == 2
@@ -991,6 +992,22 @@ cctests = {
             sprintf('x86sim wide-decimal print: %s', e.message));
     end
 
+    % 64-bit %u/%x/%X/%o above 2^53: the full unsigned 64-bit pattern must
+    % print, not a double-rounded value. No gcc oracle (Windows long is
+    % 32-bit).
+    try
+        delete('tmp_cc.s');
+        cc_int('tests/programs/cc25_fmt.c', 'tmp_cc.s');
+        fxout = evalc('fxr = x86sim(''tmp_cc.s'');');
+        fxout(fxout == char(13)) = [];
+        fxgold = sprintf('7fffffffffffffff\nffffffffffffffff\n18446744073709551615\n0020000000000001\n1777777777777777777777\nFFFFFFFFFFFFFFFF\n');
+        [npass nfail] = addcheck(npass, nfail, strcmp(fxout, fxgold), ...
+            'x86sim wide %u/%x/%o print exact above 2^53');
+    catch e
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            sprintf('x86sim wide hex/unsigned print: %s', e.message));
+    end
+
     % x86sim stdout parity: the same printing programs must produce the same
     % stdout through the gcc-free simulator as through the interpreter.
     so2 = 0;
@@ -1037,7 +1054,9 @@ cctests = {
     % (93) added the escape sequences, and cc23_suffix.c (71) the integer
     % suffixes, so the total is 11312. cc24_wide.c (88) added the
     % above-2^53 decimal literal checks (the peephole no longer folds a
-    % full-width immediate into memory, +2), so the total is 11402. See
+    % full-width immediate into memory, +2), so the total is 11402.
+    % cc25_fmt.c (57) added the exact 64-bit %u/%x/%o printing, so the
+    % total is 11459. See
     % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
@@ -1059,8 +1078,8 @@ cctests = {
         [npass nfail] = addcheck(npass, nfail, false, ...
             sprintf('instr count hello.c: %s', e.message));
     end
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 11402, ...
-        sprintf('instr regression: corpus %d <= 11402', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 11459, ...
+        sprintf('instr regression: corpus %d <= 11459', ic_total));
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 72, ...
         sprintf('instr regression: hello.c %d <= 72', ic_hello));
 

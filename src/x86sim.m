@@ -1988,19 +1988,19 @@ while i <= nf
     elseif conv == 100 || conv == 105    % d i
         txt = fmt_int(av, w, prec, left, zero);
     elseif conv == 117          % u
-        txt = fmt_int(mod(double(av), 18446744073709551616), w, prec, left, zero);
+        txt = fmt_udec(av, w, prec, left, zero);
     elseif conv == 120 || conv == 88     % x X
-        txt = sim_hex(mod(double(av), 18446744073709551616), 16);
+        txt = sim_hex64(av);
         if conv == 88
             txt = txt - 32 * (txt >= 97);   % uppercase
         end
         txt = strip0c(txt);
         txt = pad_cv(txt, w, left, zero);
     elseif conv == 111          % o
-        txt = sim_oct(mod(double(av), 18446744073709551616));
+        txt = sim_oct64(av);
         txt = pad_cv(txt, w, left, zero);
     elseif conv == 112          % p
-        txt = sim_hex(mod(double(av), 18446744073709551616), 16);
+        txt = sim_hex64(av);
         txt = pad_cv(txt, w, left, zero);
     elseif conv == 102 || conv == 101 || conv == 103   % f e g
         dv = sim_bits2d(av);   % the int64 bit pattern
@@ -2147,6 +2147,84 @@ for k = n-1:-1:0
         t(end+1) = d + 87;
     end
 end
+end
+
+function [hi, lo] = sim_u64words(v)
+% sim_u64words — the 64-bit pattern of int64 v as two exact non-negative
+% 32-bit halves (double).  mod and division are exact in int64, and each
+% half is below 2^32, so both are exactly representable — the only route
+% to the unsigned value that does not go through double(v).
+P32 = int64(4294967296);
+m = mod(v, P32);                 % low 32 bits, non-negative
+lo = double(m);
+h = (v - m) / P32;               % high 32 bits (signed), then to unsigned
+hi = double(h);
+if hi < 0
+    hi = hi + 4294967296;
+end
+end
+
+function t = sim_udecstr(v)
+% sim_udecstr — the exact decimal digits of the unsigned 64-bit pattern of
+% int64 v (for %u).  Long division by 10 over the two 32-bit halves keeps
+% every intermediate below 2^53, so it is exact for the whole range.
+[hi, lo] = sim_u64words(v);
+if hi == 0 && lo == 0
+    t = 48;
+    return;
+end
+t = [];
+while hi > 0 || lo > 0
+    qh = floor(hi / 10);
+    cur = (hi - qh * 10) * 4294967296 + lo;   % < 10*2^32, exact
+    ql = floor(cur / 10);
+    t = [cur - ql * 10 + 48, t];
+    hi = qh;
+    lo = ql;
+end
+end
+
+function t = sim_hex64(v)
+% sim_hex64 — the exact 16 hex digits of the 64-bit pattern of int64 v.
+[hi, lo] = sim_u64words(v);
+t = [sim_hex(hi, 8), sim_hex(lo, 8)];
+end
+
+function t = sim_oct64(v)
+% sim_oct64 — the exact octal digits of the 64-bit pattern of int64 v.
+[hi, lo] = sim_u64words(v);
+if hi == 0 && lo == 0
+    t = 48;
+    return;
+end
+t = [];
+while hi > 0 || lo > 0
+    qh = floor(hi / 8);
+    cur = (hi - qh * 8) * 4294967296 + lo;    % < 8*2^32, exact
+    ql = floor(cur / 8);
+    t = [cur - ql * 8 + 48, t];
+    hi = qh;
+    lo = ql;
+end
+end
+
+function t = fmt_udec(v, w, prec, left, zero)
+% fmt_udec — %u: the unsigned decimal of the 64-bit pattern, then the same
+% precision/width/flag handling as fmt_int (there is no sign).
+s = sim_udecstr(v);
+if prec >= 0
+    while numel(s) < prec
+        s = [48, s];
+    end
+    zero = 0;
+end
+if zero && ~left
+    while numel(s) < w
+        s = [48, s];
+    end
+    zero = 0;
+end
+t = pad_cv(s, w, left, zero);
 end
 
 function t = sim_oct(v)
