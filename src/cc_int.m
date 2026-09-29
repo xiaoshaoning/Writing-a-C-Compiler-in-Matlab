@@ -384,6 +384,32 @@ out{end+1} = strrep(line, '\t', char(9));
 idx = numel(out);
 end
 
+function em_val(t)
+% em_val — load a value of type t from the address in %rax, widening it to
+% the VM's 64-bit integer with the sign the type calls for: the signed
+% narrow types sign-extend (movsbq/movswq/movslq), the unsigned ones
+% zero-extend, and a double loads into %xmm0. Every typed load site goes
+% through here so the rule lives in one place (it used to be duplicated
+% and inconsistently zero-extended).
+if t == 1                  % signed char
+    em('\tmovsbq\t(%rax), %rax');
+elseif t == 12             % unsigned char
+    em('\tmovzbl\t(%rax), %eax');
+elseif t == 7              % signed short
+    em('\tmovswq\t(%rax), %rax');
+elseif t == 13             % unsigned short
+    em('\tmovzwl\t(%rax), %eax');
+elseif t == 9              % signed word (32-bit)
+    em('\tmovslq\t(%rax), %rax');
+elseif t == 16             % unsigned word
+    em('\tmovl\t(%rax), %eax');
+elseif t == 6              % double
+    em('\tmovsd\t(%rax), %xmm0');
+else
+    em('\tmovq\t(%rax), %rax');
+end
+end
+
 function expect(tk)
 % expect — consume the current token if it equals tk, else fail.
 global token
@@ -485,6 +511,8 @@ elseif (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
         token = 187;            % Void
     elseif strcmp(id, 'unsigned')
         token = 188;            % Unsigned
+    elseif strcmp(id, 'signed')
+        token = 196;            % Signed (the default; a no-op qualifier)
     elseif strcmp(id, 'double')
         token = 189;            % Double
     elseif strcmp(id, 'const')
@@ -911,28 +939,65 @@ elseif token == 134         % char
 elseif token == 187         % void (only valid as a return type or (void))
     base = 4;
     next();
-elseif token == 188         % unsigned (int): a 64-bit unsigned type
-    base = 5;
+elseif token == 188         % unsigned: 8 bytes unless a narrower base follows
     next();
-    if token == 131         % 'unsigned int'
+    if token == 134         % 'unsigned char': 1 byte, zero-extended
+        base = 12;
+        next();
+    elseif token == 193     % 'unsigned short [int]': 2 bytes
+        base = 13;
+        next();
+        if token == 131, next(); end
+    elseif token == 194     % 'unsigned word': 4 bytes
+        base = 16;
+        next();
+    elseif token == 195     % 'unsigned long [int]'
+        base = 5;
+        next();
+        if token == 131, next(); end
+    else                    % 'unsigned [int]'
+        base = 5;
+        if token == 131, next(); end
+    end
+elseif token == 196         % signed: the default signedness; consume the
+                            % base it qualifies and keep the signed code
+    next();
+    if token == 134         % 'signed char'
+        base = 1;
+        next();
+    elseif token == 193     % 'signed short [int]'
+        base = 7;
+        next();
+        if token == 131, next(); end
+    elseif token == 194     % 'signed word'
+        base = 9;
+        next();
+    elseif token == 195     % 'signed long [int]'
+        base = 0;
+        next();
+        if token == 131, next(); end
+    elseif token == 131     % 'signed int'
         next();
     end
 elseif token == 189         % double
     base = 6;
     next();
-elseif token == 193         % short: 2-byte integer base
+elseif token == 193         % short: 2-byte signed integer base
     base = 7;
     next();
     if token == 131         % 'short int'
         next();
     end
-elseif token == 194         % word: 4-byte integer base
+elseif token == 194         % word: 4-byte signed integer base
     base = 9;
     next();
-elseif token == 195         % long: 8-byte integer base (same as int)
+elseif token == 195         % long [long]: 8-byte integer base (same as int)
     base = 0;
     next();
     if token == 131 || token == 193 || token == 194   % 'long int/short/word'
+        next();
+    end
+    if token == 195         % 'long long'
         next();
     end
 elseif token == 178         % struct
@@ -1104,11 +1169,11 @@ function sz = elem_size(t)
 % elem_size — byte size per element for pointer arithmetic/indexing on
 % type t: 1 for char*, 2/4 for the 2-/4-byte integer pointer types, the
 % struct size for struct-related, else 8.
-if t == 3
+if t == 3 || t == 14
     sz = 1;
-elseif t == 9              % base 7 *: 2-byte elements
+elseif t == 9 || t == 15   % short* / unsigned short*
     sz = 2;
-elseif t == 11             % base 9 *: 4-byte elements
+elseif t == 11 || t == 18  % word* / unsigned word*
     sz = 4;
 elseif t >= 1000 && t < 1002
     sz = ssize_of(t);
@@ -1835,7 +1900,7 @@ function parse_statement()
 global token token_val idname typedefs src si lvars lvartype lvararr lvarstruct lvarstride
 if token == 131 || token == 134 || token == 178 || token == 188 || ...  % int/char/struct/unsigned
    token == 189 || token == 190 || token == 191 || token == 192 || ... % double/const/register/static
-   token == 193 || token == 194 || token == 195 || ...                % short/word/long
+   token == 193 || token == 194 || token == 195 || token == 196 || ... % short/word/long/signed
    (token == 150 && isfield(typedefs, idname))            % typedef'd type
     parse_declaration();
 elseif token == 123         % '{': block — C scopes block locals: a
@@ -1995,7 +2060,7 @@ expect(40);
 if token ~= 59              % ';': optional init
     if token == 131 || token == 134 || token == 178 || token == 188 || ...
        token == 189 || token == 190 || token == 191 || token == 192 || ...
-       token == 193 || token == 194 || token == 195 || ...
+       token == 193 || token == 194 || token == 195 || token == 196 || ...
        (token == 150 && isfield(typedefs, idname))
         parse_declaration();      % `for (mwSize i = 0; ...)`; consumes ';'
     else
@@ -2197,8 +2262,18 @@ else
     expect(130);
     parse_expr();
     expect(59);
-    if cret
-        em('\tmovzbl\t%al, %eax');
+    if cret == 1
+        em('\tmovsbq\t%al, %rax');   % signed char return
+    elseif cret == 12
+        em('\tmovzbl\t%al, %eax');   % unsigned char return
+    elseif cret == 7
+        em('\tmovswq\t%ax, %rax');
+    elseif cret == 13
+        em('\tmovzwl\t%ax, %eax');
+    elseif cret == 9
+        em('\tmovslq\t%eax, %rax');
+    elseif cret == 16
+        em('\tmovl\t%eax, %eax');
     end
     em(sprintf('\tjmp\t%s', retlbl));
 end
@@ -2505,15 +2580,7 @@ while token == 61 || (token >= 160 && token <= 169)
     else
         % compound: load-modify-store through the address
         em('\tpushq\t%rax');            % save the address
-        if sav_ltype == 1
-            em('\tmovzbl\t(%rax), %eax');
-        elseif sav_ltype == 7
-            em('\tmovzwl\t(%rax), %eax');
-        elseif sav_ltype == 9
-            em('\tmovl\t(%rax), %eax');
-        else
-            em('\tmovq\t(%rax), %rax');
-        end
+        em_val(sav_ltype);              % load with the type's sign/width
         em('\tpushq\t%rax');            % save the old value
         next();
         parse_assignment();
@@ -3007,7 +3074,7 @@ if token == 40              % '(': a cast (type)unary or parenthesised expr
     next();
     is_cast = (token == 131 || token == 134 || token == 178 || token == 187 || ...
               token == 188 || token == 189 || ...
-              token == 193 || token == 194 || token == 195 || ...
+              token == 193 || token == 194 || token == 195 || token == 196 || ...
               (token == 150 && isfield(typedefs, idname)));
     si = save_si; token = save_tok; token_val = save_tv; idname = save_id;
     if is_cast
@@ -3139,21 +3206,33 @@ if token == 40              % '(': a cast (type)unary or parenthesised expr
                 if etype ~= 6
                     em('\tcvtsi2sdq\t%rax, %xmm0');
                 end
-            elseif cbase == 1 && cdepth == 0
+            elseif (cbase == 1 || cbase == 12) && cdepth == 0
                 if etype == 6
                     em('\tcvttsd2siq\t%xmm0, %rax');
                 end
-                em('\tmovsbl\t%al, %eax');   % truncate to a signed char
-            elseif cbase == 7 && cdepth == 0
+                if cbase == 1
+                    em('\tmovsbq\t%al, %rax');   % signed char
+                else
+                    em('\tmovzbl\t%al, %eax');   % unsigned char
+                end
+            elseif (cbase == 7 || cbase == 13) && cdepth == 0
                 if etype == 6
                     em('\tcvttsd2siq\t%xmm0, %rax');
                 end
-                em('\tmovzwl\t%ax, %eax');   % truncate to 16 bits
-            elseif cbase == 9 && cdepth == 0
+                if cbase == 7
+                    em('\tmovswq\t%ax, %rax');   % signed short
+                else
+                    em('\tmovzwl\t%ax, %eax');   % unsigned short
+                end
+            elseif (cbase == 9 || cbase == 16) && cdepth == 0
                 if etype == 6
                     em('\tcvttsd2siq\t%xmm0, %rax');
                 end
-                em('\tmovl\t%eax, %eax');    % truncate to 32 bits
+                if cbase == 9
+                    em('\tmovslq\t%eax, %rax');  % signed word
+                else
+                    em('\tmovl\t%eax, %eax');    % unsigned word
+                end
             elseif (cbase == 0 || cbase == 5) && cdepth == 0 && etype == 6
                 % (int)x / (unsigned)x : double -> int (truncate toward 0)
                 em('\tcvttsd2siq\t%xmm0, %rax');
@@ -3188,12 +3267,16 @@ elseif token == 183         % sizeof: type or expression
         % yields its whole byte size
         sn = numel(out);
         parse_assignment();
-        if etype == 1
+        if etype == 1 || etype == 12
             sz = 1;
         elseif curarrsz > 0
             sz = curarrsz;      % a whole array: its total byte size
         elseif estruc
             sz = ssize_of(etype);
+        elseif etype == 7 || etype == 13
+            sz = 2;
+        elseif etype == 9 || etype == 16
+            sz = 4;
         else
             sz = 8;
         end
@@ -3204,7 +3287,8 @@ elseif token == 183         % sizeof: type or expression
     elseif token == 40
         next();
         if token == 131 || token == 134 || token == 178 || token == 188 || ...
-                token == 189 || token == 193 || token == 194 || token == 195   % a type
+                token == 189 || token == 193 || token == 194 || token == 195 || ...
+                token == 196   % a type
             [base, stdef] = parse_basetype();
             depth = 0;
             while token == 42       % '*'
@@ -3217,6 +3301,12 @@ elseif token == 183         % sizeof: type or expression
                 sz = 2;                 % short
             elseif depth == 0 && base == 9
                 sz = 4;                 % word
+            elseif depth == 0 && base == 12
+                sz = 1;                 % unsigned char
+            elseif depth == 0 && base == 13
+                sz = 2;                 % unsigned short
+            elseif depth == 0 && base == 16
+                sz = 4;                 % unsigned word
             elseif depth == 0 && base >= 1000
                 sz = ssize_of(base);
             else
@@ -3228,16 +3318,16 @@ elseif token == 183         % sizeof: type or expression
             sn = numel(out);
             parse_assignment();
             expect(41);
-            if etype == 1
+            if etype == 1 || etype == 12
                 sz = 1;
             elseif curarrsz > 0
                 sz = curarrsz;      % a whole array: its total byte size
             elseif estruc
                 sz = ssize_of(etype);
-            elseif etype == 7
-                sz = 2;             % short
-            elseif etype == 9
-                sz = 4;             % word
+            elseif etype == 7 || etype == 13
+                sz = 2;             % short / unsigned short
+            elseif etype == 9 || etype == 16
+                sz = 4;             % word / unsigned word
             else
                 sz = 8;
             end
@@ -3416,18 +3506,7 @@ elseif token == 150         % Id: function call or variable
             else
                 estruc = 0;
                 if ~isarr
-                    if t == 1
-                        em('\tmovzbl\t(%rax), %eax');
-                    elseif t == 7
-                        em('\tmovzwl\t(%rax), %eax');
-                    elseif t == 9
-                        em('\tmovl\t(%rax), %eax');
-                    elseif t == 6
-                        % a double VARIABLE load: value to %xmm0
-                        em('\tmovsd\t(%rax), %xmm0');
-                    else
-                        em('\tmovq\t(%rax), %rax');
-                    end
+                    em_val(t);      % the type picks the load/sign-extension
                 end
             end
         end
@@ -3466,55 +3545,22 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
             else
                 bstride = [];
                 curarrsz = 0;
-                if t == 3
-                    etype = 1;
-                    em('\tmovzbl\t(%rax), %eax');
-                    estruc = 0;
-                elseif t - 2 >= 1000
-                    etype = t - 2;
-                    estruc = 1;
-                elseif t - 2 == 7
-                    etype = 7;
-                    em('\tmovzwl\t(%rax), %eax');
-                    estruc = 0;
-                elseif t - 2 == 9
-                    etype = 9;
-                    em('\tmovl\t(%rax), %eax');
-                    estruc = 0;
-                elseif t - 2 == 6
-                    etype = 6;
-                    em('\tmovsd\t(%rax), %xmm0');
-                    estruc = 0;
+                et = t - 2;
+                etype = et;
+                if et >= 1000
+                    estruc = 1;         % a struct value: address, no load
                 else
-                    etype = t - 2;
-                    em('\tmovq\t(%rax), %rax');
+                    em_val(et);
                     estruc = 0;
                 end
             end
         else
             et = t - 2;
-            if t == 3
-                etype = 1;                % char
-                em('\tmovzbl\t(%rax), %eax');
-                estruc = 0;
-            elseif et >= 1000
-                etype = et;               % struct element: address, no load
-                estruc = 1;
-            elseif et == 6
-                etype = 6;
-                em('\tmovsd\t(%rax), %xmm0');
-                estruc = 0;
+            etype = et;
+            if et >= 1000
+                estruc = 1;               % struct element: address, no load
             else
-                etype = et;
-                if et == 7
-                    em('\tmovzwl\t(%rax), %eax');
-                elseif et == 9
-                    em('\tmovl\t(%rax), %eax');
-                elseif et == 1
-                    em('\tmovzbl\t(%rax), %eax');
-                else
-                    em('\tmovq\t(%rax), %rax');
-                end
+                em_val(et);
                 estruc = 0;
             end
         end
@@ -3602,13 +3648,7 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
             estruc = 1;               % a struct member: address, no load
         else
             estruc = 0;
-            if etype == 1
-                em('\tmovzbl\t(%rax), %eax');
-            elseif etype == 6
-                em('\tmovsd\t(%rax), %xmm0');
-            else
-                em('\tmovq\t(%rax), %rax');
-            end
+            em_val(etype);
         end
     else                    % postfix ++/--
         op = token;
@@ -3665,6 +3705,10 @@ for k = numel(ops):-1:1
             elseif etype == 6
                 em('\tmovsd\t(%rax), %xmm0');
                 estruc = 0;
+            elseif etype == 1 || etype == 7 || etype == 9 || ...
+                    etype == 12 || etype == 13 || etype == 16
+                em_val(etype);
+                estruc = 0;
             else
                 em('\tmovq\t(%rax), %rax');
                 estruc = 0;
@@ -3689,8 +3733,11 @@ global out
 if numel(out) >= 1 && ...
    (strcmp(out{end}, sprintf('\tmovq\t(%%rax), %%rax')) || ...
     strcmp(out{end}, sprintf('\tmovzbl\t(%%rax), %%eax')) || ...
-    strcmp(out{end}, sprintf('\tmovl\t(%%rax), %%eax')) || ...
+    strcmp(out{end}, sprintf('\tmovsbq\t(%%rax), %%rax')) || ...
     strcmp(out{end}, sprintf('\tmovzwl\t(%%rax), %%eax')) || ...
+    strcmp(out{end}, sprintf('\tmovswq\t(%%rax), %%rax')) || ...
+    strcmp(out{end}, sprintf('\tmovl\t(%%rax), %%eax')) || ...
+    strcmp(out{end}, sprintf('\tmovslq\t(%%rax), %%rax')) || ...
     strcmp(out{end}, sprintf('\tmovsd\t(%%rax), %%xmm0')))
     out(end) = [];
     ok = 1;
@@ -3713,13 +3760,7 @@ if t >= 2 && t ~= 3
     scale = elem_size(t);
 end
 em('\tpushq\t%rax');            % save the address
-if t == 1
-    em('\tmovzbl\t(%rax), %eax');
-elseif t == 6
-    em('\tmovsd\t(%rax), %xmm0');
-else
-    em('\tmovq\t(%rax), %rax');
-end
+em_val(t);
 if post
     if t == 6
         em('\tmovsd\t%xmm0, %xmm2');   % old value

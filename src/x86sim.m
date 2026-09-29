@@ -329,6 +329,24 @@ elseif m == 65           % movzwl: 2-byte zero-extend load
 elseif m == 66           % movw: 2-byte store
     v = mod(sim_opval(a), 65536);
     sim_opstore(b, v, 16);
+elseif m == 67           % movsbq: sign-extend byte to 64 bits
+    v = sim_byteval(a);
+    if v >= 128
+        v = v - 256;
+    end
+    sim_opstore(b, v, 64);
+elseif m == 68           % movswq: sign-extend 16 bits to 64
+    v = sim_wordval(a);
+    if v >= 32768
+        v = v - 65536;
+    end
+    sim_opstore(b, v, 64);
+elseif m == 69           % movslq: sign-extend 32 bits to 64
+    v = sim_dwordval(a);
+    if v >= 2147483648
+        v = v - 4294967296;
+    end
+    sim_opstore(b, v, 64);
 elseif m == 5            % leaq
     sim_opstore(b, sim_effaddr(a), 64);
 elseif m == 6            % pushq
@@ -2425,7 +2443,7 @@ end
 function m = sim_mnemonic(d)
 % d = the mnemonic as a code vector -> an opcode index.
 %
-% The 65-entry table is built ONCE (persistent global).  The previous
+% The 68-entry table is built ONCE (persistent global).  The previous
 % per-call rebuild (75x cv_of + up to 75x cv_eq, each a ~1ms user-function
 % call in the clone) cost ~150ms per instruction line in pass 1; this
 % version uses builtins only (numel/all inline), prefilters on length +
@@ -2440,10 +2458,10 @@ if isempty(sim_mn_ops)
              'cvttsd2siq','divq','idivq','incq','ja','jae','jb','jbe','jg', ...
              'jge','jl','jle','jnz','jz','movb','movl','movsbl','movw','movzwl', ...
              'negq','notq','orq','sarq','setae','setb','setbe','setnp','shlq', ...
-             'shrq','testb','xorpd','xorq'};
+             'shrq','testb','xorpd','xorq','movsbq','movswq','movslq'};
     ops = [0 6 5 7 8 37 50 10 9 18 28 38 11 1 29 2 22 24 0 53 56 52 30 23 ...
            51 54 26 27 41 25 58 60 20 57 45 21 16 46 48 47 49 33 34 31 32 ...
-           36 35 4 1 3 66 65 14 15 12 39 43 40 42 59 17 44 19 55 13];
+           36 35 4 1 3 66 65 14 15 12 39 43 40 42 59 17 44 19 55 13 67 68 69];
     nt = numel(names);
     sim_mn_codes = cell(1, nt);
     sim_mn_lens = zeros(1, nt);
@@ -2460,7 +2478,7 @@ m = 99;
 ld = numel(d);
 c1 = d(1);
 lens = sim_mn_lens; c1s = sim_mn_c1; codes = sim_mn_codes; ops = sim_mn_ops;
-for k = 1:65
+for k = 1:numel(sim_mn_ops)
     if lens(k) == ld && c1s(k) == c1 && all(d == codes{k})
         m = ops(k);
         return;

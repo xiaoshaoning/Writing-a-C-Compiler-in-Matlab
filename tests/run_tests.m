@@ -693,6 +693,7 @@ cctests = {
         'cc23_suffix.c', 72;      % integer constant suffixes (u/U/l/L)
         'cc24_wide.c', 96;        % 64-bit decimal literals above 2^53 (compiler track only)
         'cc25_fmt.c', 96;         % 64-bit %u/%x/%o exact above 2^53 (compiler track only)
+        'cc26_signed.c', 96;      % signed/unsigned narrow-type widening (compiler track only)
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
@@ -944,6 +945,18 @@ cctests = {
             sprintf('local width types: %s', e.message));
     end
 
+    % 'word' / 'unsigned word' widening: a cc_int extension, so sim only.
+    try
+        delete('tmp_cc.s');
+        cc_int('tests/programs/cc26_word.c', 'tmp_cc.s');
+        wrd = x86sim('tmp_cc.s');
+        [npass nfail] = addcheck(npass, nfail, wrd == 0, ...
+            'word/unsigned word sign and zero extension (sim only)');
+    catch e
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            sprintf('word widening: %s', e.message));
+    end
+
     % dense-double high-precision print (Bug A): %.17g of a dense literal
     % and of division results must match real gcc. When gcc is present the
     % expectation is gcc's own stdout of the same source, so there is no
@@ -1008,6 +1021,23 @@ cctests = {
             sprintf('x86sim wide hex/unsigned print: %s', e.message));
     end
 
+    % signed/unsigned narrow-type widening (cc26_signed.c): the printed
+    % values must show sign-extension for char/short and zero-extension for
+    % the unsigned forms. No gcc gold needed - gcc agrees (checked), but the
+    % stored string keeps the check gcc-free.
+    try
+        delete('tmp_cc.s');
+        cc_int('tests/programs/cc26_signed.c', 'tmp_cc.s');
+        sgout = evalc('sgr = x86sim(''tmp_cc.s'');');
+        sgout(sgout == char(13)) = [];
+        sggold = sprintf('-1 -1 65535 200 -1 -2\n');
+        [npass nfail] = addcheck(npass, nfail, strcmp(sgout, sggold), ...
+            'signed/unsigned narrow widening matches gcc');
+    catch e
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            sprintf('signed widening: %s', e.message));
+    end
+
     % x86sim stdout parity: the same printing programs must produce the same
     % stdout through the gcc-free simulator as through the interpreter.
     so2 = 0;
@@ -1055,8 +1085,10 @@ cctests = {
     % suffixes, so the total is 11312. cc24_wide.c (88) added the
     % above-2^53 decimal literal checks (the peephole no longer folds a
     % full-width immediate into memory, +2), so the total is 11402.
-    % cc25_fmt.c (57) added the exact 64-bit %u/%x/%o printing, so the
-    % total is 11459. See
+    % cc25_fmt.c (57) added the exact 64-bit %u/%x/%o printing, and
+    % cc26_signed.c the signed/unsigned narrow-type widening (which also
+    % sign-extends char/short loads via movsbq/movswq/movslq), so the total
+    % is 11673. See
     % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
@@ -1078,8 +1110,8 @@ cctests = {
         [npass nfail] = addcheck(npass, nfail, false, ...
             sprintf('instr count hello.c: %s', e.message));
     end
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 11459, ...
-        sprintf('instr regression: corpus %d <= 11459', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 11673, ...
+        sprintf('instr regression: corpus %d <= 11673', ic_total));
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 72, ...
         sprintf('instr regression: hello.c %d <= 72', ic_hello));
 
