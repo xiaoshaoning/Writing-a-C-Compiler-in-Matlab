@@ -514,6 +514,8 @@ elseif (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
         token = 176;            % Continue
     elseif strcmp(id, 'struct')
         token = 178;            % Struct
+    elseif strcmp(id, 'union')
+        token = 198;            % Union
     elseif strcmp(id, 'switch')
         token = 182;            % Switch
     elseif strcmp(id, 'case')
@@ -948,7 +950,7 @@ function [base, stdef] = parse_basetype()
 % parse_basetype — parse int/char/struct tag; returns the base type code
 % (0 int, 1 char, 1000+2*stid struct) and, for a struct type DEFINITION at
 % file scope, a cell {tag, members} for the caller to register.
-global token idname stags enums typedefs
+global token idname stags enums typedefs nstid
 base = 0;
 stdef = 0;
 while token == 190 || token == 191 || token == 192 || token == 197   % const/register/static/extern
@@ -1022,19 +1024,31 @@ elseif token == 195         % long [long]: 8-byte signed integer base
     if token == 131 || token == 195    % 'long int' / 'long long'
         next();
     end
-elseif token == 178         % struct
+elseif token == 178 || token == 198   % struct / union
+    kw = token;
+    isunion = (token == 198);
     next();
-    if token ~= 150
-        fail('expected a struct tag');
+    tag = '';
+    if token == 150         % a tag
+        tag = idname;
+        next();
     end
-    tag = idname;
-    next();
-    if token == 123         % '{': type definition
+    if token == 123         % '{': a type definition (tag optional)
         next();             % consume '{'
-        stdef = {tag, parse_struct_members()};
+        if isempty(tag)     % anonymous: give it a synthetic, unreferenced tag
+            tag = sprintf('@anon%d', nstid + 1);
+        end
+        stdef = {tag, parse_struct_members(isunion)};
     else
+        if isempty(tag)
+            if kw == 178
+                fail('expected a struct tag');
+            else
+                fail('expected a union tag');
+            end
+        end
         if ~isfield(stags, tag)
-            fail(sprintf('unknown struct %s', tag));
+            fail(sprintf('unknown tag %s', tag));
         end
         base = 1000 + 2 * stags.(tag);
     end
@@ -1075,40 +1089,20 @@ else
 end
 end
 
-function def = parse_struct_members()
+function def = parse_struct_members(isunion)
 % members := (type ('*')* name (('[' size ']')? …) ';')* '}' — returns
-% {size, membermap, names}; membermap maps member name -> {offset, type};
-% names lists the members in declaration order (for initializers).
+% {size, membermap, names, isunion}; membermap maps member name ->
+% {offset, type}; names lists the members in declaration order (for
+% initializers). A union lays every member at offset 0 and is as large as
+% its largest member (C 6.7.2.1).
 global token idname stags token_val
 membermap = struct();
 mnames = {};
 off = 0;
 while token ~= 125          % '}'
-    while token == 190 || token == 191 || token == 192
-        next();
-    end
-    if token == 131         % int
-        mbase = 0;
-        next();
-    elseif token == 134     % char
-        mbase = 1;
-        next();
-    elseif token == 189     % double
-        mbase = 6;
-        next();
-    elseif token == 178     % struct
-        next();
-        if token ~= 150
-            fail('expected a struct tag');
-        end
-        tag = idname;
-        next();
-        if ~isfield(stags, tag)
-            fail(sprintf('unknown struct %s', tag));
-        end
-        mbase = 1000 + 2 * stags.(tag);
-    else
-        fail('expected a struct member type');
+    [mbase, mdef] = parse_basetype();
+    if isa(mdef, 'cell')
+        mbase = 1000 + 2 * register_struct(mdef{1}, mdef{2});
     end
     depth = 0;
     while token == 42       % '*'
@@ -1142,18 +1136,27 @@ while token ~= 125          % '}'
         st = tsize(mbase);      % the member's element width
     end
     nbytes = st * asz;
-    if mt ~= 1
-        off = off + mod(-off, 8);   % 8-align non-char members
+    if isunion
+        % every member shares offset 0; the union is as large as its
+        % largest member (C 6.7.2.1)
+        membermap.(name) = {0, mt};
+        if nbytes > off
+            off = nbytes;
+        end
+    else
+        if mt ~= 1
+            off = off + mod(-off, 8);   % 8-align non-char members
+        end
+        membermap.(name) = {off, mt};
+        off = off + nbytes;
     end
-    membermap.(name) = {off, mt};
     mnames{end+1} = name;
-    off = off + nbytes;
     expect(59);             % ';'
 end
 next();                     % consume '}'
 % C allows trailing padding; 8-align the total size
 sz = off + mod(-off, 8);
-def = {sz, membermap, mnames};
+def = {sz, membermap, mnames, isunion};
 end
 
 function sid = register_struct(tag, def)
@@ -1693,8 +1696,13 @@ global token sdefs token_val
 next();                     % '{'
 stid = (sbase - 1000) / 2;
 names = sdefs{stid}{3};
+if numel(sdefs{stid}) >= 4 && sdefs{stid}{4}
+    nmem = 1;               % a union initializer sets its first member
+else
+    nmem = numel(names);
+end
 vals = [];
-for k = 1:numel(names)
+for k = 1:nmem
     if token == 125
         break;              % remaining members are zero-initialized
     end
@@ -1965,7 +1973,8 @@ function parse_statement()
 % statement := declaration | '{' statement* '}' | if | while | for | do |
 % break | continue | return | expr ';'
 global token token_val idname typedefs src si lvars lvartype lvararr lvarstruct lvarstride
-if token == 131 || token == 134 || token == 178 || token == 188 || ...  % int/char/struct/unsigned
+if token == 131 || token == 134 || token == 178 || token == 198 || ...  % int/char/struct/union
+   token == 188 || ...                                                % unsigned
    token == 189 || token == 190 || token == 191 || token == 192 || ... % double/const/register/static
    token == 197 || ...                                                % extern
    token == 193 || token == 194 || token == 195 || token == 196 || ... % short/word/long/signed
@@ -2126,8 +2135,8 @@ global token idname typedefs loopctx out
 next();                     % consume 'for'
 expect(40);
 if token ~= 59              % ';': optional init
-    if token == 131 || token == 134 || token == 178 || token == 188 || ...
-       token == 189 || token == 190 || token == 191 || token == 192 || ...
+    if token == 131 || token == 134 || token == 178 || token == 198 || ...
+       token == 188 || token == 189 || token == 190 || token == 191 || token == 192 || ...
        token == 193 || token == 194 || token == 195 || token == 196 || ...
        token == 197 || ...
        (token == 150 && isfield(typedefs, idname))
@@ -3128,8 +3137,8 @@ if token == 40              % '(': a cast (type)unary or parenthesised expr
     save_tv = token_val;
     save_id = idname;
     next();
-    is_cast = (token == 131 || token == 134 || token == 178 || token == 187 || ...
-              token == 188 || token == 189 || ...
+    is_cast = (token == 131 || token == 134 || token == 178 || token == 198 || ...
+              token == 187 || token == 188 || token == 189 || ...
               token == 193 || token == 194 || token == 195 || token == 196 || ...
               (token == 150 && isfield(typedefs, idname)));
     si = save_si; token = save_tok; token_val = save_tv; idname = save_id;
@@ -3329,10 +3338,14 @@ elseif token == 183         % sizeof: type or expression
         estruc = 0;
     elseif token == 40
         next();
-        if token == 131 || token == 134 || token == 178 || token == 188 || ...
-                token == 189 || token == 193 || token == 194 || token == 195 || ...
+        if token == 131 || token == 134 || token == 178 || token == 198 || ...
+                token == 188 || token == 189 || token == 193 || token == 194 || ...
+                token == 195 || ...
                 token == 196   % a type
             [base, stdef] = parse_basetype();
+            if isa(stdef, 'cell')   % `sizeof(struct { … })`: register it
+                base = 1000 + 2 * register_struct(stdef{1}, stdef{2});
+            end
             depth = 0;
             while token == 42       % '*'
                 depth = depth + 1;
