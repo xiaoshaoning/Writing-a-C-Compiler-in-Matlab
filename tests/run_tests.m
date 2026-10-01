@@ -697,6 +697,7 @@ cctests = {
         'cc27_int.c', 96;         % int is 32-bit: sizeof/wrap/stride (compiler track only)
         'cc28_flow.c', 96;        % returns anywhere + extern (compiler track only)
         'cc29_union.c', 96;       % unions + anonymous struct/union (compiler track only)
+        'cc30_typedef.c', 96;     % typedef of struct/union/pointer/array (compiler track only)
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
@@ -1087,6 +1088,21 @@ cctests = {
             sprintf('union: %s', e.message));
     end
 
+    % typedef of struct/union/pointer/array types: cc30_typedef.c must print
+    % 7 65 7 like gcc.
+    try
+        delete('tmp_cc.s');
+        cc_int('tests/programs/cc30_typedef.c', 'tmp_cc.s');
+        ttout = evalc('ttr = x86sim(''tmp_cc.s'');');
+        ttout(ttout == char(13)) = [];
+        ttgold = sprintf('7 65 7\n');
+        [npass nfail] = addcheck(npass, nfail, strcmp(ttout, ttgold), ...
+            'typedef of struct/union/pointer/array matches gcc');
+    catch e
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            sprintf('typedef: %s', e.message));
+    end
+
     % x86sim stdout parity: the same printing programs must produce the same
     % stdout through the gcc-free simulator as through the interpreter.
     so2 = 0;
@@ -1138,7 +1154,7 @@ cctests = {
     % cc26_signed.c the signed/unsigned narrow-type widening (which also
     % sign-extends char/short loads via movsbq/movswq/movslq). Making int
     % 32-bit (cc27_int.c) then moved int loads/stores to movslq/movl and
-    % added the int-pointer scaling, so the total is 14303. See
+    % added the int-pointer scaling, so the total is 14448. See
     % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
@@ -1160,8 +1176,8 @@ cctests = {
         [npass nfail] = addcheck(npass, nfail, false, ...
             sprintf('instr count hello.c: %s', e.message));
     end
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 14303, ...
-        sprintf('instr regression: corpus %d <= 14303', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 14448, ...
+        sprintf('instr regression: corpus %d <= 14448', ic_total));
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 84, ...
         sprintf('instr regression: hello.c %d <= 84', ic_hello));
 

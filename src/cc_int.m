@@ -797,18 +797,42 @@ function parse_decl_or_func()
 % type ('*')* name — '(' means a function definition, otherwise globals;
 % a struct type definition (`struct Tag { … };`) registers the type;
 % `typedef` registers a type alias; `enum { … }` registers constants.
-global token idname typedefs enums
+global token idname typedefs enums token_val
 if token == 184         % typedef
     next();
-    [base, stdef] = parse_basetype();
-    if isa(stdef, 'cell')
-        fail('struct definitions are not allowed in typedefs');
+    [base, stdef, tdim0] = parse_basetype();
+    if isa(stdef, 'cell')   % `typedef struct { … } P;`
+        base = 1000 + 2 * register_struct(stdef{1}, stdef{2});
+    end
+    depth = 0;
+    while token == 42       % '*': `typedef int *ip;`
+        depth = depth + 1;
+        next();
     end
     if token ~= 150
         fail('expected a typedef name');
     end
-    typedefs.(idname) = base;
+    nm = idname;
     next();
+    adims = [];
+    while token == 91       % '[': `typedef int ia[3];`
+        next();
+        if token ~= 128
+            fail('expected a constant array size');
+        end
+        adims(end+1) = double(token_val);
+        next();
+        expect(93);
+        if adims(end) < 0
+            fail('bad array size');
+        end
+    end
+    if isempty(adims)
+        adims = tdim0;      % `typedef ia ib;` inherits the array dims
+    end
+    % the alias is the full (base + 2*depth) code plus any array dims;
+    % callers still add 2*(their own '*') so `ip *pp;` composes
+    typedefs.(nm) = {base + 2 * depth, adims};
     expect(59);
     return;
 end
@@ -816,7 +840,7 @@ if token == 185         % enum
     parse_enum();
     return;
 end
-[base, stdef] = parse_basetype();
+[base, stdef, tdims] = parse_basetype();
 if isa(stdef, 'cell')
     % a struct type definition: register the tag, then either the ';'
     % or a variable list of the new type (`struct Q { … } q;`)
@@ -835,7 +859,7 @@ if isa(stdef, 'cell')
     end
     name = idname;
     next();
-    parse_globals(name, base, depth, 0);
+    parse_globals(name, base, depth, 0, tdims);
     return;
 end
 depth = 0;
@@ -856,7 +880,7 @@ if token == 40              % '(': function pointer `(*name)(params)`
     next();
     expect(41);
     skip_prototype();       % (params): parsed and discarded
-    parse_globals(name, base, depth, 1);   % fptrflag = 1 (rettype = base+2*depth)
+    parse_globals(name, base, depth, 1, tdims);   % fptrflag = 1
     return;
 end
 if token ~= 150
@@ -867,7 +891,7 @@ next();
 if token == 40              % '(': function (return type = base+2*depth)
     parse_function_tail(name, base == 1, base + 2 * depth);
 else
-    parse_globals(name, base, depth, 0);
+    parse_globals(name, base, depth, 0, tdims);
 end
 end
 
@@ -946,13 +970,14 @@ next();                     % '}'
 expect(59);                 % ';'
 end
 
-function [base, stdef] = parse_basetype()
+function [base, stdef, tdims] = parse_basetype()
 % parse_basetype — parse int/char/struct tag; returns the base type code
 % (0 int, 1 char, 1000+2*stid struct) and, for a struct type DEFINITION at
 % file scope, a cell {tag, members} for the caller to register.
 global token idname stags enums typedefs nstid
 base = 0;
 stdef = 0;
+tdims = [];
 while token == 190 || token == 191 || token == 192 || token == 197   % const/register/static/extern
     next();
 end
@@ -1053,7 +1078,11 @@ elseif token == 178 || token == 198   % struct / union
         base = 1000 + 2 * stags.(tag);
     end
 elseif token == 150 && isfield(typedefs, idname)
-    base = typedefs.(idname);
+    td = typedefs.(idname);
+    base = td{1};
+    if numel(td) >= 2
+        tdims = td{2};      % a typedef'd array type
+    end
     next();
 elseif token == 185         % enum: `typedef enum { … } mxClassID;` —
     % register the constants, the type itself is an int (class ids)
@@ -1201,6 +1230,18 @@ elseif w == 4
     em(sprintf('\tmovl\t$%d, %s', mod(v, 4294967296), addr));
 else
     em(sprintf('\tmovq\t$%d, %s', v, addr));
+end
+end
+
+function v = val_size(t)
+% val_size - byte size of a value of type t where t may be a pointer code
+% (8 bytes), a struct value, or a plain scalar.
+if t >= 1000
+    v = ssize_of(t);
+elseif is_ptr_code(t)
+    v = 8;
+else
+    v = tsize(t);
 end
 end
 
@@ -1438,7 +1479,7 @@ lvarstruct = save_lvarstruct;
 fbytes = save_fbytes;
 end
 
-function parse_globals(name, base, depth, fptr)
+function parse_globals(name, base, depth, fptr, tdims)
 % global: name (('[' size ']')* | ('=' const|string|{…})? ) (',' name …)? ';'
 % — collected for the .comm/.data section emitted at the end of the file.
 % fptr: 1 for a global function pointer `type (*name)(params)`.
@@ -1468,6 +1509,10 @@ while true
     t = base + 2 * depth;
     dims = [];
     isarr = 0;
+    if ~isempty(tdims)      % a typedef'd array type
+        dims = tdims;
+        isarr = 1;
+    end
     if token == 91          % '[': array (possibly multi-dimension)
         while token == 91
             next();
@@ -2365,7 +2410,7 @@ function parse_declaration()
 % declaration := type ('*')* name (('[' size ']')? (',' …)*) ('=' expr)? ';'
 % — storage: char 1 byte, int/pointer 8, struct its size, arrays n*elem.
 global token idname lvars lvartype lvararr lvarstruct lvarstride lvararrsz fbytes token_val
-[base, stdef] = parse_basetype();
+[base, stdef, tdims] = parse_basetype();
 if isa(stdef, 'cell')
     % a local struct definition: register the tag, then either the ';'
     % or a variable list of the new type (`struct Q { … } q;`)
@@ -2409,6 +2454,10 @@ while true
     end
     dims = [];
     isarr = 0;
+    if ~isempty(tdims)      % a typedef'd array type
+        dims = tdims;
+        isarr = 1;
+    end
     if token == 91          % '[': array (possibly multi-dimension)
         while token == 91
             next();
@@ -3341,8 +3390,9 @@ elseif token == 183         % sizeof: type or expression
         if token == 131 || token == 134 || token == 178 || token == 198 || ...
                 token == 188 || token == 189 || token == 193 || token == 194 || ...
                 token == 195 || ...
-                token == 196   % a type
-            [base, stdef] = parse_basetype();
+                token == 196 || ...     % short/word/long/signed
+                (token == 150 && isfield(typedefs, idname))   % a type
+            [base, stdef, tdims] = parse_basetype();
             if isa(stdef, 'cell')   % `sizeof(struct { … })`: register it
                 base = 1000 + 2 * register_struct(stdef{1}, stdef{2});
             end
@@ -3357,6 +3407,9 @@ elseif token == 183         % sizeof: type or expression
                 sz = tsize(base);
             else
                 sz = 8;                 % a pointer
+            end
+            if ~isempty(tdims)          % an array type: its total byte size
+                sz = prod(tdims) * val_size(base);
             end
             expect(41);
         else
