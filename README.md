@@ -304,7 +304,7 @@ clone build), derives the repo path from its own location, and exits
 non-zero if any part fails.
 
 The Rust engine is a supported runtime and a verified second oracle for the
-compiler track: all 307 corpus programs emit **byte-identical** assembly
+compiler track: all 308 corpus programs emit **byte-identical** assembly
 through `cc_int` + `peephole_pass` on both engines. Its interpreter is still
 too slow for one call-heavy program (`stress2.c`), so the suite stops at 588
 checks there; the three engine gaps and their repros are filed in the engine
