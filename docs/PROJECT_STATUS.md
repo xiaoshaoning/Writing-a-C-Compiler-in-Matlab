@@ -441,6 +441,24 @@ paths follow and `sizeof`/`elem_size` cover the new codes. The simulator
 gained those three sign-extending mnemonics. Guards: `cc26_signed.c`
 (exit 96, gcc-comparable) and the sim-only `cc26_word.c`.
 
+**`int` is 32-bit (2026-09-29).** The compiler modelled `int`/`unsigned int`
+as 8 bytes with `long` reusing the same base, so `sizeof(int)` was 8,
+`int y = INT_MAX; y += 1` did not wrap, int-pointer strides were 8 and
+`long` arithmetic was scaled as a pointer (`l = l + 1` added 8). `long`/
+`unsigned long` now have their own 8-byte base codes (17/20) and `int`/
+`unsigned int` are 4 bytes. A single `tsize()` width table drives
+`em_val`/`em_store`, the cast/return paths, `sizeof`, struct member layout,
+array/global strides, the global initializer directives (x86sim gained
+`.short`/`.long`) and the local/compound-literal initializers; `is_ptr_code`
+replaces the old `t >= 2` pointer tests (which also fixes `short s; s++`,
+previously +8). Intermediate int arithmetic is still 64-bit and struct
+alignment stays 8-byte coarse — documented deviations. Guard `cc27_int.c`
+(exit 96, gcc-comparable); ceiling 11673 → **14072**, hello.c 72 → 84.
+
+Interpreter divergence: `xc`'s VM word is 8 bytes (`sizeof(int)` = 8), its
+own model (a port artifact of xc.c's int-word VM); `cc13_si1.c`/`cc13_si5.c`
+left the cross-track parity list for that reason.
+
 ## Deliverables
 
 | Phase | Scope | Commit |
@@ -500,9 +518,9 @@ and the runtime library are the changelog entries above:
   interpreter store is O(|mem|) and store-heavy programs go quadratic
   (9.2 ms per element write at 2M elements vs 0.0024 ms on the C clone; a
   local array is fine). The corpus instruction total is
-  identical on both engines (11673) after the peephole rule-3 fix (§E of
+  identical on both engines (14072) after the peephole rule-3 fix (§E of
   `docs/2026-09-07-x86sim-peephole-divergences.md`), and the emitted
-  assembly is byte-identical across the two engines for all 304 corpus
+  assembly is byte-identical across the two engines for all 305 corpus
   programs — a verified second oracle for the compiler track. Earlier runs — v1.3.72
   = 775/774/1, v1.3.53 and v1.3.68 = 584 / 183 failed, v1.3.47 = 577 / 191.
   No runnable MathWorks MATLAB is installed on the development machine

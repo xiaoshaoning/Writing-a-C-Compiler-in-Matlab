@@ -546,7 +546,7 @@ in the engine repo as
 Everything else in the harness passes on the engine: 588 checks, 0 failures.
 
 **Byte-identical compiler track (2026-09-29).** With the `pp_imm()` fix in
-place, `cc_int` over all 304 corpus programs emits the same `.s` files on the
+place, `cc_int` over all 305 corpus programs emits the same `.s` files on the
 engine and on the C clone, byte for byte (`diff -rq` of the two dumps reports
 0 differences). The engine is therefore a verified second oracle for the
 compiler track, independently of the interpreter gaps above.
