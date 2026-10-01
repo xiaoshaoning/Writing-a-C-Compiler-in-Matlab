@@ -459,6 +459,23 @@ Interpreter divergence: `xc`'s VM word is 8 bytes (`sizeof(int)` = 8), its
 own model (a port artifact of xc.c's int-word VM); `cc13_si1.c`/`cc13_si5.c`
 left the cross-track parity list for that reason.
 
+**Unions and anonymous struct/union (2026-09-29).** `union` is a C type with
+every member at offset 0, sized to its largest member (C 6.7.2.1). It reuses
+the struct machinery (`parse_struct_members` takes an `isunion` flag; the
+membermap/`ssize_of`/`member_lookup` paths are shared; a union initializer
+sets only its first member), and tagged unions work at file scope, inline and
+nested. Two related gaps went with it: **anonymous `struct { … } s;` /
+`union { … } u;`** are accepted (a synthetic tag is registered) — including as
+members and inside `sizeof(struct { … })`, which used to size the anonymous
+type as int — and **member types go through `parse_basetype`**, so
+`short`/`word`/`long`/`unsigned`/typedef'd members work (previously
+int/char/double/struct only). Guard `cc29_union.c` (exit 96, gcc-comparable);
+ceiling 14150 → **14303**.
+
+Still unsupported: a struct/union *definition inside a typedef*
+(`typedef struct { … } P;`), array members (`struct S { char c[4]; }`), and
+local aggregate initializers (`struct S s = {1,2};`) — all pre-existing.
+
 **Returns anywhere + `extern` (2026-09-29).** `parse_body` stopped at the
 *first* top-level `return` (a tutorial simplification), so a label after a
 return, a second top-level return, or dead code after one was a parse error
@@ -527,9 +544,9 @@ and the runtime library are the changelog entries above:
   interpreter store is O(|mem|) and store-heavy programs go quadratic
   (9.2 ms per element write at 2M elements vs 0.0024 ms on the C clone; a
   local array is fine). The corpus instruction total is
-  identical on both engines (14150) after the peephole rule-3 fix (§E of
+  identical on both engines (14303) after the peephole rule-3 fix (§E of
   `docs/2026-09-07-x86sim-peephole-divergences.md`), and the emitted
-  assembly is byte-identical across the two engines for all 306 corpus
+  assembly is byte-identical across the two engines for all 307 corpus
   programs — a verified second oracle for the compiler track. Earlier runs — v1.3.72
   = 775/774/1, v1.3.53 and v1.3.68 = 584 / 183 failed, v1.3.47 = 577 / 191.
   No runnable MathWorks MATLAB is installed on the development machine
