@@ -609,7 +609,7 @@ cctests = {
         'cc13_switch2.c',  99;
         'cc13_break.c',     7;
         'cc13_fall.c',    103;
-        'cc13_si1.c',      8;
+        'cc13_si1.c',      4;   % sizeof(int) is 4 (32-bit int)
         'cc13_si2.c',      1;
         'cc13_si3.c',      8;
         'cc13_si4.c',     16;
@@ -653,7 +653,7 @@ cctests = {
         'cc15_memberaddr.c', 9;
         'cc15_memberarrow.c', 7;
         'cc15_moddiv.c',   3;
-        'cc15_sizeoftype.c', 81;   % 41 mod 256
+        'cc15_sizeoftype.c', 41;   % sizeof(int)*10 + sizeof(char)
         'cc15_ternary.c',  4;
         'cc16_cfptr.c',   65;
         'cc16_compoundstruct.c',  6;
@@ -680,7 +680,7 @@ cctests = {
         'stress2.c',     132;   % 988156804 mod 256
         'cc18_strbslash.c', 92;   % backslash escapes survive to .string
         'cc18_ushr.c',      0;   % unsigned >>= is a logical shift
-        'cc18_ucmp.c',      1;   % unsigned compare >= 2^32 (64-bit borrow)
+        'cc18_ucmp.c',      1;   % unsigned long long compare >= 2^32
         'cc18_printfX.c',   0;   % %X uppercase (stdout checked in the sim group)
         'cc18_printf05.c',  0;   % %05d sign placement (stdout checked in the sim group)
         'dreg_denselit.c',  42;  % Bug A: dense-double literal vs 1/10 (sim_num64 + v1.3.47)
@@ -694,6 +694,7 @@ cctests = {
         'cc24_wide.c', 96;        % 64-bit decimal literals above 2^53 (compiler track only)
         'cc25_fmt.c', 96;         % 64-bit %u/%x/%o exact above 2^53 (compiler track only)
         'cc26_signed.c', 96;      % signed/unsigned narrow-type widening (compiler track only)
+        'cc27_int.c', 96;         % int is 32-bit: sizeof/wrap/stride (compiler track only)
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
@@ -713,8 +714,8 @@ cctests = {
         'cc20_litforms.c',
         'cc22_escapes.c',
         'cc23_suffix.c',
-        'cc13_mdim.c', 'cc13_mdim2.c', 'cc13_mdim3.c', 'cc13_si1.c', 'cc13_si2.c', 'cc13_si3.c',
-        'cc13_si5.c', 'cc13_sinit.c', 'cc2_lnat.c', 'cc2_lnat0.c', 'cc2_lnatneg.c', 'cc2_neg.c',
+        'cc13_mdim.c', 'cc13_mdim2.c', 'cc13_mdim3.c', 'cc13_si2.c', 'cc13_si3.c',
+        'cc13_sinit.c', 'cc2_lnat.c', 'cc2_lnat0.c', 'cc2_lnatneg.c', 'cc2_neg.c',
         'cc2_neg0.c', 'cc2_negnot.c', 'cc2_nested.c', 'cc2_not.c', 'cc2_not0.c', 'cc2_pos.c',
         'cc3_and.c', 'cc3_mixed.c', 'cc3_or.c', 'cc3_prec1.c', 'cc3_prec2.c', 'cc3_prec3.c',
         'cc3_prec4.c', 'cc3_shl.c', 'cc3_shr.c', 'cc3_shrall.c', 'cc3_shrneg.c', 'cc3_xor.c',
@@ -1038,6 +1039,22 @@ cctests = {
             sprintf('signed widening: %s', e.message));
     end
 
+    % int is 32-bit (cc27_int.c): sizeof, wrap on store and the int-pointer
+    % stride must match C. gcc agrees (checked); the stored gold keeps the
+    % check gcc-free.
+    try
+        delete('tmp_cc.s');
+        cc_int('tests/programs/cc27_int.c', 'tmp_cc.s');
+        iaout = evalc('iar = x86sim(''tmp_cc.s'');');
+        iaout(iaout == char(13)) = [];
+        iagold = sprintf('4 -2147483648 2\n');
+        [npass nfail] = addcheck(npass, nfail, strcmp(iaout, iagold), ...
+            'int is 32-bit: sizeof/wrap/stride match gcc');
+    catch e
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            sprintf('int width: %s', e.message));
+    end
+
     % x86sim stdout parity: the same printing programs must produce the same
     % stdout through the gcc-free simulator as through the interpreter.
     so2 = 0;
@@ -1087,8 +1104,9 @@ cctests = {
     % full-width immediate into memory, +2), so the total is 11402.
     % cc25_fmt.c (57) added the exact 64-bit %u/%x/%o printing, and
     % cc26_signed.c the signed/unsigned narrow-type widening (which also
-    % sign-extends char/short loads via movsbq/movswq/movslq), so the total
-    % is 11673. See
+    % sign-extends char/short loads via movsbq/movswq/movslq). Making int
+    % 32-bit (cc27_int.c) then moved int loads/stores to movslq/movl and
+    % added the int-pointer scaling, so the total is 14072. See
     % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
@@ -1110,10 +1128,10 @@ cctests = {
         [npass nfail] = addcheck(npass, nfail, false, ...
             sprintf('instr count hello.c: %s', e.message));
     end
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 11673, ...
-        sprintf('instr regression: corpus %d <= 11673', ic_total));
-    [npass nfail] = addcheck(npass, nfail, ic_hello <= 72, ...
-        sprintf('instr regression: hello.c %d <= 72', ic_hello));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 14072, ...
+        sprintf('instr regression: corpus %d <= 14072', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_hello <= 84, ...
+        sprintf('instr regression: hello.c %d <= 84', ic_hello));
 
     % peephole pass unit fixtures — one synthetic input per fold rule,
     % asserting the rewrite fires (and its forbidden line disappears).

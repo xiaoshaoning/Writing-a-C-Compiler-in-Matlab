@@ -111,7 +111,8 @@ for li = 1:NL
             symnames{sym_n} = nm;
             symvals(sym_n) = cursor;
             cursor = cursor + sz;
-        elseif cv_eq(d, cv_of('.quad')) || cv_eq(d, cv_of('.byte'))
+        elseif cv_eq(d, cv_of('.quad')) || cv_eq(d, cv_of('.byte')) || ...
+               cv_eq(d, cv_of('.long')) || cv_eq(d, cv_of('.short'))
             if ~isempty(plab)
                 sym_n = sym_n + 1;
                 symnames{sym_n} = plab;
@@ -121,6 +122,10 @@ for li = 1:NL
             nb = 8;
             if cv_eq(d, cv_of('.byte'))
                 nb = 1;
+            elseif cv_eq(d, cv_of('.short'))
+                nb = 2;
+            elseif cv_eq(d, cv_of('.long'))
+                nb = 4;
             end
             parts = sim_split_commas(rest);
             for k = 1:numel(parts)

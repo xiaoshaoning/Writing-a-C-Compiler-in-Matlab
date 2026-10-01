@@ -399,6 +399,10 @@ elseif t == 7              % signed short
     em('\tmovswq\t(%rax), %rax');
 elseif t == 13             % unsigned short
     em('\tmovzwl\t(%rax), %eax');
+elseif t == 0              % int (32-bit, sign-extended to the VM width)
+    em('\tmovslq\t(%rax), %rax');
+elseif t == 5              % unsigned int (32-bit, zero-extended)
+    em('\tmovl\t(%rax), %eax');
 elseif t == 9              % signed word (32-bit)
     em('\tmovslq\t(%rax), %rax');
 elseif t == 16             % unsigned word
@@ -407,6 +411,23 @@ elseif t == 6              % double
     em('\tmovsd\t(%rax), %xmm0');
 else
     em('\tmovq\t(%rax), %rax');
+end
+end
+
+function em_store(t, addr)
+% em_store — store %rax (or %xmm0 for a double) to the operand `addr`
+% with the width type t calls for. Shared by the assignment and ++/--
+% paths so the store widths match the loads.
+if t == 1 || t == 12
+    em(sprintf('\tmovb\t%%al, %s', addr));
+elseif t == 7 || t == 13
+    em(sprintf('\tmovw\t%%ax, %s', addr));
+elseif t == 0 || t == 5 || t == 9 || t == 16
+    em(sprintf('\tmovl\t%%eax, %s', addr));
+elseif t == 6
+    em(sprintf('\tmovsd\t%%xmm0, %s', addr));
+else
+    em(sprintf('\tmovq\t%%rax, %s', addr));
 end
 end
 
@@ -951,9 +972,10 @@ elseif token == 188         % unsigned: 8 bytes unless a narrower base follows
     elseif token == 194     % 'unsigned word': 4 bytes
         base = 16;
         next();
-    elseif token == 195     % 'unsigned long [int]'
-        base = 5;
+    elseif token == 195     % 'unsigned long [long] [int]': 8 bytes
+        base = 20;
         next();
+        if token == 195, next(); end    % 'long long'
         if token == 131, next(); end
     else                    % 'unsigned [int]'
         base = 5;
@@ -972,9 +994,10 @@ elseif token == 196         % signed: the default signedness; consume the
     elseif token == 194     % 'signed word'
         base = 9;
         next();
-    elseif token == 195     % 'signed long [int]'
-        base = 0;
+    elseif token == 195     % 'signed long [long] [int]'
+        base = 17;
         next();
+        if token == 195, next(); end    % 'long long'
         if token == 131, next(); end
     elseif token == 131     % 'signed int'
         next();
@@ -991,13 +1014,10 @@ elseif token == 193         % short: 2-byte signed integer base
 elseif token == 194         % word: 4-byte signed integer base
     base = 9;
     next();
-elseif token == 195         % long [long]: 8-byte integer base (same as int)
-    base = 0;
+elseif token == 195         % long [long]: 8-byte signed integer base
+    base = 17;
     next();
-    if token == 131 || token == 193 || token == 194   % 'long int/short/word'
-        next();
-    end
-    if token == 195         % 'long long'
+    if token == 131 || token == 195    % 'long int' / 'long long'
         next();
     end
 elseif token == 178         % struct
@@ -1112,12 +1132,12 @@ while token ~= 125          % '}'
             fail('bad array size');
         end
     end
-    if mt == 1
-        st = 1;
-    elseif mbase >= 1000 && depth == 0
+    if mbase >= 1000 && depth == 0
         st = ssize_of(mbase);
+    elseif depth > 0
+        st = 8;                 % a pointer member
     else
-        st = 8;
+        st = tsize(mbase);      % the member's element width
     end
     nbytes = st * asz;
     if mt ~= 1
@@ -1165,22 +1185,74 @@ else
 end
 end
 
+function em_imm_store(v, addr, w)
+% em_imm_store - store the constant v to operand addr at width w, so a
+% narrow element's initializer bytes match the width its loads use.
+if w == 1
+    em(sprintf('\tmovb\t$%d, %s', mod(v, 256), addr));
+elseif w == 2
+    em(sprintf('\tmovw\t$%d, %s', mod(v, 65536), addr));
+elseif w == 4
+    em(sprintf('\tmovl\t$%d, %s', mod(v, 4294967296), addr));
+else
+    em(sprintf('\tmovq\t$%d, %s', v, addr));
+end
+end
+
+function d = dir_of(sz)
+% dir_of - the assembler storage directive for a sz-byte element, so a
+% global's initializer bytes match the width its loads/stores use.
+if sz == 1
+    d = '	.byte	';
+elseif sz == 2
+    d = '	.short	';
+elseif sz == 4
+    d = '	.long	';
+else
+    d = '	.quad	';
+end
+end
+
+function b = is_ptr_code(t)
+% is_ptr_code - t is a pointer type code (base+2) rather than a plain
+% value. The two code spaces overlap (unsigned int 5 -> 7 = short), so the
+% value codes are excluded explicitly rather than assumed out of range.
+b = t >= 2 && ...
+    ~(t == 5 || t == 6 || t == 7 || t == 9 || t == 12 || t == 13 || ...
+      t == 16 || t == 17 || t == 20);
+end
+
+function tsz = tsize(t)
+% tsize — byte size of a VALUE type code: char 1, short 2, int/word 4,
+% long/double/pointer 8, a struct its registered size. The single source of
+% the width table that sizeof, struct layout and elem_size share.
+if t == 1 || t == 12
+    tsz = 1;
+elseif t == 7 || t == 13
+    tsz = 2;
+elseif t == 0 || t == 5 || t == 9 || t == 16
+    tsz = 4;
+elseif t >= 1000 && t < 1002
+    tsz = ssize_of(t);
+elseif t >= 1002
+    tsz = ssize_of(t - 2);
+else
+    tsz = 8;
+end
+end
+
 function sz = elem_size(t)
 % elem_size — byte size per element for pointer arithmetic/indexing on
-% type t: 1 for char*, 2/4 for the 2-/4-byte integer pointer types, the
-% struct size for struct-related, else 8.
-if t == 3 || t == 14
-    sz = 1;
-elseif t == 9 || t == 15   % short* / unsigned short*
-    sz = 2;
-elseif t == 11 || t == 18  % word* / unsigned word*
-    sz = 4;
-elseif t >= 1000 && t < 1002
-    sz = ssize_of(t);
-elseif t >= 1002
+% type t. A pointer code is base+2, so the element size is tsize(t-2); a
+% struct pointer uses the struct value's size.
+if t >= 1002
     sz = ssize_of(t - 2);
+elseif t >= 1000
+    sz = ssize_of(t);
+elseif t >= 2
+    sz = tsize(t - 2);
 else
-    sz = 8;
+    sz = tsize(t);
 end
 end
 
@@ -1417,12 +1489,12 @@ while true
     if isarr && base >= 1000
         gstride.(name) = cstride_of(dims, ssize_of(base));
         gvararrsz.(name) = prod(dims) * ssize_of(base);
-    elseif isarr && base == 1
-        gstride.(name) = cstride_of(dims, 1);
-        gvararrsz.(name) = prod(dims);
-    elseif isarr
+    elseif isarr && is_ptr_code(t)
         gstride.(name) = cstride_of(dims, 8);
         gvararrsz.(name) = 8 * prod(dims);
+    elseif isarr
+        gstride.(name) = cstride_of(dims, tsize(t));
+        gvararrsz.(name) = tsize(t) * prod(dims);
     else
         gvararrsz.(name) = 0;
     end
@@ -1511,19 +1583,19 @@ for k = 1:numel(glist)
     v = g{5};
     sbase = g{6};
     if isarr
-        if mod(t, 2) == 1       % char-based element
-            nbytes = prod(dims);
-        elseif sbase ~= 0
+        if sbase ~= 0
             nbytes = prod(dims) * ssize_of(sbase);   % struct array
+        elseif is_ptr_code(t)
+            nbytes = prod(dims) * 8;
         else
-            nbytes = 8 * prod(dims);
+            nbytes = prod(dims) * elem_size(t);   % t is the decayed pointer
         end
-    elseif t == 1
-        nbytes = 1;
     elseif sbase ~= 0
         nbytes = ssize_of(sbase);   % a struct value
-    else
+    elseif is_ptr_code(t)
         nbytes = 8;
+    else
+        nbytes = tsize(t);
     end
     if isempty(v)
         em(sprintf('	.comm	%s,%d,16', nm, nbytes));
@@ -1553,9 +1625,10 @@ for k = 1:numel(glist)
         elseif isarr
             % array initializer: values comma-separated (byte for char
             % elements, quad otherwise)
-            line = '	.byte	';
-            if mod(t, 2) ~= 1
+            if t >= 1000
                 line = '	.quad	';
+            else
+                line = dir_of(elem_size(t));
             end
             for kk = 1:numel(v)
                 line = [line, sprintf('%d', v(kk))];
@@ -1564,13 +1637,11 @@ for k = 1:numel(glist)
                 end
             end
             em(line);
-        elseif t == 1
-            em(sprintf('	.byte	%d', v));
         elseif t == 6
             % an int constant initializer for a double global: promote
             em(sprintf('	.quad	0x%016X', cc_d2bits(double(v))));
         else
-            em(sprintf('	.quad	%d', v));
+            em(sprintf('%s%d', dir_of(tsize(t)), v));
         end
     end
 end
@@ -2262,7 +2333,11 @@ else
     expect(130);
     parse_expr();
     expect(59);
-    if cret == 1
+    if cret == 0
+        em('\tmovslq\t%eax, %rax');  % int return: 32-bit, sign-extended
+    elseif cret == 5
+        em('\tmovl\t%eax, %eax');    % unsigned int return
+    elseif cret == 1
         em('\tmovsbq\t%al, %rax');   % signed char return
     elseif cret == 12
         em('\tmovzbl\t%al, %eax');   % unsigned char return
@@ -2343,12 +2418,12 @@ while true
         isarr = 1;
     end
     if isarr
-        if t == 1
-            elem = 1;
-        elseif base >= 1000
+        if base >= 1000
             elem = ssize_of(base);
+        elseif is_ptr_code(t)
+            elem = 8;               % an array of pointers
         else
-            elem = 8;
+            elem = tsize(t);
         end
         nbytes = prod(dims) * elem;
         lvartype.(name) = t + 2;    % the name decays to a pointer
@@ -2384,12 +2459,12 @@ while true
             % constant array initializer: stores emitted directly
             vals = parse_arr_init(dims, 1);
             nelem = prod(dims);
-            if t == 1
-                elem = 1;
-            elseif base >= 1000
+            if base >= 1000
                 elem = ssize_of(base);
+            elseif is_ptr_code(t)
+                elem = 8;           % an array of pointers
             else
-                elem = 8;
+                elem = tsize(t);
             end
             if numel(vals) > nelem
                 fail('too many array initializers');
@@ -2398,19 +2473,11 @@ while true
                 vals(end+1) = 0;    % C zero-fills the rest
             end
             for k = 1:numel(vals)
-                if t == 1
-                    em(sprintf('\tmovb\t$%d, %d(%%rbp)', vals(k), off + (k-1)));
-                else
-                    em(sprintf('\tmovq\t$%d, %d(%%rbp)', vals(k), off + (k-1)*elem));
-                end
+                em_imm_store(vals(k), sprintf('%d(%%rbp)', off + (k-1)*elem), elem);
             end
         else
             parse_assignment();
-            if t == 1
-                em(sprintf('\tmovb\t%%al, %d(%%rbp)', off));
-            elseif t == 6
-                em(sprintf('\tmovsd\t%%xmm0, %d(%%rbp)', off));
-            elseif base >= 1000 && depth == 0
+            if base >= 1000 && depth == 0
                 % struct value initializer: copy ssize bytes from rax
                 em(sprintf('\tleaq\t%d(%%rbp), %%rcx', off));
                 for kk = 1:ssize_of(base)/8
@@ -2420,7 +2487,7 @@ while true
                     em('\taddq\t$8, %rcx');
                 end
             else
-                em(sprintf('\tmovq\t%%rax, %d(%%rbp)', off));
+                em_store(t, sprintf('%d(%%rbp)', off));
             end
         end
     end
@@ -2528,12 +2595,6 @@ while token == 61 || (token >= 160 && token <= 169)
             em('\ttestb\t%dl, %dl');
             em(sprintf('\tjne\t%s', cpl));
             em(sprintf('%s:', cpd));
-        elseif sav_ltype == 1
-            em('\tmovb\t%al, (%rbx)');
-        elseif sav_ltype == 7
-            em('\tmovw\t%ax, (%rbx)');
-        elseif sav_ltype == 9
-            em('\tmovl\t%eax, (%rbx)');
         elseif sav_ltype >= 1002 && sav_ltype <= 1000 + 2 * numel(sdefs)
             % struct-value assignment: copy the whole size (preserve rax)
             em('\tmovq\t%rax, %rcx');
@@ -2545,10 +2606,8 @@ while token == 61 || (token >= 160 && token <= 169)
                 em('\taddq\t$8, %rcx');
                 em('\taddq\t$8, %rdx');
             end
-        elseif sav_ltype == 6
-            em('\tmovsd\t%xmm0, (%rbx)');
         else
-            em('\tmovq\t%rax, (%rbx)');
+            em_store(sav_ltype, '(%rbx)');
         end
     elseif sav_ltype == 6
         % compound on a double lvalue: load-modify-store in %xmm
@@ -2596,7 +2655,7 @@ while token == 61 || (token >= 160 && token <= 169)
             end
         else
             em('\tmovq\t%rax, %rbx');   % rhs
-            if (op == 160 || op == 161) && sav_ltype >= 2 && sav_ltype ~= 3
+            if (op == 160 || op == 161) && is_ptr_code(sav_ltype)
                 em(sprintf('\timulq\t$%d, %%rbx', elem_size(sav_ltype)));
             end
             em('\tpopq\t%rax');         % old value
@@ -2938,9 +2997,8 @@ while token == 43 || token == 45   % '+' '-'
             em('\tsubsd\t%xmm1, %xmm0');
         end
         etype = 6;
-    elseif t >= 2 && t ~= 7 && t ~= 9   % the left is a pointer (the
-        % 2-/4-byte integer VALUE codes 7/9 are not pointers; only their
-        % pointer codes 9/11 are)
+    elseif is_ptr_code(t)          % the left is a pointer (the value
+        % codes that collide with pointer codes are excluded by is_ptr_code)
         em('\tmovq\t%rax, %rbx');   % R -> rbx
         em('\tpopq\t%rax');   % L
         if op == 45 && rhs_t >= 2
@@ -3123,10 +3181,7 @@ if token == 40              % '(': a cast (type)unary or parenthesised expr
                 estruc = 1;
             elseif cl_isarr || cbase == 0 || cbase == 1
                 % (int[3]){…} / (int[]){…} / (char[..]){…}: an array
-                elem = 8;
-                if cbase == 1
-                    elem = 1;
-                end
+                elem = tsize(cbase);
                 if isempty(cl_dims)
                     % unsized: count the top-level elements (peek)
                     cs_si = si; cs_tok = token; cs_tv = token_val; cs_id = idname;
@@ -3160,11 +3215,7 @@ if token == 40              % '(': a cast (type)unary or parenthesised expr
                 off = -(fbytes + nbytes);
                 fbytes = fbytes + nbytes;
                 for k = 1:numel(vals)
-                    if elem == 1
-                        em(sprintf('\tmovb\t$%d, %d(%%rbp)', vals(k), off + k - 1));
-                    else
-                        em(sprintf('\tmovq\t$%d, %d(%%rbp)', vals(k), off + 8 * (k - 1)));
-                    end
+                    em_imm_store(vals(k), sprintf('%d(%%rbp)', off + elem * (k - 1)), elem);
                 end
                 em(sprintf('\tleaq\t%d(%%rbp), %%rax', off));
                 etype = cbase + 2;
@@ -3185,18 +3236,12 @@ if token == 40              % '(': a cast (type)unary or parenthesised expr
                 if neg
                     v = -v;
                 end
-                if cbase == 1
-                    em(sprintf('\tmovb\t$%d, -1(%%rbp)', mod(v, 256)));
-                    fbytes = max(fbytes, 1);
-                    em('\tleaq\t-1(%rbp), %rax');
-                    etype = 1;
-                else
-                    off = -(fbytes + 8);
-                    fbytes = fbytes + 8;
-                    em(sprintf('\tmovq\t$%d, %d(%%rbp)', v, off));
-                    em(sprintf('\tleaq\t%d(%%rbp), %%rax', off));
-                    etype = 0;
-                end
+                w = tsize(cbase);
+                off = -(fbytes + w);
+                fbytes = fbytes + w;
+                em_imm_store(v, sprintf('%d(%%rbp)', off), w);
+                em(sprintf('\tleaq\t%d(%%rbp), %%rax', off));
+                etype = cbase;
                 estruc = 0;
             end
         else
@@ -3233,9 +3278,15 @@ if token == 40              % '(': a cast (type)unary or parenthesised expr
                 else
                     em('\tmovl\t%eax, %eax');    % unsigned word
                 end
-            elseif (cbase == 0 || cbase == 5) && cdepth == 0 && etype == 6
-                % (int)x / (unsigned)x : double -> int (truncate toward 0)
-                em('\tcvttsd2siq\t%xmm0, %rax');
+            elseif (cbase == 0 || cbase == 5) && cdepth == 0
+                if etype == 6
+                    em('\tcvttsd2siq\t%xmm0, %rax');
+                end
+                if cbase == 0
+                    em('\tmovslq\t%eax, %rax');   % int: truncate to 32
+                else
+                    em('\tmovl\t%eax, %eax');     % unsigned int
+                end
             end
             etype = cbase + 2 * cdepth;
             estruc = 0;
@@ -3267,18 +3318,12 @@ elseif token == 183         % sizeof: type or expression
         % yields its whole byte size
         sn = numel(out);
         parse_assignment();
-        if etype == 1 || etype == 12
-            sz = 1;
-        elseif curarrsz > 0
+        if curarrsz > 0
             sz = curarrsz;      % a whole array: its total byte size
         elseif estruc
             sz = ssize_of(etype);
-        elseif etype == 7 || etype == 13
-            sz = 2;
-        elseif etype == 9 || etype == 16
-            sz = 4;
         else
-            sz = 8;
+            sz = tsize(etype);
         end
         out(sn+1:numel(out)) = [];
         em(sprintf('\tmovq\t$%d, %%rax', sz));
@@ -3295,22 +3340,12 @@ elseif token == 183         % sizeof: type or expression
                 depth = depth + 1;
                 next();
             end
-            if depth == 0 && base == 1
-                sz = 1;
-            elseif depth == 0 && base == 7
-                sz = 2;                 % short
-            elseif depth == 0 && base == 9
-                sz = 4;                 % word
-            elseif depth == 0 && base == 12
-                sz = 1;                 % unsigned char
-            elseif depth == 0 && base == 13
-                sz = 2;                 % unsigned short
-            elseif depth == 0 && base == 16
-                sz = 4;                 % unsigned word
-            elseif depth == 0 && base >= 1000
+            if depth == 0 && base >= 1000
                 sz = ssize_of(base);
+            elseif depth == 0
+                sz = tsize(base);
             else
-                sz = 8;
+                sz = 8;                 % a pointer
             end
             expect(41);
         else
@@ -3318,18 +3353,12 @@ elseif token == 183         % sizeof: type or expression
             sn = numel(out);
             parse_assignment();
             expect(41);
-            if etype == 1 || etype == 12
-                sz = 1;
-            elseif curarrsz > 0
+            if curarrsz > 0
                 sz = curarrsz;      % a whole array: its total byte size
             elseif estruc
                 sz = ssize_of(etype);
-            elseif etype == 7 || etype == 13
-                sz = 2;             % short / unsigned short
-            elseif etype == 9 || etype == 16
-                sz = 4;             % word / unsigned word
             else
-                sz = 8;
+                sz = tsize(etype);
             end
             out(sn+1:numel(out)) = [];
         end
@@ -3526,7 +3555,7 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
         expect(93);
         if ~isempty(bstride)
             scale = bstride(1);
-        elseif t >= 2
+        elseif is_ptr_code(t)
             scale = elem_size(t);
         else
             fail('pointer type expected for indexing');
@@ -3705,8 +3734,8 @@ for k = numel(ops):-1:1
             elseif etype == 6
                 em('\tmovsd\t(%rax), %xmm0');
                 estruc = 0;
-            elseif etype == 1 || etype == 7 || etype == 9 || ...
-                    etype == 12 || etype == 13 || etype == 16
+            elseif etype == 0 || etype == 1 || etype == 5 || etype == 7 || ...
+                    etype == 9 || etype == 12 || etype == 13 || etype == 16
                 em_val(etype);
                 estruc = 0;
             else
@@ -3756,7 +3785,7 @@ function incdec(op, t, post)
 % pointers, 8 otherwise). post=1 leaves the OLD value in rax; post=0 the NEW.
 global out
 scale = 1;
-if t >= 2 && t ~= 3
+if is_ptr_code(t)
     scale = elem_size(t);
 end
 em('\tpushq\t%rax');            % save the address
@@ -3783,13 +3812,7 @@ else
 end
 if post
     em('\tpopq\t%rcx');         % the address
-    if t == 1
-        em('\tmovb\t%al, (%rcx)');
-    elseif t == 6
-        em('\tmovsd\t%xmm0, (%rcx)');
-    else
-        em('\tmovq\t%rax, (%rcx)');
-    end
+    em_store(t, '(%rcx)');
     if t == 6
         em('\tmovsd\t%xmm2, %xmm0');   % old value
     else
@@ -3797,13 +3820,7 @@ if post
     end
 else
     em('\tpopq\t%rbx');         % the address
-    if t == 1
-        em('\tmovb\t%al, (%rbx)');
-    elseif t == 6
-        em('\tmovsd\t%xmm0, (%rbx)');
-    else
-        em('\tmovq\t%rax, (%rbx)');
-    end
+    em_store(t, '(%rbx)');
 end
 end
 
