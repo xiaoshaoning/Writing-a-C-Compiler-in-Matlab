@@ -542,6 +542,8 @@ elseif (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
         token = 191;            % Register (no-op qualifier)
     elseif strcmp(id, 'static')
         token = 192;            % Static (no-op qualifier)
+    elseif strcmp(id, 'extern')
+        token = 197;            % Extern (no-op qualifier)
     elseif strcmp(id, 'short')
         token = 193;            % Short: the 2-byte integer base (7)
     elseif strcmp(id, 'word')
@@ -949,7 +951,7 @@ function [base, stdef] = parse_basetype()
 global token idname stags enums typedefs
 base = 0;
 stdef = 0;
-while token == 190 || token == 191 || token == 192   % const / register / static: no-ops
+while token == 190 || token == 191 || token == 192 || token == 197   % const/register/static/extern
     next();
 end
 if token == 131             % int
@@ -1849,19 +1851,13 @@ end
 end
 
 function parse_body()
-% parse_body — for void functions, statements until `}` (falling off the
-% end is fine); otherwise main-style statements until the final top-level
-% `return` (mirrors the tutorial — main must end with a return).
-global token cvoid
-if cvoid
-    while token ~= 125          % '}'
-        parse_statement();
-    end
-else
-    while token ~= 130          % return
-        parse_statement();
-    end
-    parse_return_statement();
+% parse_body — statements until the function's closing '}'. C allows a
+% return anywhere, including several of them, labels and dead code after
+% one; the epilogue label collects them all. (This used to stop at the
+% first top-level `return`, so a label after it was a parse error.)
+global token
+while token ~= 125              % '}'
+    parse_statement();
 end
 end
 
@@ -1971,6 +1967,7 @@ function parse_statement()
 global token token_val idname typedefs src si lvars lvartype lvararr lvarstruct lvarstride
 if token == 131 || token == 134 || token == 178 || token == 188 || ...  % int/char/struct/unsigned
    token == 189 || token == 190 || token == 191 || token == 192 || ... % double/const/register/static
+   token == 197 || ...                                                % extern
    token == 193 || token == 194 || token == 195 || token == 196 || ... % short/word/long/signed
    (token == 150 && isfield(typedefs, idname))            % typedef'd type
     parse_declaration();
@@ -2132,6 +2129,7 @@ if token ~= 59              % ';': optional init
     if token == 131 || token == 134 || token == 178 || token == 188 || ...
        token == 189 || token == 190 || token == 191 || token == 192 || ...
        token == 193 || token == 194 || token == 195 || token == 196 || ...
+       token == 197 || ...
        (token == 150 && isfield(typedefs, idname))
         parse_declaration();      % `for (mwSize i = 0; ...)`; consumes ';'
     else
