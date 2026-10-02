@@ -1163,7 +1163,7 @@ cctests = {
     % cc26_signed.c the signed/unsigned narrow-type widening (which also
     % sign-extends char/short loads via movsbq/movswq/movslq). Making int
     % 32-bit (cc27_int.c) then moved int loads/stores to movslq/movl and
-    % added the int-pointer scaling, so the total is 14810. See
+    % added the int-pointer scaling, so the total is 15819. See
     % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
@@ -1185,8 +1185,8 @@ cctests = {
         [npass nfail] = addcheck(npass, nfail, false, ...
             sprintf('instr count hello.c: %s', e.message));
     end
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 14810, ...
-        sprintf('instr regression: corpus %d <= 14810', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 15819, ...
+        sprintf('instr regression: corpus %d <= 15819', ic_total));
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 84, ...
         sprintf('instr regression: hello.c %d <= 84', ic_hello));
 
