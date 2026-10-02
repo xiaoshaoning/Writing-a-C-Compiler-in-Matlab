@@ -2168,13 +2168,17 @@ for k = 1:numel(names)
             end
         end
     elseif vi <= numel(vals)
+        % a scalar member: its own width, not a fixed 8 bytes - writing 8 into
+        % a 4-byte member overruns the next one, and it made an array of
+        % struct elements overlap (the stride says 12, the writes said 16)
         v = vals(vi);
         vi = vi + 1;
-        if mt == 1
-            bytes(off+1) = mod(v, 256);
+        msz = member_elem_size(minfo);
+        if msz == 1
+            bytes(off + 1) = mod(v, 256);
         else
-            for b = 0:7
-                bytes(off+b+1) = mod(floor(v / 2^(8*b)), 256);
+            for b = 0:msz - 1
+                bytes(off + b + 1) = mod(floor(v / 2^(8*b)), 256);
             end
         end
     end
