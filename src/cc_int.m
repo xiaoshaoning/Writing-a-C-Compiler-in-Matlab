@@ -836,7 +836,7 @@ if token == 184         % typedef
     expect(59);
     return;
 end
-if token == 185         % enum
+if token == 185 && enum_defines()   % enum { … }: register the constants
     parse_enum();
     return;
 end
@@ -970,6 +970,22 @@ next();                     % '}'
 expect(59);                 % ';'
 end
 
+function b = enum_defines()
+% enum_defines - is the `enum` at the cursor a definition (`enum [{tag}] {`)
+% rather than a tag reference (`enum Tag x;`)? Leaves the lexer untouched.
+global src si token token_val idname
+save_si = si;
+save_tok = token;
+save_tv = token_val;
+save_id = idname;
+next();                     % 'enum'
+if token == 150             % the tag
+    next();
+end
+b = (token == 123);         % '{'
+si = save_si; token = save_tok; token_val = save_tv; idname = save_id;
+end
+
 function [base, stdef, tdims] = parse_basetype()
 % parse_basetype — parse int/char/struct tag; returns the base type code
 % (0 int, 1 char, 1000+2*stid struct) and, for a struct type DEFINITION at
@@ -1090,6 +1106,9 @@ elseif token == 185         % enum: `typedef enum { … } mxClassID;` —
     next();
     if token == 150         % optional tag
         next();
+        if token ~= 123
+            return;         % `enum Tag` used as a type: an int
+        end
     end
     if token ~= 123
         fail('expected { after enum');
@@ -2073,8 +2092,13 @@ elseif token == 176         % continue
     parse_continue();
 elseif token == 186         % goto
     parse_goto();
-elseif token == 185         % enum { … }; — register the constants
-    parse_enum();
+elseif token == 185         % enum: a definition registers the constants,
+    % a tag reference is a declaration (`enum E e;` - the type is an int)
+    if enum_defines()
+        parse_enum();
+    else
+        parse_declaration();
+    end
 elseif token == 150         % Id: could be a label (`name:`) or an expression
     % peek one token for ':' without disturbing the lexer state
     save_si = si;

@@ -700,6 +700,7 @@ cctests = {
         'cc30_typedef.c', 96;     % typedef of struct/union/pointer/array (compiler track only)
         'cc31_bitfield.c', 96;    % bit-fields (compiler track only)
         'cc32_byval.c', 96;       % struct-by-value args (compiler track only)
+        'cc33_enum.c', 96;        % enum tags as types (compiler track only)
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
