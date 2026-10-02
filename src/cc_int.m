@@ -2451,7 +2451,7 @@ end
 function parse_declaration()
 % declaration := type ('*')* name (('[' size ']')? (',' …)*) ('=' expr)? ';'
 % — storage: char 1 byte, int/pointer 8, struct its size, arrays n*elem.
-global token idname lvars lvartype lvararr lvarstruct lvarstride lvararrsz fbytes token_val
+global token idname lvars lvartype lvararr lvarstruct lvarstride lvararrsz fbytes token_val strtext
 [base, stdef, tdims] = parse_basetype();
 if isa(stdef, 'cell')
     % a local struct definition: register the tag, then either the ';'
@@ -2500,9 +2500,16 @@ while true
         dims = tdims;
         isarr = 1;
     end
+    unsized = 0;
     if token == 91          % '[': array (possibly multi-dimension)
         while token == 91
             next();
+            if token == 93          % `[]`: the size comes from the initializer
+                dims(end+1) = 0;
+                unsized = 1;
+                next();
+                continue;
+            end
             if token ~= 128
                 fail('expected a constant array size');
             end
@@ -2554,6 +2561,27 @@ while true
     if token == 61          % '=': initializer
         next();
         if isarr
+            if unsized
+                % `char s[] = "abc"`: the string's length sets the size (the
+                % NUL included). strtext holds the decoded byte codes.
+                if token ~= 172
+                    fail('an unsized array needs a string initializer');
+                end
+                dims(1) = numel(strtext) + 1;
+                if base >= 1000
+                    elem = ssize_of(base);
+                elseif is_ptr_code(t)
+                    elem = 8;
+                else
+                    elem = tsize(t);
+                end
+                nbytes = prod(dims) * elem;
+                fbytes = fbytes + nbytes;   % it was laid out as zero-sized
+                off = -fbytes;
+                lvars.(name) = off;
+                lvarstride.(name) = cstride_of(dims, elem);
+                lvararrsz.(name) = nbytes;
+            end
             % constant array initializer: stores emitted directly
             vals = parse_arr_init(dims, 1);
             nelem = prod(dims);
