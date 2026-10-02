@@ -6,9 +6,30 @@
 %   matlab.bat -batch "run('tests/run_tests.m');"
 %
 % Exits non-zero if any test fails.
+%
+% Sections. The whole suite compiles the corpus twice and takes ~13 minutes,
+% and a loaded host kills it at a random point (observed deaths at 125..773 of
+% ~817 checks, always with 0 failures). CC_SECTIONS names the expensive parts
+% to run, so any one of them can be verified on its own:
+%
+%   CC_SECTIONS=tables    groups 5-9: the interpretive tables (245 checks, ~2m)
+%   CC_SECTIONS=cctests   the corpus: compile, run, and interpreter parity
+%   CC_SECTIONS=ostests   the gcc-free x86sim output parity table
+%   CC_SECTIONS=instr     the instruction-count regression (142 checks, ~4m)
+%   CC_SECTIONS=cctests,instr   any comma-separated combination
+%
+% Unset (or 'all') runs everything, which is the default.
 
 addpath('src');
 addpath('tests');
+
+cc_sections = getenv('CC_SECTIONS');
+sec_want = @(nm) isempty(cc_sections) || ~isempty(strfind(cc_sections, 'all')) ...
+                || ~isempty(strfind(cc_sections, nm));
+run_cctests = sec_want('cctests');
+run_ostests = sec_want('ostests');
+run_instr   = sec_want('instr');
+run_tables  = sec_want('tables');   % groups 5-9, the interpretive tables
 
 npass = 0;
 nfail = 0;
@@ -75,6 +96,7 @@ catch e
 end
 
 % --- group 5: Phase 3 end-to-end programs (compile + eval, exit codes) ---
+if run_tables
 ptests = {
     'return_2.c',      2;
     'p3_precedence.c', 7;
@@ -373,6 +395,7 @@ catch e
         ~isempty(strfind(e.message, 'bad lvalue in assignment')), ...
         'pp_badassign.c non-lvalue assignment errors');
 end
+end                     % CC_SECTIONS=tables (groups 5-9)
 
 % --- group 10: assembly track (cc_int, gcc-gated) ---
 % Norasandler parts 2-3 (unary + bitwise binary operators). Only runs when
@@ -824,6 +847,7 @@ cctests = {
     if gcc_ok ~= 0
         fprintf('SKIP  gcc-dependent groups (gcc not found)\n');
     else
+    if run_cctests
     for k = 1:size(cctests, 1)
         try
             got = -999;
@@ -858,6 +882,7 @@ cctests = {
                 sprintf('cc_int %s: %s', cctests{k,1}, e.message));
         end
     end
+    end                     % CC_SECTIONS=cctests
     delete('tmp_cc.s');
     delete('tmp_cc.exe');
     % cross-track output parity: programs that print (via the compiler's
@@ -1123,6 +1148,7 @@ cctests = {
     % x86sim stdout parity: the same printing programs must produce the same
     % stdout through the gcc-free simulator as through the interpreter.
     so2 = 0;
+    if run_ostests
     for s2k = 1:numel(ostests)
         try
             delete('tmp_cc.s');
@@ -1146,6 +1172,7 @@ cctests = {
                 sprintf('x86sim output parity %s: %s', ostests{s2k}, e.message));
         end
     end
+    end                     % CC_SECTIONS=ostests
 
     % instruction-count regression: the corpus's total emitted
     % instructions must stay at or below the recorded ceiling, so a future
@@ -1175,6 +1202,7 @@ cctests = {
     % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
+    if run_instr
     for ick = 1:size(cctests, 1)
         try
             delete('tmp_cc.s');
@@ -1197,6 +1225,7 @@ cctests = {
         sprintf('instr regression: corpus %d <= 18235', ic_total));
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 88, ...
         sprintf('instr regression: hello.c %d <= 88', ic_hello));
+    end                     % CC_SECTIONS=instr
 
     % peephole pass unit fixtures — one synthetic input per fold rule,
     % asserting the rewrite fires (and its forbidden line disappears).
