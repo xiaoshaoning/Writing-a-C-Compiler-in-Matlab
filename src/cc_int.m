@@ -1939,50 +1939,141 @@ r = t - 2000;
 end
 
 function vals = parse_struct_init(sbase)
-% parse_struct_init — `{ m1, m2, … }` for a struct-value initializer:
-% member values in declaration order; a nested struct member takes a
-% nested `{…}`. Returns the flattened leaf values (missing members -> 0
-% via the caller's byte layout).
-global token sdefs token_val
+% parse_struct_init - `{ m1, m2, … }` for a FILE-SCOPE struct value:
+% member values in declaration order, `.name = v` designating one, a nested
+% `{…}` for a struct member, and a braced or flat group of leaves for an
+% array member. Returns the flattened leaf values; the caller's byte layout
+% zero-fills whatever is not mentioned.
+global token idname sdefs token_val
 next();                     % '{'
 stid = (sbase - 1000) / 2;
 names = sdefs{stid}{3};
-if numel(sdefs{stid}) >= 4 && sdefs{stid}{4}
-    nmem = 1;               % a union initializer sets its first member
+mm = sdefs{stid}{2};
+isunion = numel(sdefs{stid}) >= 4 && sdefs{stid}{4};
+if isunion
+    nlim = 1;               % a union initializer sets its first member
 else
-    nmem = numel(names);
+    nlim = numel(names);
 end
 vals = [];
-for k = 1:nmem
-    if token == 125
+k = 1;                      % the next positional member
+while true
+    if token == 125 || token == 0
         break;              % remaining members are zero-initialized
     end
-    minfo = sdefs{stid}{2}.(names{k});
+    if token ~= 46 && k > nlim
+        break;              % the positional members are exhausted
+    end
+    if token == 46          % '.name = value': designated
+        next();
+        if token ~= 150
+            fail('expected a member name after .');
+        end
+        dname = idname;
+        next();
+        expect(61);         % '='
+        if ~isfield(mm, dname)
+            fail(sprintf('no member %s in the struct', dname));
+        end
+        minfo = mm.(dname);
+        if isunion
+            k = 1;          % every union member sits at offset 0
+        else
+            k = 1;
+            for q = 1:numel(names)
+                if strcmp(names{q}, dname)
+                    k = q;
+                end
+            end
+        end
+    else
+        minfo = mm.(names{k});
+    end
+    cur = 1;                % the member's own leaf offset
+    for q = 1:k - 1
+        cur = cur + member_leaves(mm.(names{q}));
+    end
+    % the values are one FLAT leaf list, so a member's leaves have to be
+    % written at their own offset: skipped members are zero, and a member
+    % named twice is overwritten (C's last-write-wins)
+    nleaf = member_leaves(minfo);
+    if numel(vals) < cur + nleaf - 1
+        vals = [vals, zeros(1, cur + nleaf - 1 - numel(vals))];
+    end
     mt = minfo{2};
     if token == 123 && is_sval(mt)
-        sub = parse_struct_init(mt);    % a nested struct value
-        vals = [vals, sub];
-    else
-        neg = 0;
-        if token == 45
-            neg = 1;
+        sub = parse_struct_init(mt);            % a nested struct value
+        vals(cur:cur + numel(sub) - 1) = sub;
+    elseif nleaf > 1
+        braced = (token == 123);
+        if braced
             next();
         end
-        if token ~= 128
-            fail('expected a constant struct initializer');
+        got = [];
+        for q = 1:nleaf
+            if token == 125 || token == 0 || (token == 46 && ~braced)
+                break;
+            end
+            got(end+1) = one_const();
+            if token == 44 && q < nleaf
+                next();     % between this member's own elements
+            end
         end
-        v = double(token_val);
-        next();
-        if neg
-            v = -v;
+        if braced && token == 125
+            next();
         end
-        vals(end+1) = v;
+        vals(cur:cur + numel(got) - 1) = got;
+    else
+        vals(cur) = one_const();
     end
+    k = k + 1;
     if token == 44
         next();
     end
 end
-expect(125);
+if token == 125
+    next();                 % '}'
+end
+end
+
+function n = member_leaves(minfo)
+% member_leaves - how many flattened leaves a member contributes: a nested
+% struct contributes its own members' leaves (recursively), an array its
+% element count, anything else one.
+global sdefs
+mt = minfo{2};
+if is_sval(mt)
+    stid = (mt - 1000) / 2;
+    nm = sdefs{stid}{3};
+    mm = sdefs{stid}{2};
+    n = 0;
+    for q = 1:numel(nm)
+        n = n + member_leaves(mm.(nm{q}));
+    end
+elseif numel(minfo) >= 4 && minfo{4} > 1
+    n = minfo{4};
+else
+    n = 1;
+end
+end
+
+function v = one_const()
+% one_const - a sign and a number, the same restriction the array
+% initializer path has.
+global token token_val
+neg = 0;
+if token == 45              % '-'
+    neg = 1;
+    next();
+end
+if token ~= 128
+    fail('expected a constant struct initializer');
+end
+v = double(token_val);
+next();
+if neg
+    v = -v;
+end
 end
 
 function bytes = struct_bytes(vals, sbase)
@@ -1993,20 +2084,47 @@ global sdefs
 stid = (sbase - 1000) / 2;
 bytes = zeros(1, sdefs{stid}{1});
 vi = 1;
-[bytes, ~] = place_members(bytes, stid, vals, vi);
+[bytes, ~] = place_members(bytes, stid, vals, vi, 0);
 end
 
-function [bytes, vi] = place_members(bytes, stid, vals, vi)
-% place_members — recursive layout pass; vi is the next leaf value index.
+function [bytes, vi] = place_members(bytes, stid, vals, vi, base_off)
+% place_members - recursive layout pass; vi is the next leaf value index and
+% base_off the byte offset this struct itself starts at. Without base_off a
+% nested struct member would write its fields at ITS OWN offsets, on top of
+% the enclosing struct's first members.
 global sdefs
 names = sdefs{stid}{3};
 for k = 1:numel(names)
     minfo = sdefs{stid}{2}.(names{k});
-    off = minfo{1};
+    off = base_off + minfo{1};
     mt = minfo{2};
     if is_sval(mt)
         if vi <= numel(vals)
-            [bytes, vi] = place_members(bytes, (mt - 1000) / 2, vals, vi);
+            [bytes, vi] = place_members(bytes, (mt - 1000) / 2, vals, vi, off);
+        end
+    elseif numel(minfo) >= 4 && minfo{4} > 1
+        % an array member: one leaf per element, esz bytes apart, or the
+        % values would all land on the member's first slot
+        if is_ptr_code(mt)
+            esz = 8;
+        elseif mt == 1
+            esz = 1;
+        else
+            esz = tsize(mt);
+        end
+        for q = 1:minfo{4}
+            if vi > numel(vals)
+                break;
+            end
+            v = vals(vi);
+            vi = vi + 1;
+            if esz == 1
+                bytes(off + q) = mod(v, 256);
+            else
+                for bb = 0:esz - 1
+                    bytes(off + (q - 1) * esz + bb + 1) = mod(floor(v / 2^(8*bb)), 256);
+                end
+            end
         end
     elseif vi <= numel(vals)
         v = vals(vi);
