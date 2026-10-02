@@ -1164,11 +1164,23 @@ while token ~= 125          % '}'
     else
         st = tsize(mbase);      % the member's element width
     end
+    bw = 0;
+    if token == 58          % ':': a bit-field width
+        next();
+        if token ~= 128
+            fail('expected a bit-field width');
+        end
+        bw = double(token_val);
+        next();
+        if bw < 0 || bw > 8 * st
+            fail('bad bit-field width');
+        end
+    end
     nbytes = st * asz;
     if isunion
         % every member shares offset 0; the union is as large as its
         % largest member (C 6.7.2.1)
-        membermap.(name) = {0, mt};
+        membermap.(name) = {0, mt, bw};
         if nbytes > off
             off = nbytes;
         end
@@ -1176,7 +1188,7 @@ while token ~= 125          % '}'
         if mt ~= 1
             off = off + mod(-off, 8);   % 8-align non-char members
         end
-        membermap.(name) = {off, mt};
+        membermap.(name) = {off, mt, bw};
         off = off + nbytes;
     end
     mnames{end+1} = name;
@@ -1257,6 +1269,12 @@ elseif sz == 4
 else
     d = '	.quad	';
 end
+end
+
+function b = is_unsigned_type(t)
+% is_unsigned_type - t is one of the unsigned base types (for bit-field
+% sign extension and unsigned arithmetic).
+b = (t == 5 || t == 12 || t == 13 || t == 16 || t == 20);
 end
 
 function b = is_ptr_code(t)
@@ -3742,6 +3760,19 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
         else
             estruc = 0;
             em_val(etype);
+            if numel(mem) >= 3 && mem{3} > 0
+                % a bit-field: keep only its low `width` bits (sign- or
+                % zero-extended). The field owns a whole 8-byte slot, so
+                % the store needs no change; masking on load is enough for
+                % every C-level observation.
+                bw = mem{3};
+                em(sprintf('\tshlq\t$%d, %%rax', 64 - bw));
+                if is_unsigned_type(etype)
+                    em(sprintf('\tshrq\t$%d, %%rax', 64 - bw));
+                else
+                    em(sprintf('\tsarq\t$%d, %%rax', 64 - bw));
+                end
+            end
         end
     else                    % postfix ++/--
         op = token;
@@ -3823,6 +3854,19 @@ function ok = lvalue_addr()
 % drop it so eax holds the lvalue's address; a struct value / address is
 % already in rax. Returns success.
 global out
+% a bit-field member: the load is followed by its shlq + sarq/shrq extraction.
+% Drop all three (the address beneath is already in rax); the store writes the
+% whole slot and the masking happens again on the next load.
+if numel(out) >= 3 && ...
+   (strncmp(out{end}, [char(9), 'sarq'], 5) || strncmp(out{end}, [char(9), 'shrq'], 5)) && ...
+   strncmp(out{end - 1}, [char(9), 'shlq'], 5) && ...
+   ~isempty(strfind(out{end - 2}, sprintf('\t(%%rax)')))
+    out(end) = [];
+    out(end) = [];
+    out(end) = [];
+    ok = 1;
+    return;
+end
 if numel(out) >= 1 && ...
    (strcmp(out{end}, sprintf('\tmovq\t(%%rax), %%rax')) || ...
     strcmp(out{end}, sprintf('\tmovzbl\t(%%rax), %%eax')) || ...

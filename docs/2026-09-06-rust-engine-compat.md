@@ -571,9 +571,11 @@ The full `run_all` could not be completed here — the loaded host kills the
 process mid-run at random points with 0 failing checks (the C clone behaves
 the same on this host).
 
-One shared failure is **not** engine-specific: the gcc cross-track gate
-reports 15/20 under *both* engines with the identical five cases
-(`mxcell_get`, `mxstruct_get`, `mxsparse_build`, `mxsparse_get`, `mxprint`).
-Two independent runtimes agreeing against gcc points at this repo's mx shim /
-output parsing (or a corpus/gcc-shim mismatch), not at one runtime — see
+The gcc cross-track gate reported 15/20 under *both* engines with the
+identical five cases — which pointed at this repo, and it was: `x86sim`
+stored the mex input count with 8 bytes into the 4-byte `int __mex_nrhs`
+(clobbering the next global, a format string in `mxprint`'s layout), and
+`mx_preamble`'s `mwSize`/`mwIndex` had silently become 4-byte ints while the
+sparse layout indexes with 8-byte words. Both fixed; the gate is **20/20**
+and `run_all` 5/5. See
 `MATLAB_in_C/docs/BUG_REPORT_2026-10-02_mex_cross_track_regression.md`.
