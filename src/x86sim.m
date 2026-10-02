@@ -263,7 +263,9 @@ if nargin >= 2 && iscell(inputs)
         sim_storeN(pbase + 8 * (k - 1), h, 8);
     end
     if nrsec >= 0
-        sim_storeN(nrsec, nk, 8);
+        sim_storeN(nrsec, nk, 4);   % __mex_nrhs is a 4-byte int: an 8-byte
+                                    % store clobbers the 4 bytes after it (a
+                                    % string literal, in the mxprint layout)
     end
 end
 while pc >= 1 && pc <= n && simdone == 0
