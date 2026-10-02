@@ -470,6 +470,17 @@ frame); and the function-pointer call path counts pushed words, not
 arguments (the same defect fixed on the direct path). Guards
 `cc33_enum.c` … `cc38_funptr.c`; suite 810/810; ceiling 14810 → **15819**.
 
+**`mx_preamble` is one row everywhere (2026-10-02).** The declaration
+block carried a comment-only block inside its `[...]` literal, and a
+newline inside brackets starts a new row: the preamble was a 1x843 row on
+the Oct-2 clone but a **2x758 matrix** on the release build and the Rust
+engine (and in real MATLAB), so `fprintf('%s', pd)` wrote it column-wise and
+the compiler said "expected a type" - the mx gates passed on one runtime
+only. The notes moved above `txt = [` (where they cannot change the shape),
+and the block is now `1x843` with identical content on all three runtimes;
+the release build runs mx smoke 6/6, mex_run smoke 6/6 and the gcc
+cross-track gate **20/20**, so one stable runtime covers every gate.
+
 **32-bit intermediate arithmetic (2026-10-02).** Expression temporaries
 were 64-bit, so C's wraparound did not happen: `(long)(x*x)` for x = 50000
 gave 2500000000 where gcc gives -1794967296, and an `int` product could stay

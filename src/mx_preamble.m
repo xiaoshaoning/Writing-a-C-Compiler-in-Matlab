@@ -5,18 +5,30 @@ function txt = mx_preamble()
 % source relies on are provided here directly instead (typedefs + enums;
 % no function prototypes needed — every mx/mex call becomes a shim and
 % cc_int's libargt/libret tables drive promotions and return types).
+%
+% The block is ONE row of characters, so every line inside the [...] ends
+% with `...`.  A comment-only line does not, and a newline inside brackets
+% starts a new row: the notes below used to sit inside the literal, which
+% made it a 2-row char matrix on the release build and the Rust engine (and
+% in real MATLAB) while the Oct-2 build was lenient and kept one row — so
+% the same preamble compiled on one runtime and not the others.  They live
+% here now, where they cannot affect the shape:
+%
+%   mwSize/mwIndex are 8 bytes: the mx layout (and the real API) index
+%   ir/jc with size_t words.
+%
+%   mxChar/mxLogical are 8 bytes, not MathWorks' 2: this track's storage
+%   model gives char and logical data ONE ELEMENT PER 8-BYTE SLOT (x86sim.m
+%   sim_mx_alloc forces es = 8 for classes 3 and 4, and mxCreateString
+%   stores them with sim_storeN(..., 8)).  The compiled element width has to
+%   be the slot width - declared int (4) it walked half a slot per element
+%   and read code, padding, code: mxchar.c's get op answered [97 0 98] for
+%   'abc' where gcc's packed read answers [97 98 99].
 txt = [
     'typedef int mxArray;' 10 ...
     'typedef int MATFile;' 10 ...
-    'typedef long mwSize;' 10 ...     % 8 bytes: the mx layout (and the real
-    'typedef long mwIndex;' 10 ...    % API) index ir/jc with size_t words
-    % 8 bytes, not MathWorks' 2: this track's storage model gives char and
-    % logical data ONE ELEMENT PER 8-BYTE SLOT (x86sim.m sim_mx_alloc forces
-    % es = 8 for classes 3 and 4, and mxCreateString stores them with
-    % sim_storeN(..., 8)).  The compiled element width has to be the slot
-    % width - declared int (4) it walked half a slot per element and read
-    % code, padding, code: mxchar.c's get op answered [97 0 98] for 'abc'
-    % where gcc's packed read answers [97 98 99].
+    'typedef long mwSize;' 10 ...
+    'typedef long mwIndex;' 10 ...
     'typedef long mxChar;' 10 ...
     'typedef long mxLogical;' 10 ...
     'typedef unsigned int mxComplexity;' 10 ...
@@ -41,4 +53,3 @@ txt = [
     'enum { mxNULL = -1 };' 10 ...
     ];
 end
-
