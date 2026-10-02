@@ -470,6 +470,17 @@ frame); and the function-pointer call path counts pushed words, not
 arguments (the same defect fixed on the direct path). Guards
 `cc33_enum.c` … `cc38_funptr.c`; suite 810/810; ceiling 14810 → **15819**.
 
+**The aggregate-initializer family (2026-10-02).** Five items, one commit
+each: C's brace elision (`{1,2,3}` meaning `{{1,2},3}`); multi-dimensional
+array members (`int m[2][3]`, with the stride table); `char g[] = "abc";` at
+file scope; designated `.name = v` for file-scope structs (which also
+exposed two pre-existing bugs: `place_members` recursed into a nested struct
+without adding its offset, and a global initializer put every element of an
+array member on the member's first slot); and `enum { A } v;` at both
+scopes plus a per-function symbol for static locals, so two functions may
+each have a `static int n`. Guards `cc40`-`cc44`. Suite 816/816; ceiling
+16704 → **17764**.
+
 **`mx_preamble` is one row everywhere (2026-10-02).** The declaration
 block carried a comment-only block inside its `[...]` literal, and a
 newline inside brackets starts a new row: the preamble was a 1x843 row on
