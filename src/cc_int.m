@@ -2452,6 +2452,8 @@ function parse_declaration()
 % declaration := type ('*')* name (('[' size ']')? (',' …)*) ('=' expr)? ';'
 % — storage: char 1 byte, int/pointer 8, struct its size, arrays n*elem.
 global token idname lvars lvartype lvararr lvarstruct lvarstride lvararrsz fbytes token_val strtext
+global globals gtype garr gstruct gvararrsz gstride glist
+was_static = (token == 192);    % a `static` local keeps its value
 [base, stdef, tdims] = parse_basetype();
 if isa(stdef, 'cell')
     % a local struct definition: register the tag, then either the ';'
@@ -2555,68 +2557,107 @@ while true
         lvarstruct.(name) = 0;
         lvararrsz.(name) = 0;
     end
-    off = -(fbytes + nbytes);
-    fbytes = fbytes + nbytes;
-    lvars.(name) = off;
-    if token == 61          % '=': initializer
-        next();
+    if was_static
+        % A static local lives in the data section, not in the frame, so it
+        % keeps its value across calls. It is registered as a global under
+        % its own name and emit_globals defines it; only a constant
+        % initializer is supported (an absent one zero-fills).
+        if isfield(globals, name) || isfield(lvars, name)
+            fail(sprintf('static local %s clashes with another name', name));
+        end
+        globals.(name) = 1;
+        gtype.(name) = t;
+        garr.(name) = isarr;
+        gstruct.(name) = (base >= 1000 && depth == 0 && ~is_fptr);
         if isarr
-            if unsized
-                % `char s[] = "abc"`: the string's length sets the size (the
-                % NUL included). strtext holds the decoded byte codes.
-                if token ~= 172
-                    fail('an unsized array needs a string initializer');
+            gvararrsz.(name) = nbytes;
+            gstride.(name) = lvarstride.(name);
+        else
+            gvararrsz.(name) = 0;
+            gstride.(name) = [];
+        end
+        initv = [];
+        if token == 61          % '='
+            next();
+            neg = 0;
+            if token == 45
+                neg = 1;
+                next();
+            end
+            if token ~= 128
+                fail('a static local needs a constant initializer');
+            end
+            initv = double(token_val);
+            next();
+            if neg
+                initv = -initv;
+            end
+        end
+        glist{end+1} = {name, t, isarr, dims, initv, base};
+    else
+        off = -(fbytes + nbytes);
+        fbytes = fbytes + nbytes;
+        lvars.(name) = off;
+        if token == 61          % '=': initializer
+            next();
+            if isarr
+                if unsized
+                    % `char s[] = "abc"`: the string's length sets the size (the
+                    % NUL included). strtext holds the decoded byte codes.
+                    if token ~= 172
+                        fail('an unsized array needs a string initializer');
+                    end
+                    dims(1) = numel(strtext) + 1;
+                    if base >= 1000
+                        elem = ssize_of(base);
+                    elseif is_ptr_code(t)
+                        elem = 8;
+                    else
+                        elem = tsize(t);
+                    end
+                    nbytes = prod(dims) * elem;
+                    fbytes = fbytes + nbytes;   % it was laid out as zero-sized
+                    off = -fbytes;
+                    lvars.(name) = off;
+                    lvarstride.(name) = cstride_of(dims, elem);
+                    lvararrsz.(name) = nbytes;
                 end
-                dims(1) = numel(strtext) + 1;
+                % constant array initializer: stores emitted directly
+                vals = parse_arr_init(dims, 1);
+                nelem = prod(dims);
                 if base >= 1000
                     elem = ssize_of(base);
                 elseif is_ptr_code(t)
-                    elem = 8;
+                    elem = 8;           % an array of pointers
                 else
                     elem = tsize(t);
                 end
-                nbytes = prod(dims) * elem;
-                fbytes = fbytes + nbytes;   % it was laid out as zero-sized
-                off = -fbytes;
-                lvars.(name) = off;
-                lvarstride.(name) = cstride_of(dims, elem);
-                lvararrsz.(name) = nbytes;
-            end
-            % constant array initializer: stores emitted directly
-            vals = parse_arr_init(dims, 1);
-            nelem = prod(dims);
-            if base >= 1000
-                elem = ssize_of(base);
-            elseif is_ptr_code(t)
-                elem = 8;           % an array of pointers
-            else
-                elem = tsize(t);
-            end
-            if numel(vals) > nelem
-                fail('too many array initializers');
-            end
-            while numel(vals) < nelem
-                vals(end+1) = 0;    % C zero-fills the rest
-            end
-            for k = 1:numel(vals)
-                em_imm_store(vals(k), sprintf('%d(%%rbp)', off + (k-1)*elem), elem);
-            end
-        elseif base >= 1000 && depth == 0 && token == 123
-            % a struct value: `{ … }` - one store per member, in order
-            struct_init(base, off);
-        else
-            parse_assignment();
-            if base >= 1000 && depth == 0
-                % struct value initializer: copy ssize bytes from rax
-                em(sprintf('\tleaq\t%d(%%rbp), %%rcx', off));
-                for kk = 1:ssize_of(base)/8
-                    em('\tmovq\t(%rax), %rdx');
-                    em('\tmovq\t%rdx, (%rcx)');
-                    em('\taddq\t$8, %rax');
-                    em('\taddq\t$8, %rcx');
+                if numel(vals) > nelem
+                    fail('too many array initializers');
                 end
+                while numel(vals) < nelem
+                    vals(end+1) = 0;    % C zero-fills the rest
+                end
+                for k = 1:numel(vals)
+                    em_imm_store(vals(k), sprintf('%d(%%rbp)', off + (k-1)*elem), elem);
+                end
+            elseif base >= 1000 && depth == 0 && token == 123
+                % a struct value: `{ … }` - one store per member, in order
+                struct_init(base, off);
             else
-                em_store(t, sprintf('%d(%%rbp)', off));
+                parse_assignment();
+                if base >= 1000 && depth == 0
+                    % struct value initializer: copy ssize bytes from rax
+                    em(sprintf('\tleaq\t%d(%%rbp), %%rcx', off));
+                    for kk = 1:ssize_of(base)/8
+                        em('\tmovq\t(%rax), %rdx');
+                        em('\tmovq\t%rdx, (%rcx)');
+                        em('\taddq\t$8, %rax');
+                        em('\taddq\t$8, %rcx');
+                    end
+                else
+                    em_store(t, sprintf('%d(%%rbp)', off));
+                end
             end
         end
     end
