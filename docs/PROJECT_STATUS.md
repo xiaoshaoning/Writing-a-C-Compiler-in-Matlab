@@ -483,6 +483,14 @@ pointer element as 8, and array decay goes through `padd` so an array of
 pointers (`const mxArray *prhs[]`) is right. `char **dir = matGetDir(...)`
 now compiles and runs: the mx cross-track gate is back to **20/20**.
 
+A follow-up the suite caught: `typedef int *ip;` puts a *pointer* code in the
+`base`, where every `base >= 1000` test read it as a struct value
+(`ssize_of(4001)` - an index error in `cc30_typedef.c`). Those 15 tests now
+go through `is_struct_code`, which excludes the pointer band and the
+function-pointer space. Verified: suite **810/810**, all four gates, and the
+32-program differential. The ceiling is unchanged at 15819 - an earlier
+15674 was measured while `cc30_typedef` failed to compile.
+
 **Known gap found while checking the gate:** `char **d; d[0]` fails with
 "pointer type expected for indexing". `char **` is type code 5
 (`1 + 2*2`), which is also the `unsigned int` code, and `is_ptr_code`

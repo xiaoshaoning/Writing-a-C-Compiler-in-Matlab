@@ -1176,7 +1176,7 @@ while token ~= 125          % '}'
             fail('bad array size');
         end
     end
-    if mbase >= 1000 && depth == 0
+    if is_struct_code(mbase) && depth == 0
         st = ssize_of(mbase);
     elseif depth > 0
         st = 8;                 % a pointer member
@@ -1333,6 +1333,13 @@ if is_ptr_code(t)
 else
     c = pcode(t, 1);
 end
+end
+
+function b = is_struct_code(t)
+% is_struct_code - t is a struct/union VALUE type code. Not a pointer (a
+% typedef can name one, e.g. `typedef int *ip;`, and that code is in the
+% pointer band) and not a function pointer.
+b = t >= 1000 && t < 4000 && ~is_ptr_code(t) && ~is_fptr_type(t);
 end
 
 function b = is_charptr(t)
@@ -1627,13 +1634,13 @@ while true
         gtype.(name) = t;
     end
     garr.(name) = isarr;
-    gstruct.(name) = (~isarr) && (depth == 0) && (base >= 1000);
-    if base >= 1000
+    gstruct.(name) = (~isarr) && (depth == 0) && (is_struct_code(base));
+    if is_struct_code(base)
         sbase = base;
     else
         sbase = 0;
     end
-    if isarr && base >= 1000
+    if isarr && is_struct_code(base)
         gstride.(name) = cstride_of(dims, ssize_of(base));
         gvararrsz.(name) = prod(dims) * ssize_of(base);
     elseif isarr && is_ptr_code(t)
@@ -1658,7 +1665,7 @@ while true
         elseif token == 172     % string literal: pointer init
             initv = [double('S'), strtext];
             next();
-        elseif ~isarr && base >= 1000 && depth == 0
+        elseif ~isarr && is_struct_code(base) && depth == 0
             % struct-value initializer: { m1, m2, … } -> byte layout
             initv = {'B', struct_bytes(parse_struct_init(base), base)};
         else
@@ -2075,7 +2082,7 @@ while token ~= 41           % ')'
         decayed = 1;
     end
     types{end+1} = t;
-    if base >= 1000 && depth == 0 && ~decayed
+    if is_struct_code(base) && depth == 0 && ~decayed
         sizes{end+1} = ssize_of(t);     % by-value struct
         bvs{end+1} = 1;
     else
@@ -2585,7 +2592,7 @@ while true
         isarr = 1;
     end
     if isarr
-        if base >= 1000
+        if is_struct_code(base)
             elem = ssize_of(base);
         elseif is_ptr_code(t)
             elem = 8;               % an array of pointers
@@ -2604,7 +2611,7 @@ while true
         lvararr.(name) = 0;
         lvarstruct.(name) = 0;
         lvararrsz.(name) = 0;
-    elseif ~is_fptr && base >= 1000 && depth == 0
+    elseif ~is_fptr && is_struct_code(base) && depth == 0
         nbytes = ssize_of(base);    % a struct value
         lvartype.(name) = t;
         lvararr.(name) = 0;
@@ -2628,7 +2635,7 @@ while true
         globals.(name) = 1;
         gtype.(name) = t;
         garr.(name) = isarr;
-        gstruct.(name) = (base >= 1000 && depth == 0 && ~is_fptr);
+        gstruct.(name) = (is_struct_code(base) && depth == 0 && ~is_fptr);
         if isarr
             gvararrsz.(name) = nbytes;
             gstride.(name) = lvarstride.(name);
@@ -2668,7 +2675,7 @@ while true
                         fail('an unsized array needs a string initializer');
                     end
                     dims(1) = numel(strtext) + 1;
-                    if base >= 1000
+                    if is_struct_code(base)
                         elem = ssize_of(base);
                     elseif is_ptr_code(t)
                         elem = 8;
@@ -2685,7 +2692,7 @@ while true
                 % constant array initializer: stores emitted directly
                 vals = parse_arr_init(dims, 1);
                 nelem = prod(dims);
-                if base >= 1000
+                if is_struct_code(base)
                     elem = ssize_of(base);
                 elseif is_ptr_code(t)
                     elem = 8;           % an array of pointers
@@ -2701,12 +2708,12 @@ while true
                 for k = 1:numel(vals)
                     em_imm_store(vals(k), sprintf('%d(%%rbp)', off + (k-1)*elem), elem);
                 end
-            elseif base >= 1000 && depth == 0 && token == 123
+            elseif is_struct_code(base) && depth == 0 && token == 123
                 % a struct value: `{ … }` - one store per member, in order
                 struct_init(base, off);
             else
                 parse_assignment();
-                if base >= 1000 && depth == 0
+                if is_struct_code(base) && depth == 0
                     % struct value initializer: copy ssize bytes from rax
                     em(sprintf('\tleaq\t%d(%%rbp), %%rcx', off));
                     for kk = 1:ssize_of(base)/8
@@ -3487,7 +3494,7 @@ if token == 40              % '(': a cast (type)unary or parenthesised expr
             if cdepth > 0
                 fail('pointer compound literals are not supported');
             end
-            if cbase >= 1000 && ~cl_isarr
+            if is_struct_code(cbase) && ~cl_isarr
                 % (struct P){…}: a struct value
                 vals = parse_struct_init(cbase);
                 bytes = struct_bytes(vals, cbase);
@@ -3539,7 +3546,7 @@ if token == 40              % '(': a cast (type)unary or parenthesised expr
                     em_imm_store(vals(k), sprintf('%d(%%rbp)', off + elem * (k - 1)), elem);
                 end
                 em(sprintf('\tleaq\t%d(%%rbp), %%rax', off));
-                etype = cbase + 2;
+                etype = pcode(cbase, 1);   % the array decays to a pointer
                 estruc = 0;
             else
                 % (int){5}: a scalar compound literal
@@ -3609,7 +3616,7 @@ if token == 40              % '(': a cast (type)unary or parenthesised expr
                     em('\tmovl\t%eax, %eax');     % unsigned int
                 end
             end
-            etype = cbase + 2 * cdepth;
+            etype = pcode(cbase, cdepth);
             estruc = 0;
         end
     else
@@ -3666,7 +3673,7 @@ elseif token == 183         % sizeof: type or expression
                 depth = depth + 1;
                 next();
             end
-            if depth == 0 && base >= 1000
+            if depth == 0 && is_struct_code(base)
                 sz = ssize_of(base);
             elseif depth == 0
                 sz = tsize(base);
