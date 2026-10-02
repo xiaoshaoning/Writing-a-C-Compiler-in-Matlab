@@ -459,6 +459,25 @@ Interpreter divergence: `xc`'s VM word is 8 bytes (`sizeof(int)` = 8), its
 own model (a port artifact of xc.c's int-word VM); `cc13_si1.c`/`cc13_si5.c`
 left the cross-track parity list for that reason.
 
+**Six dialect items (2026-10-02).** From the feature sweep, in order:
+`enum Tag` is a type (the tag names an int; a non-consuming peek separates a
+definition from a tag reference); local struct aggregate initializers
+(positional, nested braces, `.name = v`, C zero-fill); array members (they
+decay to a pointer, take a nested initializer, and `sizeof` sees the array);
+`char s[] = "abc"` takes its size from the string (NUL included, escapes one
+byte); `static` locals persist (they live in the data section, not the
+frame); and the function-pointer call path counts pushed words, not
+arguments (the same defect fixed on the direct path). Guards
+`cc33_enum.c` … `cc38_funptr.c`; suite 810/810; ceiling 14810 → **15819**.
+
+**Known gap found while checking the gate:** `char **d; d[0]` fails with
+"pointer type expected for indexing". `char **` is type code 5
+(`1 + 2*2`), which is also the `unsigned int` code, and `is_ptr_code`
+excludes it - so a doubly-indirected char is not a pointer. Three revisions,
+including the one that scored 20/20, fail identically, so this is
+pre-existing, not a regression. It is why the mx cross-track gate is now
+17-18/20: `matfile`/`matfile_del` declare `char **dir = matGetDir(...)`.
+
 **Struct-by-value arguments, and the call cleanup (2026-10-02).** An
 empirical sweep (32 small C programs, gcc vs ours) found passing a struct by
 value gave field-reversed values: the caller pushed the copy low-address
