@@ -705,6 +705,7 @@ cctests = {
         'cc35_memberarr.c', 96;   % array members (compiler track only)
         'cc36_unsized.c', 96;     % `char s[] = "..."` (compiler track only)
         'cc37_static.c', 96;      % static locals persist (compiler track only)
+        'cc38_funptr.c', 96;      % function pointers with struct args (compiler track only)
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).

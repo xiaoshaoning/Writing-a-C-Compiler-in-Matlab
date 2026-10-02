@@ -3889,20 +3889,25 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
             em('\tpushq\t%rax');
         end
         nargs = 0;
+        pwords = 0;         % words pushed (a by-value struct is several)
         if token ~= 41
             while true
                 parse_assignment();
                 if estruc
-                    % a struct-value arg: copy its full size
+                    % a struct-value arg: copy its full size, highest address
+                    % first so that member 0 lands at the lowest stack address
                     asz = ssize_of(etype);
                     em('\tmovq\t%rax, %rdx');
+                    em(sprintf('\taddq\t$%d, %%rdx', asz - 8));
                     for kk = 1:asz/8
                         em('\tmovq\t(%rdx), %r8');
                         em('\tpushq\t%r8');
-                        em('\taddq\t$8, %rdx');
+                        em('\taddq\t$-8, %rdx');
                     end
+                    pwords = pwords + asz/8;
                 else
                     em('\tpushq\t%rax');
+                    pwords = pwords + 1;
                 end
                 nargs = nargs + 1;
                 if token == 44
@@ -3914,20 +3919,20 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
         end
         expect(41);
         if psret
-            % [fptr][slot][slotptr][args]: the pointer is 8*nargs + 8 + rsz
+            % [fptr][slot][slotptr][args]: the pointer is 8*pwords + 8 + rsz
             % above rsp
-            em(sprintf('\tmovq\t%d(%%rsp), %%rax', 8 * nargs + 8 + prsz));
-        elseif nargs > 0
-            em(sprintf('\tmovq\t%d(%%rsp), %%rax', 8 * nargs));
+            em(sprintf('\tmovq\t%d(%%rsp), %%rax', 8 * pwords + 8 + prsz));
+        elseif pwords > 0
+            em(sprintf('\tmovq\t%d(%%rsp), %%rax', 8 * pwords));
         else
             em('\tmovq\t(%rsp), %rax');
         end
         em('\tcall\t*%rax');
         if psret
             % pop args, the slot pointer, the slot, and the saved pointer
-            em(sprintf('\taddq\t$%d, %%rsp', 8 * nargs + 16 + prsz));
+            em(sprintf('\taddq\t$%d, %%rsp', 8 * pwords + 16 + prsz));
         else
-            em(sprintf('\taddq\t$%d, %%rsp', 8 * (nargs + 1)));
+            em(sprintf('\taddq\t$%d, %%rsp', 8 * (pwords + 1)));
         end
         etype = pret;
         estruc = psret;     % a struct result: the slot address, no load
