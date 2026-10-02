@@ -470,6 +470,22 @@ frame); and the function-pointer call path counts pushed words, not
 arguments (the same defect fixed on the direct path). Guards
 `cc33_enum.c` … `cc38_funptr.c`; suite 810/810; ceiling 14810 → **15819**.
 
+**One initializer parser, and the leaf numbering has one owner
+(2026-10-02).** The aggregate-initializer grammar was implemented twice - once
+emitting frame stores, once producing leaf values - and the copies had drifted
+three times. They are one now: `aggregate_values` reads any aggregate into a
+flat leaf vector, `struct_bytes` lays that vector out, and `em_bytes` stores
+the image into the frame, so the frame and the data section cannot disagree.
+`struct_fill`, `fill_member` and `parse_struct_init` are gone.
+
+The bug that held it up was a **pass-through variable**: `vi`, a leaf cursor
+threaded through the layout recursion as an in/out parameter, counted
+independently of the parser's own count. Making `member_leaf_offset` the single
+owner of "where does this member's leaves start" removed the cursor entirely,
+and the two can no longer drift by one. Guards `cc45` (array of struct values)
+and `cc46` (the three shapes the two parsers disagreed on) pass. Ceiling
+17947 -> **18235**.
+
 **The aggregate-initializer family (2026-10-02).** Five items, one commit
 each: C's brace elision (`{1,2,3}` meaning `{{1,2},3}`); multi-dimensional
 array members (`int m[2][3]`, with the stride table); `char g[] = "abc";` at

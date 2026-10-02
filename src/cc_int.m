@@ -1779,7 +1779,7 @@ while true
             next();
         elseif ~isarr && is_struct_code(base) && depth == 0
             % struct-value initializer: { m1, m2, … } -> byte layout
-            initv = {'B', struct_bytes(parse_struct_init(base), base)};
+            initv = {'B', struct_bytes(aggregate_values(base, 1), base)};
         else
             neg = 0;
             if token == 45      % '-'
@@ -1948,129 +1948,6 @@ function r = fptr_rettype(t)
 r = t - 2000;
 end
 
-function vals = parse_struct_init(sbase)
-% parse_struct_init - `{ m1, m2, … }` for a FILE-SCOPE struct value:
-% member values in declaration order, `.name = v` designating one, a nested
-% `{…}` for a struct member, and a braced or flat group of leaves for an
-% array member. Returns the flattened leaf values; the caller's byte layout
-% zero-fills whatever is not mentioned.
-global token idname sdefs token_val
-next();                     % '{'
-stid = (sbase - 1000) / 2;
-names = sdefs{stid}{3};
-mm = sdefs{stid}{2};
-isunion = numel(sdefs{stid}) >= 4 && sdefs{stid}{4};
-if isunion
-    nlim = 1;               % a union initializer sets its first member
-else
-    nlim = numel(names);
-end
-vals = [];
-k = 1;                      % the next positional member
-while true
-    if token == 125 || token == 0
-        break;              % remaining members are zero-initialized
-    end
-    if token ~= 46 && k > nlim
-        break;              % the positional members are exhausted
-    end
-    if token == 46          % '.name = value': designated
-        next();
-        if token ~= 150
-            fail('expected a member name after .');
-        end
-        dname = idname;
-        next();
-        expect(61);         % '='
-        if ~isfield(mm, dname)
-            fail(sprintf('no member %s in the struct', dname));
-        end
-        minfo = mm.(dname);
-        if isunion
-            k = 1;          % every union member sits at offset 0
-        else
-            k = 1;
-            for q = 1:numel(names)
-                if strcmp(names{q}, dname)
-                    k = q;
-                end
-            end
-        end
-    else
-        minfo = mm.(names{k});
-    end
-    cur = 1;                % the member's own leaf offset
-    for q = 1:k - 1
-        cur = cur + member_leaves(mm.(names{q}));
-    end
-    % the values are one FLAT leaf list, so a member's leaves have to be
-    % written at their own offset: skipped members are zero, and a member
-    % named twice is overwritten (C's last-write-wins)
-    nleaf = member_leaves(minfo);
-    if numel(vals) < cur + nleaf - 1
-        vals = [vals, zeros(1, cur + nleaf - 1 - numel(vals))];
-    end
-    mt = minfo{2};
-    if is_sval(mt) && ~(numel(minfo) >= 4 && minfo{4} > 1) && token == 123
-        sub = parse_struct_init(mt);            % a nested struct value
-        vals(cur:cur + numel(sub) - 1) = sub;
-    elseif nleaf > 1
-        braced = (token == 123);
-        if braced
-            next();
-        end
-        got = [];
-        if is_sval(mt)
-            % an array of struct values: a brace group per element
-            for q = 1:minfo{4}
-                if token == 125 || token == 0 || (token == 46 && ~braced)
-                    break;
-                end
-                if braced && token ~= 123
-                    fail('expected { for a struct element');
-                end
-                sub = parse_struct_init(mt);
-                got = [got, sub];
-                if q < minfo{4} && token == 44
-                    next();
-                end
-            end
-            if braced && token == 125
-                next();
-            end
-            vals(cur:cur + numel(got) - 1) = got;
-            k = k + 1;
-            if token == 44
-                next();
-            end
-            continue;
-        end
-        for q = 1:nleaf
-            if token == 125 || token == 0 || (token == 46 && ~braced)
-                break;
-            end
-            got(end+1) = const_elem();
-            if token == 44 && q < nleaf
-                next();     % between this member's own elements
-            end
-        end
-        if braced && token == 125
-            next();
-        end
-        vals(cur:cur + numel(got) - 1) = got;
-    else
-        vals(cur) = const_elem();
-    end
-    k = k + 1;
-    if token == 44
-        next();
-    end
-end
-if token == 125
-    next();                 % '}'
-end
-end
-
 function esz = member_elem_size(minfo)
 % member_elem_size - the byte width of one ELEMENT of a member. A member is a
 % scalar, an array or a struct, so an element is pointer-sized, a struct
@@ -2113,66 +1990,73 @@ end
 end
 
 function bytes = struct_bytes(vals, sbase)
-% struct_bytes — map the flattened leaf values to the struct's byte layout
-% (little-endian; 1 byte for char members, 8 for int/pointer); missing
-% leaves are zero.
+% struct_bytes - map a struct's flat leaf values to its byte image
+% (little-endian; member widths come from member_elem_size). A leaf the
+% initializer did not provide is left zero.
 global sdefs
 stid = (sbase - 1000) / 2;
 bytes = zeros(1, sdefs{stid}{1});
-vi = 1;
-[bytes, ~] = place_members(bytes, stid, vals, vi, 0);
+bytes = place_members(bytes, stid, vals, 1, 0);
 end
 
-function [bytes, vi] = place_members(bytes, stid, vals, vi, base_off)
-% place_members - recursive layout pass; vi is the next leaf value index and
-% base_off the byte offset this struct itself starts at. Without base_off a
-% nested struct member would write its fields at ITS OWN offsets, on top of
-% the enclosing struct's first members.
+function first = member_leaf_offset(names, mm, mi)
+% member_leaf_offset - the index of the FIRST leaf value that member `mi`
+% contributes. This is the only place the leaf numbering is done: the
+% initializer parser needs it to put a member's values where they belong, and
+% the layout writer needs it to find them again. When each side counted for
+% itself they drifted apart by one, which moved every following member's
+% values - and the parser and the writer had to agree by luck.
+first = 1;
+for q = 1:mi - 1
+    first = first + member_leaves(mm.(names{q}));
+end
+end
+
+function bytes = place_members(bytes, stid, vals, lbase, boff)
+% place_members - recursive layout pass. lbase is the leaf index this
+% struct's first member starts at, boff the byte offset the struct itself
+% starts at (a nested struct's member offsets are relative to its own start).
+% Each member's leaves are located with member_leaf_offset, so no cursor has
+% to be threaded through the walk.
 global sdefs
 names = sdefs{stid}{3};
+mm = sdefs{stid}{2};
 for k = 1:numel(names)
-    minfo = sdefs{stid}{2}.(names{k});
-    off = base_off + minfo{1};
+    minfo = mm.(names{k});
+    off = boff + minfo{1};
     mt = minfo{2};
-    if is_sval(mt)
-        if vi <= numel(vals)
-            [bytes, vi] = place_members(bytes, (mt - 1000) / 2, vals, vi, off);
-        end
-    elseif numel(minfo) >= 4 && minfo{4} > 1
-        % an array member: one leaf per element, esz bytes apart, or the
-        % values would all land on the member's first slot
+    isarr = numel(minfo) >= 4 && minfo{4} > 1;
+    first = lbase + member_leaf_offset(names, mm, k) - 1;
+    if is_sval(mt) && ~isarr
+        bytes = place_members(bytes, (mt - 1000) / 2, vals, first, off);
+    elseif isarr
+        % an array member: one leaf per element, an element's width apart, or
+        % the values would all land on the member's first slot
         esz = member_elem_size(minfo);
-        if is_struct_code(mt)
-            % an array of struct values: a brace group per element
-            for q = 1:minfo{4}
-                if vi > numel(vals)
+        per = member_leaves(minfo) / minfo{4};   % leaves in one element
+        for q = 1:minfo{4}
+            if is_struct_code(mt)
+                bytes = place_members(bytes, (mt - 1000) / 2, vals, ...
+                                      first + (q - 1) * per, off + (q - 1) * esz);
+            else
+                li = first + (q - 1) * per;
+                if li > numel(vals)
                     break;
                 end
-                [bytes, vi] = place_members(bytes, (mt - 1000) / 2, vals, vi, ...
-                                            off + (q - 1) * esz);
-            end
-            continue;
-        end
-        for q = 1:minfo{4}
-            if vi > numel(vals)
-                break;
-            end
-            v = vals(vi);
-            vi = vi + 1;
-            if esz == 1
-                bytes(off + q) = mod(v, 256);
-            else
-                for bb = 0:esz - 1
-                    bytes(off + (q - 1) * esz + bb + 1) = mod(floor(v / 2^(8*bb)), 256);
+                v = vals(li);
+                if esz == 1
+                    bytes(off + q) = mod(v, 256);
+                else
+                    for bb = 0:esz - 1
+                        bytes(off + (q - 1) * esz + bb + 1) = mod(floor(v / 2^(8*bb)), 256);
+                    end
                 end
             end
         end
-    elseif vi <= numel(vals)
+    elseif first <= numel(vals)
         % a scalar member: its own width, not a fixed 8 bytes - writing 8 into
-        % a 4-byte member overruns the next one, and it made an array of
-        % struct elements overlap (the stride says 12, the writes said 16)
-        v = vals(vi);
-        vi = vi + 1;
+        % a 4-byte member overruns the next one
+        v = vals(first);
         msz = member_elem_size(minfo);
         if msz == 1
             bytes(off + 1) = mod(v, 256);
@@ -2992,7 +2876,9 @@ while true
                 end
             elseif is_struct_code(base) && depth == 0 && token == 123
                 % a struct value: `{ … }` - one store per member, in order
-                struct_init(base, off);
+                % read the leaves, lay the type out, store the image
+                bytes = struct_bytes(aggregate_values(base, 1), base);
+                em_bytes(bytes, off);
             else
                 parse_assignment();
                 if is_struct_code(base) && depth == 0
@@ -3019,46 +2905,56 @@ end
 expect(59);                 % ;
 end
 
-function struct_init(base, off)
-% struct_init - a `{ … }` initializer for the struct value type `base` at
-% frame offset `off` (C 6.7.9). The whole object is zero-filled first, so
-% members the list does not mention end up zero.
-struct_fill(base, off, 1);
+function em_bytes(bytes, off)
+% em_bytes - store a byte image into the current frame at `off`. The image
+% comes from struct_bytes, so the frame layout and the data-section layout are
+% the same function of the type and cannot drift apart.
+global out
+n = numel(bytes);
+k = 0;
+while k + 4 <= n
+    w = bytes(k+1) + 256*bytes(k+2) + 65536*bytes(k+3) + 16777216*bytes(k+4);
+    em(sprintf('\tmovl\t$0x%08X, %d(%%rbp)', w, off + k));
+    k = k + 4;
+end
+while k < n
+    em(sprintf('\tmovb\t$%d, %d(%%rbp)', bytes(k+1), off + k));
+    k = k + 1;
+end
 end
 
-function struct_fill(base, off, braced)
-% struct_fill - fill a struct value at frame offset `off` from the current
-% initializer list. braced = 1 means the list is `{ … }` and both braces are
-% consumed. braced = 0 is C's brace elision (6.7.9p20): the members are
-% filled straight from the ENCLOSING list, which is what makes
-% `struct S { struct P p; int z; } s = {1, 2, 3};` mean `{{1,2}, 3}`.
+function vals = aggregate_values(base, braced)
+% aggregate_values - read an aggregate initializer for the struct value type
+% `base` and return its FLAT LEAF VALUES in member order. This is the single
+% initializer parser: the frame path turns the leaves into a byte image with
+% struct_bytes and stores it, and the data path emits the same image. A member
+% the list does not mention is left zero by the caller's zero-filled image, and
+% a member named twice is overwritten (C's last-write-wins).
 %
-% The separator commas are owned by whichever level is reading the next
-% element: a flat level takes the comma between its own members and leaves
-% the one after its last member to its caller.
+% braced = 1 consumes a `{ … }` list; braced = 0 is C's brace elision
+% (6.7.9p20), which fills the members straight from the ENCLOSING list - it is
+% what makes `struct S { struct P p; int z; } s = {1, 2, 3};` mean `{{1,2},3}`.
+% The separator commas belong to whichever level reads the next element.
 global token idname sdefs token_val
 stid = (base - 1000) / 2;
 names = sdefs{stid}{3};
 mm = sdefs{stid}{2};
-sz = sdefs{stid}{1};
-for zz = 0:sz/8 - 1
-    em_imm_store(0, sprintf('%d(%%rbp)', off + zz * 8), 8);   % C zero-fills the rest
+isunion = numel(sdefs{stid}) >= 4 && sdefs{stid}{4};
+if isunion
+    nlim = 1;                   % a union initializer sets its first member
+else
+    nlim = numel(names);
 end
+vals = [];
 if braced
     expect(123);                % '{'
 end
-k = 1;                          % the next positional member
-while true
+k = 1;                          % the next POSITIONAL member
+while k <= nlim || token == 46  % a designator may follow the last member
     if token == 125 || token == 0
         break;                  % '}' (or end of input) ends this list
     end
-    if ~braced && k > numel(names)
-        break;                  % a flat level leaves with all it needs
-    end
-    if token == 46              % '.name = value': a designated initializer
-        if ~braced
-            break;              % a designator belongs to the enclosing object
-        end
+    if token == 46              % '.name = value': a designated member
         next();
         if token ~= 150
             fail('expected a member name after .');
@@ -3069,30 +2965,36 @@ while true
         if ~isfield(mm, dname)
             fail(sprintf('no member %s in the struct', dname));
         end
-        minfo = mm.(dname);
-        for q = 1:numel(names)      % later positional entries continue after it
+        mi = 1;                 % the member's own INDEX, kept apart from k
+        for q = 1:numel(names)
             if strcmp(names{q}, dname)
-                k = q + 1;
+                mi = q;
             end
         end
-    else
-        if k > numel(names)
-            fail('too many struct initializers');
+        if isunion
+            mi = 1;             % every union member sits at offset 0
         end
-        minfo = mm.(names{k});
+        k = mi + 1;             % later positional entries continue after it
+    else
+        mi = k;
         k = k + 1;
     end
-    fill_member(minfo, off + minfo{1});
-    if braced
-        % a braced list owns its separators, even after a designator for the
-        % last member (`{.z = 7, .a = 5}` would otherwise leave a comma)
-        if token == 44
+    minfo = mm.(names{mi});
+    want = member_leaf_offset(names, mm, mi) - 1;   % leaves before this member
+    got = member_values(minfo);
+    if numel(vals) < want + numel(got)
+        vals = [vals, zeros(1, want + numel(got) - numel(vals))];
+    end
+    vals(want + 1 : want + numel(got)) = got;
+    % a flat level leaves the comma after its LAST member to its caller; a
+    % braced one owns all of its separators (a designator for the last member
+    % would otherwise leave a trailing comma behind)
+    if token == 44
+        if braced || k <= nlim
             next();
-        elseif token ~= 125 && token ~= 0
-            fail('expected , or } in the initializer');
         end
-    elseif k <= numel(names) && token == 44
-        next();                 % between this level's own members
+    elseif braced && token ~= 125 && token ~= 0
+        fail('expected , or } in the initializer');
     end
 end
 if braced
@@ -3100,72 +3002,59 @@ if braced
 end
 end
 
-function fill_member(minfo, moff)
-% fill_member - one member of an aggregate initializer: a brace group, or
-% (brace elision) the elements this member needs from the enclosing list.
-global token token_val
+function got = member_values(minfo)
+% member_values - the leaves one member contributes. A struct value takes a
+% brace group, or by elision its members' leaves from the enclosing list; an
+% array takes a group or its elements one by one, and an array OF struct
+% values may use a group per element or elide those groups too. Anything else
+% is one constant.
+global token
 mt = minfo{2};
 isarr = numel(minfo) >= 4 && minfo{4} > 1;
-if is_struct_code(mt) && ~isarr
-    struct_fill(mt, moff, (token == 123));   % braces if given, else flat
+got = [];
+if is_sval(mt) && ~isarr
+    got = aggregate_values(mt, (token == 123));   % braces if given, else flat
     return;
 end
-if isarr                                    % an array member
+n = 1;
+if isarr
     n = minfo{4};
-    msz = member_elem_size(minfo);
-    if is_struct_code(mt)
-        % an array of struct values: the array may have its own brace group,
-        % then one group per element
-        braced = (token == 123);
-        if braced
-            next();
-        end
-        for q = 1:n
-            if token == 125 || token == 0 || (token == 46 && ~braced)
-                break;
-            end
-            if token ~= 123
-                fail('expected { for a struct element');
-            end
-            struct_fill(mt, moff + (q - 1) * msz, 1);
-            if q < n && token == 44
-                next();
-            end
-        end
-        if braced && token == 125
-            next();
-        end
-        return;
-    end
-    if token == 123
-        if numel(minfo) >= 5 && numel(minfo{5}) > 1
-            vals = parse_arr_init(minfo{5}, 1);
-        else
-            vals = parse_arr_init(n, 1);
-        end
-        for q = 1:n
-            em_imm_store(vals(q), sprintf('%d(%%rbp)', moff + (q - 1) * msz), msz);
-        end
+end
+braced = (token == 123);
+if braced && ~is_sval(mt)
+    % a braced array member (possibly multi-dimensional): parse_arr_init knows
+    % the nested and flat forms and returns the flattened elements
+    if numel(minfo) >= 5 && numel(minfo{5}) > 1
+        got = parse_arr_init(minfo{5}, 1);
     else
-        for q = 1:n                         % flat: one constant per element
-            if token == 125 || token == 0 || token == 46
-                break;
-            end
-            em_imm_store(const_elem(), ...
-                sprintf('%d(%%rbp)', moff + (q - 1) * msz), msz);
-            if q < n && token == 44
-                next();
-            end
-        end
+        got = parse_arr_init(n, 1);
     end
     return;
 end
-em_imm_store(const_elem(), sprintf('%d(%%rbp)', moff), member_elem_size(minfo));
+if braced
+    next();
+end
+for q = 1:n
+    if token == 125 || token == 0 || (token == 46 && ~braced)
+        break;
+    end
+    if is_sval(mt)              % an array of struct values
+        got = [got, aggregate_values(mt, (token == 123))];
+    else
+        got(end+1) = const_elem();
+    end
+    if q < n && token == 44
+        next();                 % between this member's own elements
+    end
+end
+if braced && token == 125
+    next();
+end
 end
 
 function v = const_elem()
 % const_elem - one constant initializer element: an optional sign and a
-% number (the same restriction the array initializer path has).
+% number, the same restriction the array initializer path has.
 global token token_val
 neg = 0;
 if token == 45                  % '-'
@@ -3860,7 +3749,7 @@ if token == 40              % '(': a cast (type)unary or parenthesised expr
             end
             if is_struct_code(cbase) && ~cl_isarr
                 % (struct P){…}: a struct value
-                vals = parse_struct_init(cbase);
+                vals = aggregate_values(cbase, 1);
                 bytes = struct_bytes(vals, cbase);
                 nbytes = numel(bytes);
                 off = -(fbytes + nbytes);
