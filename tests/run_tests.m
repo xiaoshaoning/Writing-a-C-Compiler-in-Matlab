@@ -712,6 +712,7 @@ cctests = {
         'cc42_unsizedg.c', 96;    % unsized global arrays (compiler track only)
         'cc43_gdesig.c', 96;      % designated global initializers (compiler track only)
         'cc44_enumstatic.c', 96;  % enum declarators + per-function statics (compiler track only)
+        'cc45_structarr.c', 96;    % an array of struct values as a member (compiler track only)
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).

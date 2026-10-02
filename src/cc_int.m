@@ -1305,12 +1305,6 @@ else
 end
 end
 
-function nm = gsym_of(name)
-% gsym_of - the symbol a global is emitted under (the name itself; only a
-% static local is renamed, and it carries its symbol in the maps).
-nm = name;
-end
-
 function t = int_promote(t)
 % int_promote - C's integer promotions: anything narrower than int becomes
 % int (the int here is 32-bit), which is also what the arithmetic below
@@ -1635,9 +1629,9 @@ if strcmp(fname2, 'main') && ~isempty(ginit)
             em(icodes{gkk});
         end
         if gtype2 == 1
-            em(sprintf('\tmovb\t%%al, %s(%%rip)', gsym_of(gname)));
+            em(sprintf('\tmovb\t%%al, %s(%%rip)', gname));
         else
-            em(sprintf('\tmovq\t%%rax, %s(%%rip)', gsym_of(gname)));
+            em(sprintf('\tmovq\t%%rax, %s(%%rip)', gname));
         end
     end
 end
@@ -1869,7 +1863,6 @@ for k = 1:numel(glist)
     else
         nbytes = tsize(t);
     end
-    nm = gsym_of(nm);           % a static local is emitted under its own symbol
     if isempty(v)
         em(sprintf('	.comm	%s,%d,16', nm, nbytes));
     else
@@ -2018,7 +2011,7 @@ while true
         vals = [vals, zeros(1, cur + nleaf - 1 - numel(vals))];
     end
     mt = minfo{2};
-    if token == 123 && is_sval(mt)
+    if is_sval(mt) && ~(numel(minfo) >= 4 && minfo{4} > 1) && token == 123
         sub = parse_struct_init(mt);            % a nested struct value
         vals(cur:cur + numel(sub) - 1) = sub;
     elseif nleaf > 1
@@ -2027,11 +2020,36 @@ while true
             next();
         end
         got = [];
+        if is_sval(mt)
+            % an array of struct values: a brace group per element
+            for q = 1:minfo{4}
+                if token == 125 || token == 0 || (token == 46 && ~braced)
+                    break;
+                end
+                if braced && token ~= 123
+                    fail('expected { for a struct element');
+                end
+                sub = parse_struct_init(mt);
+                got = [got, sub];
+                if q < minfo{4} && token == 44
+                    next();
+                end
+            end
+            if braced && token == 125
+                next();
+            end
+            vals(cur:cur + numel(got) - 1) = got;
+            k = k + 1;
+            if token == 44
+                next();
+            end
+            continue;
+        end
         for q = 1:nleaf
             if token == 125 || token == 0 || (token == 46 && ~braced)
                 break;
             end
-            got(end+1) = one_const();
+            got(end+1) = const_elem();
             if token == 44 && q < nleaf
                 next();     % between this member's own elements
             end
@@ -2041,7 +2059,7 @@ while true
         end
         vals(cur:cur + numel(got) - 1) = got;
     else
-        vals(cur) = one_const();
+        vals(cur) = const_elem();
     end
     k = k + 1;
     if token == 44
@@ -2053,12 +2071,29 @@ if token == 125
 end
 end
 
+function esz = member_elem_size(minfo)
+% member_elem_size - the byte width of one ELEMENT of a member. A member is a
+% scalar, an array or a struct, so an element is pointer-sized, a struct
+% value's size, or the scalar width. This decision used to be spelled out at
+% every use site, and the copies disagreed about struct elements.
+mt = minfo{2};
+if is_ptr_code(mt)
+    esz = 8;
+elseif is_struct_code(mt)
+    esz = ssize_of(mt);
+else
+    esz = tsize(mt);
+end
+end
+
 function n = member_leaves(minfo)
 % member_leaves - how many flattened leaves a member contributes: a nested
 % struct contributes its own members' leaves (recursively), an array its
-% element count, anything else one.
+% element count, anything else one. An array OF struct value contributes the
+% struct's leaves per element.
 global sdefs
 mt = minfo{2};
+isarr = numel(minfo) >= 4 && minfo{4} > 1;
 if is_sval(mt)
     stid = (mt - 1000) / 2;
     nm = sdefs{stid}{3};
@@ -2067,29 +2102,13 @@ if is_sval(mt)
     for q = 1:numel(nm)
         n = n + member_leaves(mm.(nm{q}));
     end
-elseif numel(minfo) >= 4 && minfo{4} > 1
+    if isarr
+        n = n * minfo{4};
+    end
+elseif isarr
     n = minfo{4};
 else
     n = 1;
-end
-end
-
-function v = one_const()
-% one_const - a sign and a number, the same restriction the array
-% initializer path has.
-global token token_val
-neg = 0;
-if token == 45              % '-'
-    neg = 1;
-    next();
-end
-if token ~= 128
-    fail('expected a constant struct initializer');
-end
-v = double(token_val);
-next();
-if neg
-    v = -v;
 end
 end
 
@@ -2122,12 +2141,17 @@ for k = 1:numel(names)
     elseif numel(minfo) >= 4 && minfo{4} > 1
         % an array member: one leaf per element, esz bytes apart, or the
         % values would all land on the member's first slot
-        if is_ptr_code(mt)
-            esz = 8;
-        elseif mt == 1
-            esz = 1;
-        else
-            esz = tsize(mt);
+        esz = member_elem_size(minfo);
+        if is_struct_code(mt)
+            % an array of struct values: a brace group per element
+            for q = 1:minfo{4}
+                if vi > numel(vals)
+                    break;
+                end
+                [bytes, vi] = place_members(bytes, (mt - 1000) / 2, vals, vi, ...
+                                            off + (q - 1) * esz);
+            end
+            continue;
         end
         for q = 1:minfo{4}
             if vi > numel(vals)
@@ -3077,16 +3101,37 @@ function fill_member(minfo, moff)
 % (brace elision) the elements this member needs from the enclosing list.
 global token token_val
 mt = minfo{2};
-if mt >= 1000 && ~is_ptr_code(mt)
+isarr = numel(minfo) >= 4 && minfo{4} > 1;
+if is_struct_code(mt) && ~isarr
     struct_fill(mt, moff, (token == 123));   % braces if given, else flat
     return;
 end
-if numel(minfo) >= 4 && minfo{4} > 1        % an array member
+if isarr                                    % an array member
     n = minfo{4};
-    if is_ptr_code(mt)
-        msz = 8;
-    else
-        msz = tsize(mt);
+    msz = member_elem_size(minfo);
+    if is_struct_code(mt)
+        % an array of struct values: the array may have its own brace group,
+        % then one group per element
+        braced = (token == 123);
+        if braced
+            next();
+        end
+        for q = 1:n
+            if token == 125 || token == 0 || (token == 46 && ~braced)
+                break;
+            end
+            if token ~= 123
+                fail('expected { for a struct element');
+            end
+            struct_fill(mt, moff + (q - 1) * msz, 1);
+            if q < n && token == 44
+                next();
+            end
+        end
+        if braced && token == 125
+            next();
+        end
+        return;
     end
     if token == 123
         if numel(minfo) >= 5 && numel(minfo{5}) > 1
@@ -3111,12 +3156,7 @@ if numel(minfo) >= 4 && minfo{4} > 1        % an array member
     end
     return;
 end
-if is_ptr_code(mt)
-    msz = 8;
-else
-    msz = tsize(mt);
-end
-em_imm_store(const_elem(), sprintf('%d(%%rbp)', moff), msz);
+em_imm_store(const_elem(), sprintf('%d(%%rbp)', moff), member_elem_size(minfo));
 end
 
 function v = const_elem()
@@ -4175,7 +4215,7 @@ elseif token == 150         % Id: function call or variable
             t = gtype.(name);
             isarr = garr.(name);
             isst = gstruct.(name);
-            em(sprintf('\tleaq\t%s(%%rip), %%rax', gsym_of(name)));
+            em(sprintf('\tleaq\t%s(%%rip), %%rax', name));
         elseif isfield(enums, name)
             em(sprintf('\tmovq\t$%d, %%rax', enums.(name)));
             etype = 0;
@@ -4358,13 +4398,7 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
             % that sizeof sees the whole array.
             estruc = 0;
             etype = padd(mem{2});
-            if mem{2} >= 1000
-                esz = ssize_of(mem{2});
-            elseif is_ptr_code(mem{2})
-                esz = 8;              % an array of pointers
-            else
-                esz = tsize(mem{2});
-            end
+            esz = member_elem_size(mem);
             if numel(mem) >= 5 && numel(mem{5}) > 1
                 bstride = cstride_of(mem{5}, esz);   % a[i][j] needs the strides
             else
