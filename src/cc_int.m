@@ -3471,6 +3471,7 @@ elseif token == 150         % Id: function call or variable
             em('\tpushq\t%rax');
         end
         nargs = 0;
+        pwords = 0;         % words actually pushed (a by-value struct is several)
         if token ~= 41      % ')'
             while true
                 parse_assignment();
@@ -3524,6 +3525,11 @@ elseif token == 150         % Id: function call or variable
                 elseif ~pushed
                     em('\tpushq\t%rax');
                 end
+                if asz > 8 || estruc
+                    pwords = pwords + asz/8;    % the struct copy's words
+                else
+                    pwords = pwords + 1;
+                end
                 nargs = nargs + 1;
                 if token == 44    % ','
                     next();
@@ -3558,11 +3564,11 @@ elseif token == 150         % Id: function call or variable
         end
         if sret_call
             % pop args, the hidden slot pointer, AND the return slot
-            em(sprintf('\taddq\t$%d, %%rsp', 8 * (nargs + 1) + rsz));
+            em(sprintf('\taddq\t$%d, %%rsp', 8 * (pwords + 1) + rsz));
             estruc = 1;      % the result is a struct value (slot address)
         else
-            if nargs > 0
-                em(sprintf('\taddq\t$%d, %%rsp', 8 * nargs));
+            if pwords > 0
+                em(sprintf('\taddq\t$%d, %%rsp', 8 * pwords));
             end
             estruc = 0;
         end
