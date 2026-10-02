@@ -701,6 +701,8 @@ cctests = {
         'cc31_bitfield.c', 96;    % bit-fields (compiler track only)
         'cc32_byval.c', 96;       % struct-by-value args (compiler track only)
         'cc33_enum.c', 96;        % enum tags as types (compiler track only)
+        'cc34_aggrinit.c', 96;    % local struct aggregate initializers (compiler track only)
+        'cc35_memberarr.c', 96;   % array members (compiler track only)
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).

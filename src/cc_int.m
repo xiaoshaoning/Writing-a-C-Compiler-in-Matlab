@@ -1199,7 +1199,7 @@ while token ~= 125          % '}'
     if isunion
         % every member shares offset 0; the union is as large as its
         % largest member (C 6.7.2.1)
-        membermap.(name) = {0, mt, bw};
+        membermap.(name) = {0, mt, bw, asz};
         if nbytes > off
             off = nbytes;
         end
@@ -1207,7 +1207,7 @@ while token ~= 125          % '}'
         if mt ~= 1
             off = off + mod(-off, 8);   % 8-align non-char members
         end
-        membermap.(name) = {off, mt, bw};
+        membermap.(name) = {off, mt, bw, asz};
         off = off + nbytes;
     end
     mnames{end+1} = name;
@@ -2648,6 +2648,20 @@ while token ~= 125 && token ~= 0
             fail('expected { for a struct member');
         end
         struct_init(mt, moff);
+    elseif numel(minfo) >= 4 && minfo{4} > 1
+        % an array member: a nested brace group (constant elements)
+        if token ~= 123
+            fail('expected { for an array member');
+        end
+        vals = parse_arr_init(minfo{4}, 1);
+        if is_ptr_code(mt)
+            msz = 8;
+        else
+            msz = tsize(mt);
+        end
+        for q = 1:minfo{4}
+            em_imm_store(vals(q), sprintf('%d(%%rbp)', moff + (q - 1) * msz), msz);
+        end
     else
         neg = 0;
         if token == 45          % '-'
@@ -3870,7 +3884,20 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
         mem = member_lookup(base_t, mname);
         em(sprintf('\taddq\t$%d, %%rax', mem{1}));
         etype = mem{2};
-        if etype >= 1000
+        if numel(mem) >= 4 && mem{4} > 1
+            % an array member: it decays to a pointer to its first element
+            % (the address is already in rax), and keeps its byte size so
+            % that sizeof sees the whole array.
+            estruc = 0;
+            etype = mem{2} + 2;
+            bstride = [];
+            if mem{2} >= 1000
+                esz = ssize_of(mem{2});
+            else
+                esz = tsize(mem{2});
+            end
+            curarrsz = mem{4} * esz;
+        elseif etype >= 1000
             estruc = 1;               % a struct member: address, no load
         else
             estruc = 0;
