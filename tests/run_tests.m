@@ -711,6 +711,7 @@ cctests = {
         'cc41_mdim.c', 96;        % multi-dimensional array members (compiler track only)
         'cc42_unsizedg.c', 96;    % unsized global arrays (compiler track only)
         'cc43_gdesig.c', 96;      % designated global initializers (compiler track only)
+        'cc44_enumstatic.c', 96;  % enum declarators + per-function statics (compiler track only)
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
@@ -1168,7 +1169,7 @@ cctests = {
     % cc26_signed.c the signed/unsigned narrow-type widening (which also
     % sign-extends char/short loads via movsbq/movswq/movslq). Making int
     % 32-bit (cc27_int.c) then moved int loads/stores to movslq/movl and
-    % added the int-pointer scaling, so the total is 16704. See
+    % added the int-pointer scaling, so the total is 17764. See
     % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
@@ -1190,8 +1191,8 @@ cctests = {
         [npass nfail] = addcheck(npass, nfail, false, ...
             sprintf('instr count hello.c: %s', e.message));
     end
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 16704, ...
-        sprintf('instr regression: corpus %d <= 16704', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 17764, ...
+        sprintf('instr regression: corpus %d <= 17764', ic_total));
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 88, ...
         sprintf('instr regression: hello.c %d <= 88', ic_hello));
 

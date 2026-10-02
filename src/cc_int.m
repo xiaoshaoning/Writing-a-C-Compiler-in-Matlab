@@ -111,6 +111,7 @@ globals = struct();  % defined global names
 gtype = struct();    % global name -> type code
 garr = struct();     % global name -> 1 if an array
 glist = {};          % {name, type, init or []} for the .comm/.data output
+lstatics = struct(); % static local: its C name -> emitted symbol (per function)
 ginit = {};          % {name, type, codes} non-constant global inits (startup)
 strs = {};           % {label, text} string literals for the .data output
 nstr = 0;            % string-literal counter
@@ -841,9 +842,16 @@ if token == 184         % typedef
 end
 if token == 185 && enum_defines()   % enum { … }: register the constants
     parse_enum();
-    return;
+    if token == 59
+        next();
+        return;                 % `enum { … };` - just the constants
+    end
+    base = 0;                   % `enum { … } v;` - the constants are ints
+    stdef = 0;
+    tdims = [];
+else
+    [base, stdef, tdims] = parse_basetype();
 end
-[base, stdef, tdims] = parse_basetype();
 if isa(stdef, 'cell')
     % a struct type definition: register the tag, then either the ';'
     % or a variable list of the new type (`struct Q { … } q;`)
@@ -970,7 +978,6 @@ while token ~= 125
     end
 end
 next();                     % '}'
-expect(59);                 % ';'
 end
 
 function b = enum_defines()
@@ -1298,6 +1305,12 @@ else
 end
 end
 
+function nm = gsym_of(name)
+% gsym_of - the symbol a global is emitted under (the name itself; only a
+% static local is renamed, and it carries its symbol in the maps).
+nm = name;
+end
+
 function t = int_promote(t)
 % int_promote - C's integer promotions: anything narrower than int becomes
 % int (the int here is 32-bit), which is also what the arithmetic below
@@ -1558,7 +1571,7 @@ end
 function parse_function_tail(fname2, ischarfn, rettype)
 % after 'type name': '(' params ')' '{' <statements> return '}' — emit the
 % per-function prologue, backpatch the frame size, and the epilogue.
-global token out idname lvars lvartype lvararr lvarstruct fbytes funcs fret ...
+global token out idname lvars lvartype lvararr lvarstruct fbytes funcs fret lstatics ...
        retlbl cfn cret cvoid glabels fparams frettype sret sretsize sretbase ginit fptypes
 % ischarfn: 0/1 (char return); rettype: the full return type code (0 int,
 % 1 char, 1000+2*stid struct). A struct return uses a hidden return pointer.
@@ -1567,12 +1580,14 @@ save_lvars = lvars;
 save_lvartype = lvartype;
 save_lvararr = lvararr;
 save_lvarstruct = lvarstruct;
+save_lstatics = lstatics;
 save_fbytes = fbytes;
 save_glabels = glabels;
 lvars = struct();
 lvartype = struct();
 lvararr = struct();
 lvarstruct = struct();
+lstatics = struct();
 glabels = struct();
 fbytes = 0;
 [nparams, psize, ptypes] = parse_params(rettype >= 1000 && ~is_ptr_code(rettype));
@@ -1620,9 +1635,9 @@ if strcmp(fname2, 'main') && ~isempty(ginit)
             em(icodes{gkk});
         end
         if gtype2 == 1
-            em(sprintf('\tmovb\t%%al, %s(%%rip)', gname));
+            em(sprintf('\tmovb\t%%al, %s(%%rip)', gsym_of(gname)));
         else
-            em(sprintf('\tmovq\t%%rax, %s(%%rip)', gname));
+            em(sprintf('\tmovq\t%%rax, %s(%%rip)', gsym_of(gname)));
         end
     end
 end
@@ -1653,6 +1668,7 @@ lvars = save_lvars;
 lvartype = save_lvartype;
 lvararr = save_lvararr;
 lvarstruct = save_lvarstruct;
+lstatics = save_lstatics;
 fbytes = save_fbytes;
 end
 
@@ -1853,6 +1869,7 @@ for k = 1:numel(glist)
     else
         nbytes = tsize(t);
     end
+    nm = gsym_of(nm);           % a static local is emitted under its own symbol
     if isempty(v)
         em(sprintf('	.comm	%s,%d,16', nm, nbytes));
     else
@@ -2341,7 +2358,7 @@ end
 function parse_statement()
 % statement := declaration | '{' statement* '}' | if | while | for | do |
 % break | continue | return | expr ';'
-global token token_val idname typedefs src si lvars lvartype lvararr lvarstruct lvarstride
+global token token_val idname typedefs src si lvars lvartype lvararr lvarstruct lvarstride lstatics
 if token == 131 || token == 134 || token == 178 || token == 198 || ...  % int/char/struct/union
    token == 188 || ...                                                % unsigned
    token == 189 || token == 190 || token == 191 || token == 192 || ... % double/const/register/static
@@ -2356,6 +2373,7 @@ elseif token == 123         % '{': block — C scopes block locals: a
     save_blvars = lvars;       save_blvartype = lvartype;
     save_blvararr = lvararr;   save_blvarstruct = lvarstruct;
     save_blvarstride = lvarstride;
+    save_blstatics = lstatics;
     while token ~= 125      % '}'
         parse_statement();
     end
@@ -2363,6 +2381,7 @@ elseif token == 123         % '{': block — C scopes block locals: a
     lvars = save_blvars;       lvartype = save_blvartype;
     lvararr = save_blvararr;   lvarstruct = save_blvarstruct;
     lvarstride = save_blvarstride;
+    lstatics = save_blstatics;
 elseif token == 151         % if
     parse_if();
 elseif token == 152         % while
@@ -2383,6 +2402,11 @@ elseif token == 185         % enum: a definition registers the constants,
     % a tag reference is a declaration (`enum E e;` - the type is an int)
     if enum_defines()
         parse_enum();
+        if token == 59
+            next();                 % `enum { … };`: just the constants
+        else
+            parse_declarators(0, 0, [], 0);   % `enum { … } v;`: ints
+        end
     else
         parse_declaration();
     end
@@ -2738,10 +2762,18 @@ end
 function parse_declaration()
 % declaration := type ('*')* name (('[' size ']')? (',' …)*) ('=' expr)? ';'
 % — storage: char 1 byte, int/pointer 8, struct its size, arrays n*elem.
-global token idname lvars lvartype lvararr lvarstruct lvarstride lvararrsz fbytes token_val strtext
-global globals gtype garr gstruct gvararrsz gstride glist
+global token
 was_static = (token == 192);    % a `static` local keeps its value
 [base, stdef, tdims] = parse_basetype();
+parse_declarators(base, stdef, tdims, was_static);
+end
+
+function parse_declarators(base, stdef, tdims, was_static)
+% parse_declarators - the declarator list of a declaration, the type having
+% been parsed already. Split out so that `enum { … } v;` can register the
+% constants and then declare v with the same code.
+global token idname lvars lvartype lvararr lvarstruct lvarstride lvararrsz fbytes token_val strtext lstatics gsym
+global globals gtype garr gstruct gvararrsz gstride glist lstatics cfn
 if isa(stdef, 'cell')
     % a local struct definition: register the tag, then either the ';'
     % or a variable list of the new type (`struct Q { … } q;`)
@@ -2846,22 +2878,25 @@ while true
     end
     if was_static
         % A static local lives in the data section, not in the frame, so it
-        % keeps its value across calls. It is registered as a global under
-        % its own name and emit_globals defines it; only a constant
-        % initializer is supported (an absent one zero-fills).
-        if isfield(globals, name) || isfield(lvars, name)
-            fail(sprintf('static local %s clashes with another name', name));
+        % keeps its value across calls. It gets its OWN symbol (mangled with
+        % the function's index) and a per-function binding, so two functions
+        % may each have a `static int n` without sharing one variable. Only a
+        % constant initializer is supported (an absent one zero-fills).
+        if isfield(lvars, name) || isfield(lstatics, name)
+            fail(sprintf('static local %s clashes with another local', name));
         end
-        globals.(name) = 1;
-        gtype.(name) = t;
-        garr.(name) = isarr;
-        gstruct.(name) = (is_struct_code(base) && depth == 0 && ~is_fptr);
+        sym = sprintf('__st%d_%s', cfn, name);
+        lstatics.(name) = sym;
+        globals.(sym) = 1;
+        gtype.(sym) = t;
+        garr.(sym) = isarr;
+        gstruct.(sym) = (is_struct_code(base) && depth == 0 && ~is_fptr);
         if isarr
-            gvararrsz.(name) = nbytes;
-            gstride.(name) = lvarstride.(name);
+            gvararrsz.(sym) = nbytes;
+            gstride.(sym) = lvarstride.(name);
         else
-            gvararrsz.(name) = 0;
-            gstride.(name) = [];
+            gvararrsz.(sym) = 0;
+            gstride.(sym) = [];
         end
         initv = [];
         if token == 61          % '='
@@ -2880,9 +2915,8 @@ while true
                 initv = -initv;
             end
         end
-        glist{end+1} = {name, t, isarr, dims, initv, base};
-    else
-        off = -(fbytes + nbytes);
+        glist{end+1} = {sym, t, isarr, dims, initv, base};
+    else        off = -(fbytes + nbytes);
         fbytes = fbytes + nbytes;
         lvars.(name) = off;
         if token == 61          % '=': initializer
@@ -3730,7 +3764,7 @@ function parse_unary()
 % decay (no load, estruc = 1 for struct values).
 global token token_val token_dval token_isflt token_sfx idname strtext lvars lvartype lvararr lvarstruct ...
        globals gtype garr gstruct funcs fret frettype fparams called ltype libfns libcalls ...
-       etype estruc lvarstride gstride bstride lvararrsz gvararrsz curarrsz si typedefs fbytes fptypes libargt libret enums out
+       etype estruc lvarstride gstride bstride lvararrsz gvararrsz curarrsz si typedefs fbytes fptypes libargt libret enums out lstatics
 ops = [];
 while token == 45 || token == 126 || token == 33 || token == 43 || ...   % - ~ ! +
       token == 38 || token == 42 || token == 170 || token == 171          % & * ++ --
@@ -4130,11 +4164,18 @@ elseif token == 150         % Id: function call or variable
             isarr = lvararr.(name);
             isst = lvarstruct.(name);
             em(sprintf('\tleaq\t%d(%%rbp), %%rax', lvars.(name)));
+        elseif isfield(lstatics, name)
+            % a static local: its own symbol, in the data section
+            sym = lstatics.(name);
+            t = gtype.(sym);
+            isarr = garr.(sym);
+            isst = gstruct.(sym);
+            em(sprintf('\tleaq\t%s(%%rip), %%rax', sym));
         elseif isfield(globals, name)
             t = gtype.(name);
             isarr = garr.(name);
             isst = gstruct.(name);
-            em(sprintf('\tleaq\t%s(%%rip), %%rax', name));
+            em(sprintf('\tleaq\t%s(%%rip), %%rax', gsym_of(name)));
         elseif isfield(enums, name)
             em(sprintf('\tmovq\t$%d, %%rax', enums.(name)));
             etype = 0;
