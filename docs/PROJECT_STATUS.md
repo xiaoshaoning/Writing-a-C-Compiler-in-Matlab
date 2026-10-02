@@ -592,9 +592,12 @@ and the runtime library are the changelog entries above:
   input count was stored with `sim_storeN(nrsec, nk, 8)` though
   `__mex_nrhs` is a 4-byte `int`, so the extra bytes overwrote the next
   global — in `mxprint.c` that is the first format string, which then read
-  empty. Storing 4 bytes fixed `mxcell_get`, `mxstruct_get` and `mxprint`;
-  the gate is 18/20, with `mxsparse_build`/`mxsparse_get` still returning an
-  empty sparse (a correct header but `jc[n] = 0` — a separate defect). See
+  empty. Storing 4 bytes fixed `mxcell_get`, `mxstruct_get` and `mxprint`. The
+  other two (`mxsparse_build`/`mxsparse_get`) were a second regression from
+  the same int-width change: `mx_preamble` had `typedef int mwSize/mwIndex`,
+  which silently became 4 bytes, while the sim's sparse layout (and the real
+  MEX API) index `ir`/`jc` with 8-byte words. Both are `long` now. The gcc
+  cross-track gate is **20/20** and `run_all` is 5/5. See
   `MATLAB_in_C/docs/BUG_REPORT_2026-10-02_mex_cross_track_regression.md`.
 
 ## Post-parity features (beyond the reference)
