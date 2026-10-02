@@ -2812,9 +2812,21 @@ end
 
 function struct_init(base, off)
 % struct_init - a `{ … }` initializer for the struct value type `base` at
-% frame offset `off`: one store per member, in declaration order, zero-filling
-% the whole object first. Nested braces fill a struct-valued member and
-% `.name = value` designates one (C 6.7.9).
+% frame offset `off` (C 6.7.9). The whole object is zero-filled first, so
+% members the list does not mention end up zero.
+struct_fill(base, off, 1);
+end
+
+function struct_fill(base, off, braced)
+% struct_fill - fill a struct value at frame offset `off` from the current
+% initializer list. braced = 1 means the list is `{ … }` and both braces are
+% consumed. braced = 0 is C's brace elision (6.7.9p20): the members are
+% filled straight from the ENCLOSING list, which is what makes
+% `struct S { struct P p; int z; } s = {1, 2, 3};` mean `{{1,2}, 3}`.
+%
+% The separator commas are owned by whichever level is reading the next
+% element: a flat level takes the comma between its own members and leaves
+% the one after its last member to its caller.
 global token idname sdefs token_val
 stid = (base - 1000) / 2;
 names = sdefs{stid}{3};
@@ -2823,17 +2835,28 @@ sz = sdefs{stid}{1};
 for zz = 0:sz/8 - 1
     em_imm_store(0, sprintf('%d(%%rbp)', off + zz * 8), 8);   % C zero-fills the rest
 end
-expect(123);                % '{'
-k = 1;                      % the next positional member
-while token ~= 125 && token ~= 0
-    if token == 46          % '.name = value': a designated initializer
+if braced
+    expect(123);                % '{'
+end
+k = 1;                          % the next positional member
+while true
+    if token == 125 || token == 0
+        break;                  % '}' (or end of input) ends this list
+    end
+    if ~braced && k > numel(names)
+        break;                  % a flat level leaves with all it needs
+    end
+    if token == 46              % '.name = value': a designated initializer
+        if ~braced
+            break;              % a designator belongs to the enclosing object
+        end
         next();
         if token ~= 150
             fail('expected a member name after .');
         end
         dname = idname;
         next();
-        expect(61);         % '='
+        expect(61);             % '='
         if ~isfield(mm, dname)
             fail(sprintf('no member %s in the struct', dname));
         end
@@ -2850,55 +2873,84 @@ while token ~= 125 && token ~= 0
         minfo = mm.(names{k});
         k = k + 1;
     end
-    mt = minfo{2};
-    moff = off + minfo{1};
-    if mt >= 1000 && ~is_ptr_code(mt)
-        if token ~= 123
-            fail('expected { for a struct member');
+    fill_member(minfo, off + minfo{1});
+    if braced
+        % a braced list owns its separators, even after a designator for the
+        % last member (`{.z = 7, .a = 5}` would otherwise leave a comma)
+        if token == 44
+            next();
+        elseif token ~= 125 && token ~= 0
+            fail('expected , or } in the initializer');
         end
-        struct_init(mt, moff);
-    elseif numel(minfo) >= 4 && minfo{4} > 1
-        % an array member: a nested brace group (constant elements)
-        if token ~= 123
-            fail('expected { for an array member');
-        end
-        vals = parse_arr_init(minfo{4}, 1);
-        if is_ptr_code(mt)
-            msz = 8;
-        else
-            msz = tsize(mt);
-        end
-        for q = 1:minfo{4}
+    elseif k <= numel(names) && token == 44
+        next();                 % between this level's own members
+    end
+end
+if braced
+    expect(125);                % '}'
+end
+end
+
+function fill_member(minfo, moff)
+% fill_member - one member of an aggregate initializer: a brace group, or
+% (brace elision) the elements this member needs from the enclosing list.
+global token token_val
+mt = minfo{2};
+if mt >= 1000 && ~is_ptr_code(mt)
+    struct_fill(mt, moff, (token == 123));   % braces if given, else flat
+    return;
+end
+if numel(minfo) >= 4 && minfo{4} > 1        % an array member
+    n = minfo{4};
+    if is_ptr_code(mt)
+        msz = 8;
+    else
+        msz = tsize(mt);
+    end
+    if token == 123
+        vals = parse_arr_init(n, 1);
+        for q = 1:n
             em_imm_store(vals(q), sprintf('%d(%%rbp)', moff + (q - 1) * msz), msz);
         end
     else
-        neg = 0;
-        if token == 45          % '-'
-            neg = 1;
-            next();
+        for q = 1:n                         % flat: one constant per element
+            if token == 125 || token == 0 || token == 46
+                break;
+            end
+            em_imm_store(const_elem(), ...
+                sprintf('%d(%%rbp)', moff + (q - 1) * msz), msz);
+            if q < n && token == 44
+                next();
+            end
         end
-        if token ~= 128
-            fail('expected a constant struct initializer');
-        end
-        v = double(token_val);
-        next();
-        if neg
-            v = -v;
-        end
-        if is_ptr_code(mt)
-            msz = 8;
-        else
-            msz = tsize(mt);
-        end
-        em_imm_store(v, sprintf('%d(%%rbp)', moff), msz);
     end
-    if token == 44              % ','
-        next();
-    else
-        break;
-    end
+    return;
 end
-expect(125);                % '}'
+if is_ptr_code(mt)
+    msz = 8;
+else
+    msz = tsize(mt);
+end
+em_imm_store(const_elem(), sprintf('%d(%%rbp)', moff), msz);
+end
+
+function v = const_elem()
+% const_elem - one constant initializer element: an optional sign and a
+% number (the same restriction the array initializer path has).
+global token token_val
+neg = 0;
+if token == 45                  % '-'
+    neg = 1;
+    next();
+end
+if token ~= 128
+    fail('expected a constant initializer element');
+end
+v = double(token_val);
+next();
+if neg
+    v = -v;
+end
 end
 
 function parse_expression_statement()

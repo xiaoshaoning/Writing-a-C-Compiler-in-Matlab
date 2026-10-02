@@ -707,6 +707,7 @@ cctests = {
         'cc37_static.c', 96;      % static locals persist (compiler track only)
         'cc38_funptr.c', 96;      % function pointers with struct args (compiler track only)
         'cc39_wrap.c', 96;        % 32-bit intermediate arithmetic (compiler track only)
+        'cc40_elision.c', 96;     % C brace elision (compiler track only)
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
