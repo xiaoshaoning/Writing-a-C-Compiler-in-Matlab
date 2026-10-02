@@ -459,6 +459,17 @@ Interpreter divergence: `xc`'s VM word is 8 bytes (`sizeof(int)` = 8), its
 own model (a port artifact of xc.c's int-word VM); `cc13_si1.c`/`cc13_si5.c`
 left the cross-track parity list for that reason.
 
+**Bit-fields (2026-10-02).** `struct S { unsigned int a : 3; int b : 5; };`
+parses and works: a read returns only the field's `width` bits, sign- or
+zero-extended per the declared type, so the value is confined to the field.
+The width is recorded in the membermap and applied on load
+(`shlq $(64-width); sarq|shrq $(64-width)`), leaving the store path
+untouched, and `lvalue_addr` drops the extraction shifts along with the
+load. A field owns a whole 8-byte-aligned slot (no packing) — consistent
+with the already-coarse struct layout, though it does not reproduce gcc's
+`sizeof`; the values do match gcc. Guard `cc31_bitfield.c` (exit 96,
+gcc-comparable: `7 -16 1`); ceiling 14448 → **14584**.
+
 **typedef of struct/union, pointer and array types (2026-09-29).** `typedef`
 stored only a scalar base code and rejected struct definitions outright, so
 `typedef struct { … } P;`, `typedef int *ip;` and `typedef int ia[3];` all
