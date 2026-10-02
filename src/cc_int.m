@@ -3510,11 +3510,16 @@ elseif token == 150         % Id: function call or variable
                     asz = ssize_of(etype);
                 end
                 if asz > 8 || estruc
+                    % by-value struct: push the HIGHEST address first, so that
+                    % member 0 ends up at the lowest stack address - the
+                    % callee reads the copy as a struct (pushing low-to-high
+                    % handed it the fields reversed).
                     em('\tmovq\t%rax, %rdx');
+                    em(sprintf('\taddq\t$%d, %%rdx', asz - 8));
                     for kk = 1:asz/8
                         em('\tmovq\t(%rdx), %r8');
                         em('\tpushq\t%r8');
-                        em('\taddq\t$8, %rdx');
+                        em('\taddq\t$-8, %rdx');
                     end
                 elseif ~pushed
                     em('\tpushq\t%rax');
