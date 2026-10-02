@@ -2573,6 +2573,9 @@ while true
             for k = 1:numel(vals)
                 em_imm_store(vals(k), sprintf('%d(%%rbp)', off + (k-1)*elem), elem);
             end
+        elseif base >= 1000 && depth == 0 && token == 123
+            % a struct value: `{ … }` - one store per member, in order
+            struct_init(base, off);
         else
             parse_assignment();
             if base >= 1000 && depth == 0
@@ -2596,6 +2599,83 @@ while true
     end
 end
 expect(59);                 % ;
+end
+
+function struct_init(base, off)
+% struct_init - a `{ … }` initializer for the struct value type `base` at
+% frame offset `off`: one store per member, in declaration order, zero-filling
+% the whole object first. Nested braces fill a struct-valued member and
+% `.name = value` designates one (C 6.7.9).
+global token idname sdefs token_val
+stid = (base - 1000) / 2;
+names = sdefs{stid}{3};
+mm = sdefs{stid}{2};
+sz = sdefs{stid}{1};
+for zz = 0:sz/8 - 1
+    em_imm_store(0, sprintf('%d(%%rbp)', off + zz * 8), 8);   % C zero-fills the rest
+end
+expect(123);                % '{'
+k = 1;                      % the next positional member
+while token ~= 125 && token ~= 0
+    if token == 46          % '.name = value': a designated initializer
+        next();
+        if token ~= 150
+            fail('expected a member name after .');
+        end
+        dname = idname;
+        next();
+        expect(61);         % '='
+        if ~isfield(mm, dname)
+            fail(sprintf('no member %s in the struct', dname));
+        end
+        minfo = mm.(dname);
+        for q = 1:numel(names)      % later positional entries continue after it
+            if strcmp(names{q}, dname)
+                k = q + 1;
+            end
+        end
+    else
+        if k > numel(names)
+            fail('too many struct initializers');
+        end
+        minfo = mm.(names{k});
+        k = k + 1;
+    end
+    mt = minfo{2};
+    moff = off + minfo{1};
+    if mt >= 1000
+        if token ~= 123
+            fail('expected { for a struct member');
+        end
+        struct_init(mt, moff);
+    else
+        neg = 0;
+        if token == 45          % '-'
+            neg = 1;
+            next();
+        end
+        if token ~= 128
+            fail('expected a constant struct initializer');
+        end
+        v = double(token_val);
+        next();
+        if neg
+            v = -v;
+        end
+        if is_ptr_code(mt)
+            msz = 8;
+        else
+            msz = tsize(mt);
+        end
+        em_imm_store(v, sprintf('%d(%%rbp)', moff), msz);
+    end
+    if token == 44              % ','
+        next();
+    else
+        break;
+    end
+end
+expect(125);                % '}'
 end
 
 function parse_expression_statement()
