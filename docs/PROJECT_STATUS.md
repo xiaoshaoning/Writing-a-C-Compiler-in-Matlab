@@ -587,9 +587,14 @@ and the runtime library are the changelog entries above:
   `s.(name).field = value`, both work now. The gates pass individually
   (double 13/13, mx smoke 6/6, mex_run smoke 6/6); `run_all` still cannot
   complete here because the loaded host kills the process mid-run with 0
-  failing checks (the C clone behaves the same). The gcc cross-track 15/20
-  is **shared with the C clone** — the same five mx cases — so it is this
-  repo's mx shim, not an engine gap; see
+  failing checks (the C clone behaves the same). The gcc cross-track 15/20 was
+  **shared with the C clone** and **is now fixed** (2026-10-02): the mex
+  input count was stored with `sim_storeN(nrsec, nk, 8)` though
+  `__mex_nrhs` is a 4-byte `int`, so the extra bytes overwrote the next
+  global — in `mxprint.c` that is the first format string, which then read
+  empty. Storing 4 bytes fixed `mxcell_get`, `mxstruct_get` and `mxprint`;
+  the gate is 18/20, with `mxsparse_build`/`mxsparse_get` still returning an
+  empty sparse (a correct header but `jc[n] = 0` — a separate defect). See
   `MATLAB_in_C/docs/BUG_REPORT_2026-10-02_mex_cross_track_regression.md`.
 
 ## Post-parity features (beyond the reference)
