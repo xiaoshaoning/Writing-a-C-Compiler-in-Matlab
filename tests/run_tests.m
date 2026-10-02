@@ -709,6 +709,7 @@ cctests = {
         'cc39_wrap.c', 96;        % 32-bit intermediate arithmetic (compiler track only)
         'cc40_elision.c', 96;     % C brace elision (compiler track only)
         'cc41_mdim.c', 96;        % multi-dimensional array members (compiler track only)
+        'cc42_unsizedg.c', 96;    % unsized global arrays (compiler track only)
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).

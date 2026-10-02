@@ -1690,9 +1690,16 @@ while true
         dims = tdims;
         isarr = 1;
     end
+    unsized = 0;
     if token == 91          % '[': array (possibly multi-dimension)
         while token == 91
             next();
+            if token == 93          % `[]`: the size comes from the string
+                dims(end+1) = 0;
+                unsized = 1;
+                next();
+                continue;
+            end
             if token ~= 128
                 fail('expected a constant array size');
             end
@@ -1732,6 +1739,24 @@ while true
     initv = [];
     if token == 61          % '=': constant initializer
         next();
+        if isarr && unsized
+            % `char g[] = "abc"`: the string's length sets the size (NUL
+            % included); the layout is recomputed now that it is known
+            if token ~= 172
+                fail('an unsized array needs a string initializer');
+            end
+            dims(1) = numel(strtext) + 1;
+            if is_struct_code(base)
+                gstride.(name) = cstride_of(dims, ssize_of(base));
+                gvararrsz.(name) = prod(dims) * ssize_of(base);
+            elseif is_ptr_code(t)
+                gstride.(name) = cstride_of(dims, 8);
+                gvararrsz.(name) = 8 * prod(dims);
+            else
+                gstride.(name) = cstride_of(dims, tsize(t));
+                gvararrsz.(name) = tsize(t) * prod(dims);
+            end
+        end
         if isarr
             initv = parse_arr_init(dims, 1);
             if base == 1
