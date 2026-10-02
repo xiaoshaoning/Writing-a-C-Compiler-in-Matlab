@@ -18,6 +18,12 @@
 %   CC_SECTIONS=instr     the instruction-count regression (142 checks, ~4m)
 %   CC_SECTIONS=cctests,instr   any comma-separated combination
 %
+% CC_CORPUS=first:count slices the corpus itself (1-based), which is how to
+% find WHICH program a corpus failure is in. It does not make the section
+% cheap: group 10 carries the pp_* checks as well, so a 25-program slice
+% still takes ~4.5 minutes of a ~6-minute section. A sliced run reports the
+% corpus instruction total as SKIP, since a partial total is meaningless.
+%
 % Unset (or 'all') runs everything, which is the default.
 
 addpath('src');
@@ -30,6 +36,28 @@ run_cctests = sec_want('cctests');
 run_ostests = sec_want('ostests');
 run_instr   = sec_want('instr');
 run_tables  = sec_want('tables');   % groups 5-9, the interpretive tables
+
+% CC_CORPUS=first:count slices the corpus itself (1-based). The corpus is the
+% biggest single unit (~6 minutes for 324 programs) so a section slice is not
+% always enough on a host that kills long runs; a program range is.
+cc_corpus = getenv('CC_CORPUS');
+corpus_first = 1;
+corpus_count = Inf;
+if ~isempty(cc_corpus)
+    cc_colon = strfind(cc_corpus, ':');
+    if isempty(cc_colon)
+        corpus_first = str2double(cc_corpus);
+    else
+        corpus_first = str2double(cc_corpus(1:cc_colon(1) - 1));
+        corpus_count = str2double(cc_corpus(cc_colon(1) + 1:end));
+    end
+end
+corpus_last = @(n) min(n, corpus_first + corpus_count - 1);
+corpus_sliced = ~isempty(cc_corpus);
+if corpus_sliced
+    fprintf('corpus slice: programs %d..%d\n', corpus_first, ...
+            corpus_first + corpus_count - 1);
+end
 
 npass = 0;
 nfail = 0;
@@ -848,7 +876,7 @@ cctests = {
         fprintf('SKIP  gcc-dependent groups (gcc not found)\n');
     else
     if run_cctests
-    for k = 1:size(cctests, 1)
+    for k = corpus_first:corpus_last(size(cctests, 1))
         try
             got = -999;
             for attempt = 1:5   % retry: a lingering process can hold tmp_cc.exe so gcc cannot write it (a real assembler error still fails every attempt)
@@ -1203,7 +1231,7 @@ cctests = {
     ic_total = 0;
     ic_hello = 0;
     if run_instr
-    for ick = 1:size(cctests, 1)
+    for ick = corpus_first:corpus_last(size(cctests, 1))
         try
             delete('tmp_cc.s');
             cc_int(['tests/programs/' cctests{ick,1}], 'tmp_cc.s');
@@ -1221,8 +1249,12 @@ cctests = {
         [npass nfail] = addcheck(npass, nfail, false, ...
             sprintf('instr count hello.c: %s', e.message));
     end
+    if corpus_sliced
+        fprintf('SKIP  instr regression: corpus total (sliced run)\n');
+    else
     [npass nfail] = addcheck(npass, nfail, ic_total <= 18235, ...
         sprintf('instr regression: corpus %d <= 18235', ic_total));
+    end
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 88, ...
         sprintf('instr regression: hello.c %d <= 88', ic_hello));
     end                     % CC_SECTIONS=instr
