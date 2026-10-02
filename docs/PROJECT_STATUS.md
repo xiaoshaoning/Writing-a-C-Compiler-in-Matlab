@@ -580,16 +580,17 @@ and the runtime library are the changelog entries above:
   here (the R2023b install is a stub with no `matlab.exe`), so the
   suite's "green oracle" is unverified on it. The instruction-count
   ceiling is a clone-lineage baseline, not a real-MATLAB number.
-- **matlab_in_rust engine.** The current build is much more compatible
-  (matches real MATLAB on cell/`strcmp`/`dir`/reshape semantics, and
-  passes 588/588 checks) but still cannot complete the harness:
-  `xc('tests/programs/stress2.c')` hangs (the compiler track runs the
-  same program fine). The gcc cross-track gate also fails two cases
-  (`mxsparse_get`: "Undefined function ... type 'double'"; `matfile` /
-  `matfile_del`: "SFA1 unsupported struct field assignment target").
-  Filed as `BUG_REPORT_RUST_2026-09-29_compiler_harness_compat.md` in the
-  engine repo (with minimal repros); also recorded in
-  `docs/2026-09-06-rust-engine-compat.md`.
+- **matlab_in_rust engine — the three filed gaps are FIXED (2026-10-02
+  `dist/matlab-cli` build).** Interpreter: 200 calls 37.6 s → **0.34 s** and
+  `xc('tests/programs/stress2.c')` **finishes in 5.0 s** (was a >9-min
+  hang). `find`/`nonzeros`/`sum`/`double`/transpose on a sparse, and
+  `s.(name).field = value`, both work now. The gates pass individually
+  (double 13/13, mx smoke 6/6, mex_run smoke 6/6); `run_all` still cannot
+  complete here because the loaded host kills the process mid-run with 0
+  failing checks (the C clone behaves the same). The gcc cross-track 15/20
+  is **shared with the C clone** — the same five mx cases — so it is this
+  repo's mx shim, not an engine gap; see
+  `MATLAB_in_C/docs/BUG_REPORT_2026-10-02_mex_cross_track_regression.md`.
 
 ## Post-parity features (beyond the reference)
 
