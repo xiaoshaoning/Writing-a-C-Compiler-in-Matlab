@@ -832,7 +832,7 @@ if token == 184         % typedef
     end
     % the alias is the full (base + 2*depth) code plus any array dims;
     % callers still add 2*(their own '*') so `ip *pp;` composes
-    typedefs.(nm) = {base + 2 * depth, adims};
+    typedefs.(nm) = {pcode(base, depth), adims};
     expect(59);
     return;
 end
@@ -889,7 +889,7 @@ end
 name = idname;
 next();
 if token == 40              % '(': function (return type = base+2*depth)
-    parse_function_tail(name, base == 1, base + 2 * depth);
+    parse_function_tail(name, base == 1, pcode(base, depth));
 else
     parse_globals(name, base, depth, 0, tdims);
 end
@@ -1162,7 +1162,7 @@ while token ~= 125          % '}'
     end
     name = idname;
     next();
-    mt = mbase + 2 * depth;
+    mt = pcode(mbase, depth);
     asz = 1;
     if token == 91          % '[': member array
         next();
@@ -1267,10 +1267,10 @@ end
 function v = val_size(t)
 % val_size - byte size of a value of type t where t may be a pointer code
 % (8 bytes), a struct value, or a plain scalar.
-if t >= 1000
-    v = ssize_of(t);
-elseif is_ptr_code(t)
+if is_ptr_code(t)
     v = 8;
+elseif t >= 1000
+    v = ssize_of(t);
 else
     v = tsize(t);
 end
@@ -1296,13 +1296,65 @@ function b = is_unsigned_type(t)
 b = (t == 5 || t == 12 || t == 13 || t == 16 || t == 20);
 end
 
+function c = pcode(base, depth)
+% pcode - the type code for `depth` levels of pointer to `base`. Pointer
+% codes live in a band well clear of the value codes, because the old
+% `base + 2*depth` scheme collided with them: char** came out as 5, which is
+% also unsigned int, so is_ptr_code said no. The depth sits in the low bits,
+% so address-of and dereference stay a simple step.
+if depth == 0
+    c = base;                  % no pointer at all: the base code itself
+else
+    c = 4000 + base * 64 + depth;
+end
+end
+
+function b = pbase(t)
+% pbase - the type a pointer code points to, one level down.
+b = floor((t - 4000) / 64);
+end
+
+function d = pdepth(t)
+% pdepth - how many '*' levels a pointer code carries.
+d = mod(t - 4000, 64);
+end
+
+function c = pdecay(t)
+% pdecay - one more pointer level (address-of on a pointer value).
+c = t + 1;
+end
+
+function c = padd(t)
+% padd - the type of a pointer/array whose ELEMENT type is t (array decay).
+% A value type becomes a pointer to it; a pointer type gains a level, so
+% `int *a[4]` is int** and `char *argv[]` is char**.
+if is_ptr_code(t)
+    c = t + 1;
+else
+    c = pcode(t, 1);
+end
+end
+
+function b = is_charptr(t)
+% is_charptr - t is `char *` (no pointer scaling, and the string-copy target).
+b = is_ptr_code(t) && pdepth(t) == 1 && pbase(t) == 1;
+end
+
+function c = pderef(t)
+% pderef - one less pointer level; dereferencing the last one yields the
+% base (value) type code again.
+if mod(t - 4000, 64) == 1
+    c = floor((t - 4000) / 64);
+else
+    c = t - 1;
+end
+end
+
 function b = is_ptr_code(t)
-% is_ptr_code - t is a pointer type code (base+2) rather than a plain
-% value. The two code spaces overlap (unsigned int 5 -> 7 = short), so the
-% value codes are excluded explicitly rather than assumed out of range.
-b = t >= 2 && ...
-    ~(t == 5 || t == 6 || t == 7 || t == 9 || t == 12 || t == 13 || ...
-      t == 16 || t == 17 || t == 20);
+% is_ptr_code - t is a pointer type code, i.e. it lives in the pointer band.
+% The value codes, the function-pointer space (2000) and the struct-value
+% space (1002+) are all below it.
+b = t >= 4000;
 end
 
 function tsz = tsize(t)
@@ -1317,8 +1369,8 @@ elseif t == 0 || t == 5 || t == 9 || t == 16
     tsz = 4;
 elseif t >= 1000 && t < 1002
     tsz = ssize_of(t);
-elseif t >= 1002
-    tsz = ssize_of(t - 2);
+elseif t >= 1002 && t < 2000
+    tsz = ssize_of(t - 2);       % a struct value; 2000+ is a function pointer
 else
     tsz = 8;
 end
@@ -1326,16 +1378,20 @@ end
 
 function sz = elem_size(t)
 % elem_size — byte size per element for pointer arithmetic/indexing on
-% type t. A pointer code is base+2, so the element size is tsize(t-2); a
+% type t: the size of what it points to (a struct pointer uses the
 % struct pointer uses the struct value's size.
-if t >= 1002
-    sz = ssize_of(t - 2);
-elseif t >= 1000
-    sz = ssize_of(t);
-elseif t >= 2
-    sz = tsize(t - 2);
+if ~is_ptr_code(t)
+    b = t;                  % already an element type
+elseif pdepth(t) > 1
+    sz = 8;                 % the element is itself a pointer
+    return;
 else
-    sz = tsize(t);
+    b = pbase(t);           % the pointee
+end
+if b >= 1000
+    sz = ssize_of(b);
+else
+    sz = tsize(b);
 end
 end
 
@@ -1435,7 +1491,7 @@ lvararr = struct();
 lvarstruct = struct();
 glabels = struct();
 fbytes = 0;
-[nparams, psize, ptypes] = parse_params(rettype >= 1000);
+[nparams, psize, ptypes] = parse_params(rettype >= 1000 && ~is_ptr_code(rettype));
 expect(41);                 % )
 expect(123);                % {
 if isfield(funcs, fname2)
@@ -1446,7 +1502,7 @@ fret.(fname2) = rettype;    % full return type for call sites
 frettype.(fname2) = rettype;
 cret = ischarfn;
 cvoid = (rettype == 4);     % void-returning (no value in rax)
-sret = (rettype >= 1000);   % struct-returning
+sret = (rettype >= 1000 && ~is_ptr_code(rettype));   % struct-returning
 if sret
     sretsize = ssize_of(rettype);
     sretbase = 16 + 8 * nparams;
@@ -1543,7 +1599,7 @@ while true
             break;
         end
     end
-    t = base + 2 * depth;
+    t = pcode(base, depth);
     dims = [];
     isarr = 0;
     if ~isempty(tdims)      % a typedef'd array type
@@ -1565,7 +1621,11 @@ while true
         end
         isarr = 1;
     end
-    gtype.(name) = t + 2 * isarr;
+    if isarr
+        gtype.(name) = padd(t);   % an array decays to a pointer
+    else
+        gtype.(name) = t;
+    end
     garr.(name) = isarr;
     gstruct.(name) = (~isarr) && (depth == 0) && (base >= 1000);
     if base >= 1000
@@ -1712,7 +1772,7 @@ for k = 1:numel(glist)
         elseif isarr
             % array initializer: values comma-separated (byte for char
             % elements, quad otherwise)
-            if t >= 1000
+            if t >= 1000 && ~is_ptr_code(t)
                 line = '	.quad	';
             else
                 line = dir_of(elem_size(t));
@@ -1760,7 +1820,7 @@ end
 function r = is_fptr_type(t)
 % is_fptr_type — is t a function-pointer type (2000 + return type; struct
 % returns are 3000+2*stid)?
-r = (t >= 2000 && t < 2100) || t >= 3000;
+r = (t >= 2000 && t < 2100) || (t >= 3000 && t < 4000);   % the pointer band starts at 4000
 end
 
 function r = fptr_rettype(t)
@@ -2000,7 +2060,7 @@ while token ~= 41           % ')'
         fail('expected a parameter name');
     end
     names{end+1} = idname;
-    t = base + 2 * depth;
+    t = pcode(base, depth);
     next();
     decayed = 0;
     if token == 91          % '[': array parameter decays to a pointer
@@ -2011,7 +2071,7 @@ while token ~= 41           % ')'
             end
             expect(93);
         end
-        t = t + 2;
+        t = padd(t);
         decayed = 1;
     end
     types{end+1} = t;
@@ -2494,7 +2554,7 @@ while true
     if is_fptr
         t = 2000 + base + 2 * depth;   % 2000 + the full return type
     else
-        t = base + 2 * depth;
+        t = pcode(base, depth);
     end
     dims = [];
     isarr = 0;
@@ -2533,7 +2593,7 @@ while true
             elem = tsize(t);
         end
         nbytes = prod(dims) * elem;
-        lvartype.(name) = t + 2;    % the name decays to a pointer
+        lvartype.(name) = padd(t);   % the name decays to a pointer
         lvararr.(name) = 1;
         lvarstruct.(name) = 0;
         lvarstride.(name) = cstride_of(dims, elem);
@@ -2712,7 +2772,7 @@ while token ~= 125 && token ~= 0
     end
     mt = minfo{2};
     moff = off + minfo{1};
-    if mt >= 1000
+    if mt >= 1000 && ~is_ptr_code(mt)
         if token ~= 123
             fail('expected { for a struct member');
         end
@@ -2838,7 +2898,7 @@ while token == 61 || (token >= 160 && token <= 169)
             % int/pointer lvalue, double RHS: truncate toward zero
             em('\tcvttsd2siq\t%xmm0, %rax');
         end
-        if sav_ltype == 3 && ~isempty(sav_bstride)
+        if is_charptr(sav_ltype) && ~isempty(sav_bstride)
             % string copy into a char array: copy the bytes until the NUL
             % or the array's size (rax keeps the source pointer)
             sz = sav_asz;
@@ -3265,14 +3325,14 @@ while token == 43 || token == 45   % '+' '-'
         if op == 45 && rhs_t >= 2
             % ptr - ptr: byte difference / element size
             em('\tsubq\t%rbx, %rax');
-            if t ~= 3
+            if ~is_charptr(t)
                 em(sprintf('\tmovq\t$%d, %%rcx', elem_size(t)));
                 em('\tcqto');
                 em('\tidivq\t%rcx');
             end
             etype = 0;
         else
-            if t ~= 3       % char*: element size 1 — no scaling
+            if ~is_charptr(t)   % char*: element size 1 — no scaling
                 em(sprintf('\timulq\t$%d, %%rbx', elem_size(t)));
             end
             if op == 43
@@ -3854,9 +3914,9 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
             else
                 bstride = [];
                 curarrsz = 0;
-                et = t - 2;
+                et = pderef(t);
                 etype = et;
-                if et >= 1000
+                if et >= 1000 && ~is_ptr_code(et)
                     estruc = 1;         % a struct value: address, no load
                 else
                     em_val(et);
@@ -3864,9 +3924,9 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
                 end
             end
         else
-            et = t - 2;
+            et = pderef(t);
             etype = et;
-            if et >= 1000
+            if et >= 1000 && ~is_ptr_code(et)
                 estruc = 1;               % struct element: address, no load
             else
                 em_val(et);
@@ -3953,7 +4013,7 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
             if estruc || etype < 1000
                 fail('-> on a non-struct pointer');
             end
-            base_t = etype - 2;       % the pointed-to struct value type
+            base_t = pderef(etype);   % the pointed-to struct value type
         end
         mem = member_lookup(base_t, mname);
         em(sprintf('\taddq\t$%d, %%rax', mem{1}));
@@ -3963,7 +4023,7 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
             % (the address is already in rax), and keeps its byte size so
             % that sizeof sees the whole array.
             estruc = 0;
-            etype = mem{2} + 2;
+            etype = padd(mem{2});
             bstride = [];
             if mem{2} >= 1000
                 esz = ssize_of(mem{2});
@@ -3971,7 +4031,7 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
                 esz = tsize(mem{2});
             end
             curarrsz = mem{4} * esz;
-        elseif etype >= 1000
+        elseif etype >= 1000 && ~is_ptr_code(etype)
             estruc = 1;               % a struct member: address, no load
         else
             estruc = 0;
@@ -4028,7 +4088,7 @@ for k = numel(ops):-1:1
         if ~lvalue_addr() && etype < 2
             fail('bad address of');
         end
-        etype = etype + 2;
+        etype = pdecay(etype);
         estruc = 0;
     elseif op == 42         % '*': dereference — load through the pointer
         if is_fptr_type(etype)
@@ -4036,11 +4096,11 @@ for k = numel(ops):-1:1
         elseif etype < 2
             fail('bad dereference');
         else
-            etype = etype - 2;
-            if etype == 3
+            etype = pderef(etype);
+            if is_ptr_code(etype) && pdepth(etype) == 1 && pbase(etype) == 1
                 em('\tmovzbl\t(%rax), %eax');
                 estruc = 0;
-            elseif etype >= 1000
+            elseif etype >= 1000 && ~is_ptr_code(etype)
                 estruc = 1;     % a struct value: no load
             elseif etype == 6
                 em('\tmovsd\t(%rax), %xmm0');

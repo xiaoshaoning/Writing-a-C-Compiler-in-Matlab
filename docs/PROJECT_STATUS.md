@@ -470,6 +470,19 @@ frame); and the function-pointer call path counts pushed words, not
 arguments (the same defect fixed on the direct path). Guards
 `cc33_enum.c` … `cc38_funptr.c`; suite 810/810; ceiling 14810 → **15819**.
 
+**Pointer codes no longer collide (2026-10-02).** Pointer types were
+`base + 2*depth`, which landed on value codes: `char **` came out as 5 =
+`unsigned int`, `short *` as 9 = signed word, `int **` as 4 = void - so
+`is_ptr_code` had to guess. They now live in their own band,
+`pcode(base, depth) = 4000 + base*64 + depth`, with `pbase`/`pdepth`/
+`pdecay`/`pderef`/`padd` helpers (depth in the low bits keeps address-of and
+dereference a single step). `is_ptr_code` is simply `t >= 4000`. The
+knock-on edits: every `t >= 1000` "is it a struct?" test now also excludes
+the pointer band, `is_fptr_type` is bounded below 4000, `elem_size` sizes a
+pointer element as 8, and array decay goes through `padd` so an array of
+pointers (`const mxArray *prhs[]`) is right. `char **dir = matGetDir(...)`
+now compiles and runs: the mx cross-track gate is back to **20/20**.
+
 **Known gap found while checking the gate:** `char **d; d[0]` fails with
 "pointer type expected for indexing". `char **` is type code 5
 (`1 + 2*2`), which is also the `unsigned int` code, and `is_ptr_code`
