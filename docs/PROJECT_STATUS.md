@@ -459,6 +459,19 @@ Interpreter divergence: `xc`'s VM word is 8 bytes (`sizeof(int)` = 8), its
 own model (a port artifact of xc.c's int-word VM); `cc13_si1.c`/`cc13_si5.c`
 left the cross-track parity list for that reason.
 
+**Struct-by-value arguments, and the call cleanup (2026-10-02).** An
+empirical sweep (32 small C programs, gcc vs ours) found passing a struct by
+value gave field-reversed values: the caller pushed the copy low-address
+first, so `pushq`'s downward growth put member 0 highest. It now pushes the
+highest address first. The same sweep exposed a second, sharper bug — the
+call cleanup popped `8 * nargs` while counting each argument as one word, so
+a multi-word (struct) argument left `%rsp` high and the caller's frame
+garbage. `pwords` now tracks the words pushed. Note the two oracles
+disagreed: x86sim returned 96, the gcc-assembled cctests path returned **5**
+— the simulator does not model `%rsp` drift, the real CPU does.
+`cc32_byval.c` runs through the cctests path so that class now fails the
+suite. Ceiling 14810.
+
 **Bit-fields (2026-10-02).** `struct S { unsigned int a : 3; int b : 5; };`
 parses and works: a read returns only the field's `width` bits, sign- or
 zero-extended per the declared type, so the value is confined to the field.
