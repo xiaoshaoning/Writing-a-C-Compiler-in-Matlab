@@ -706,6 +706,7 @@ cctests = {
         'cc36_unsized.c', 96;     % `char s[] = "..."` (compiler track only)
         'cc37_static.c', 96;      % static locals persist (compiler track only)
         'cc38_funptr.c', 96;      % function pointers with struct args (compiler track only)
+        'cc39_wrap.c', 96;        % 32-bit intermediate arithmetic (compiler track only)
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
@@ -1163,7 +1164,7 @@ cctests = {
     % cc26_signed.c the signed/unsigned narrow-type widening (which also
     % sign-extends char/short loads via movsbq/movswq/movslq). Making int
     % 32-bit (cc27_int.c) then moved int loads/stores to movslq/movl and
-    % added the int-pointer scaling, so the total is 15819. See
+    % added the int-pointer scaling, so the total is 16704. See
     % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
@@ -1185,10 +1186,10 @@ cctests = {
         [npass nfail] = addcheck(npass, nfail, false, ...
             sprintf('instr count hello.c: %s', e.message));
     end
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 15819, ...
-        sprintf('instr regression: corpus %d <= 15819', ic_total));
-    [npass nfail] = addcheck(npass, nfail, ic_hello <= 84, ...
-        sprintf('instr regression: hello.c %d <= 84', ic_hello));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 16704, ...
+        sprintf('instr regression: corpus %d <= 16704', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_hello <= 88, ...
+        sprintf('instr regression: hello.c %d <= 88', ic_hello));
 
     % peephole pass unit fixtures — one synthetic input per fold rule,
     % asserting the rewrite fires (and its forbidden line disappears).

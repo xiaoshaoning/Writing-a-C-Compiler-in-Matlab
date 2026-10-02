@@ -55,7 +55,7 @@ function cc_int(varargin)
 %   gcc out.s -o out
 %   .\out.exe  (cmd)  /  ./out  (bash) — exit code is the returned value
 
-global src si token token_val token_dval token_isflt idname strtext out fname lbl lvars lvartype ...
+global src si token token_val token_dval token_isflt token_sfx idname strtext out fname lbl lvars lvartype ...
        lvararr fbytes funcs fret called retlbl cfn globals gtype garr glist ...
        strs nstr etype ltype cret loopctx stags sdefs nstid estruc ...
        lvarstruct gstruct typedefs enums lvarstride gstride bstride glabels sret sretsize sretbase libfns libcalls ginit fptypes libargt libret curarrsz cvoid fparams frettype
@@ -87,6 +87,7 @@ token = 0;
 token_val = 0;
 token_dval = 0;      % the double value of a float literal
 token_isflt = 0;     % 1 when the current Num is a float (double) literal
+token_sfx = 0;       % integer-literal suffix bits: 1 = u/U, 2 = l/L
 strtext = [];   % last string literal as DOUBLE codes (the clone mangles
                 % backslash-bearing char strings crossing globals)
 lbl = 0;      % unique-label counter for short-circuit jumps
@@ -544,6 +545,8 @@ elseif (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
         token = 191;            % Register (no-op qualifier)
     elseif strcmp(id, 'static')
         token = 192;            % Static (no-op qualifier)
+    elseif strcmp(id, 'volatile')
+        token = 199;            % Volatile (no-op qualifier)
     elseif strcmp(id, 'extern')
         token = 197;            % Extern (no-op qualifier)
     elseif strcmp(id, 'short')
@@ -994,7 +997,8 @@ global token idname stags enums typedefs nstid
 base = 0;
 stdef = 0;
 tdims = [];
-while token == 190 || token == 191 || token == 192 || token == 197   % const/register/static/extern
+while token == 190 || token == 191 || token == 192 || token == 197 || ...
+        token == 199    % const/register/static/extern/volatile
     next();
 end
 if token == 131             % int
@@ -1287,6 +1291,75 @@ elseif sz == 4
     d = '	.long	';
 else
     d = '	.quad	';
+end
+end
+
+function t = int_promote(t)
+% int_promote - C's integer promotions: anything narrower than int becomes
+% int (the int here is 32-bit), which is also what the arithmetic below
+% assumes about its operands.
+if t == 1 || t == 7 || t == 12 || t == 13
+    t = 0;
+end
+end
+
+function w = int_width(t)
+% int_width - byte width of an integer type code, for the conversions.
+if t == 17 || t == 20
+    w = 8;
+elseif t == 7 || t == 13
+    w = 2;
+elseif t == 1 || t == 12
+    w = 1;
+else
+    w = 4;                  % int, unsigned int, promoted narrow types
+end
+end
+
+function t = arith_type(a, b)
+% arith_type - the usual arithmetic conversions for two integer operand
+% types: promote both, the wider wins, equal widths mean unsigned if either
+% operand is unsigned.
+a = int_promote(a);
+b = int_promote(b);
+wa = int_width(a);
+wb = int_width(b);
+if wa > wb
+    t = a;
+elseif wb > wa
+    t = b;
+elseif is_unsigned_type(a) || is_unsigned_type(b)
+    if wa == 8
+        t = 20;
+    else
+        t = 5;
+    end
+elseif wa == 8
+    t = 17;
+else
+    t = 0;
+end
+end
+
+function em_narrow(t)
+% em_narrow - leave %rax holding a value of integer type t. This is what
+% gives C's wraparound for the narrow types: an int result does not keep its
+% upper 32 bits, so `a * b` overflows at 32 bits even though the register is
+% 64 wide. 8-byte types need nothing.
+if is_unsigned_type(t)
+    if t == 12
+        em('\tmovzbl\t%al, %eax');
+    elseif t == 13
+        em('\tmovzwl\t%ax, %eax');
+    elseif t == 5 || t == 16
+        em('\tmovl\t%eax, %eax');
+    end
+elseif t == 1
+    em('\tmovsbq\t%al, %rax');
+elseif t == 7
+    em('\tmovswq\t%ax, %rax');
+elseif t == 0 || t == 9
+    em('\tmovslq\t%eax, %rax');
 end
 end
 
@@ -2125,7 +2198,7 @@ global token token_val idname typedefs src si lvars lvartype lvararr lvarstruct 
 if token == 131 || token == 134 || token == 178 || token == 198 || ...  % int/char/struct/union
    token == 188 || ...                                                % unsigned
    token == 189 || token == 190 || token == 191 || token == 192 || ... % double/const/register/static
-   token == 197 || ...                                                % extern
+   token == 197 || token == 199 || ...                                % extern/volatile
    token == 193 || token == 194 || token == 195 || token == 196 || ... % short/word/long/signed
    (token == 150 && isfield(typedefs, idname))            % typedef'd type
     parse_declaration();
@@ -2292,7 +2365,7 @@ if token ~= 59              % ';': optional init
     if token == 131 || token == 134 || token == 178 || token == 198 || ...
        token == 188 || token == 189 || token == 190 || token == 191 || token == 192 || ...
        token == 193 || token == 194 || token == 195 || token == 196 || ...
-       token == 197 || ...
+       token == 197 || token == 199 || ...
        (token == 150 && isfield(typedefs, idname))
         parse_declaration();      % `for (mwSize i = 0; ...)`; consumes ';'
     else
@@ -3076,13 +3149,16 @@ function parse_bit_or()
 global token etype
 parse_bit_xor();
 while token == 124          % '|'
+    sav_t = etype;          % the left operand's type
     next();
     em('\tpushq\t%rax');    % save the left operand
     parse_bit_xor();
+    rhs_t = etype;
     em('\tmovq\t%rax, %rbx');
     em('\tpopq\t%rax');
     em('\torq\t%rbx, %rax');
-    etype = 0;
+    etype = arith_type(sav_t, rhs_t);
+    em_narrow(etype);
 end
 end
 
@@ -3091,13 +3167,16 @@ function parse_bit_xor()
 global token etype
 parse_bit_and();
 while token == 94           % '^'
+    sav_t = etype;
     next();
     em('\tpushq\t%rax');
     parse_bit_and();
+    rhs_t = etype;
     em('\tmovq\t%rax, %rbx');
     em('\tpopq\t%rax');
     em('\txorq\t%rbx, %rax');
-    etype = 0;
+    etype = arith_type(sav_t, rhs_t);
+    em_narrow(etype);
 end
 end
 
@@ -3106,13 +3185,16 @@ function parse_bit_and()
 global token etype
 parse_equality();
 while token == 38           % '&'
+    sav_t = etype;
     next();
     em('\tpushq\t%rax');
     parse_equality();
+    rhs_t = etype;
     em('\tmovq\t%rax, %rbx');
     em('\tpopq\t%rax');
     em('\tandq\t%rbx, %rax');
-    etype = 0;
+    etype = arith_type(sav_t, rhs_t);
+    em_narrow(etype);
 end
 end
 
@@ -3268,12 +3350,13 @@ while token == 140 || token == 141   % Shl Shr
     em('\tpopq\t%rax');
     if op == 140
         em('\tshlq\t%cl, %rax');
-    elseif sav_etype == 5
+    elseif is_unsigned_type(int_promote(sav_etype))
         em('\tshrq\t%cl, %rax');   % logical (unsigned)
     else
         em('\tsarq\t%cl, %rax');   % arithmetic (signed)
     end
-    etype = 0;
+    etype = int_promote(sav_etype);   % a shift does not widen its left side
+    em_narrow(etype);
 end
 end
 
@@ -3358,7 +3441,8 @@ while token == 43 || token == 45   % '+' '-'
         else
             em('\tsubq\t%rbx, %rax');
         end
-        etype = 0;
+        etype = arith_type(t, rhs_t);
+        em_narrow(etype);
     end
 end
 end
@@ -3417,7 +3501,7 @@ while token == 42 || token == 47 || token == 37   % '*' '/' '%'
         em('\tpopq\t%rax');   % lhs
         if op == 42
             em('\timulq\t%rbx, %rax');
-        elseif sav_etype == 5
+        elseif is_unsigned_type(int_promote(sav_etype))
             em('\txorq\t%rdx, %rdx');
             em('\tdivq\t%rbx');        % unsigned
             if op == 37
@@ -3430,9 +3514,8 @@ while token == 42 || token == 47 || token == 37   % '*' '/' '%'
                 em('\tmovq\t%rdx, %rax');
             end
         end
-        if sav_etype ~= 6 && rhs_t ~= 6
-            etype = 0;
-        end
+        etype = arith_type(sav_etype, rhs_t);
+        em_narrow(etype);
     end
 end
 end
@@ -3442,7 +3525,7 @@ function parse_unary()
 % postfix := '[' expr ']' | '.' name | '->' name | '++' | '--'. Prefix ops
 % apply in reverse. Types: etype tracks the type; arrays and struct values
 % decay (no load, estruc = 1 for struct values).
-global token token_val token_dval token_isflt idname strtext lvars lvartype lvararr lvarstruct ...
+global token token_val token_dval token_isflt token_sfx idname strtext lvars lvartype lvararr lvarstruct ...
        globals gtype garr gstruct funcs fret frettype fparams called ltype libfns libcalls ...
        etype estruc lvarstride gstride bstride lvararrsz gvararrsz curarrsz si typedefs fbytes fptypes libargt libret enums out
 ops = [];
@@ -3634,7 +3717,7 @@ elseif token == 128         % Num
         etype = 6;
     else
         em(sprintf('\tmovq\t$%d, %%rax', token_val));
-        etype = 0;
+        etype = num_type(token_val, token_sfx);
     end
     estruc = 0;
     next();
@@ -4078,8 +4161,12 @@ for k = numel(ops):-1:1
         em('\tmovsd\t%xmm1, %xmm0');
     elseif op == 45             % '-' on an integer
         em('\tnegq\t%rax');
+        etype = int_promote(etype);
+        em_narrow(etype);
     elseif op == 126        % '~'
         em('\tnotq\t%rax');
+        etype = int_promote(etype);
+        em_narrow(etype);
     elseif op == 33 && etype == 6   % '!' on a double: (d == 0.0)
         em('\tmovabsq\t$0, %r15');
         em('\tcvtsi2sdq\t%r15, %xmm1');
@@ -4299,17 +4386,43 @@ b = 1;
 end
 
 function lex_suffix()
-% lex_suffix - consume C integer-suffix letters (u/U/l/L) after a number.
-% The value is unchanged: a constant's width and unsignedness come from the
-% declared type, so '5u', '0xFFu', '10L' and '7UL' only have to lex.
-global src si
+% lex_suffix - consume C integer-suffix letters (u/U/l/L) after a number and
+% record them in token_sfx (bit 1 = unsigned, bit 2 = long) so that the
+% literal's type is not lost: '1L << 40' is a long shift, an int one would be
+% narrowed to 32 bits.
+global src si token_sfx
+token_sfx = 0;
 while si <= numel(src)
     c = src(si);
-    if c == 'u' || c == 'U' || c == 'l' || c == 'L'
+    if c == 'u' || c == 'U'
+        token_sfx = bitor(token_sfx, 1);
+        si = si + 1;
+    elseif c == 'l' || c == 'L'
+        token_sfx = bitor(token_sfx, 2);
         si = si + 1;
     else
         break;
     end
+end
+end
+
+function t = num_type(v, sfx)
+% num_type - the type of an integer literal: its suffix when it has one,
+% otherwise int, or long when the value does not fit in an int (C 6.4.4.1).
+u = bitand(sfx, 1);
+l = bitand(sfx, 2);
+if l
+    if u
+        t = 20;             % unsigned long
+    else
+        t = 17;             % long
+    end
+elseif u
+    t = 5;                  % unsigned int
+elseif v > 2147483647 || v < -2147483648
+    t = 17;                 % too big for int
+else
+    t = 0;
 end
 end
 function lex_number()

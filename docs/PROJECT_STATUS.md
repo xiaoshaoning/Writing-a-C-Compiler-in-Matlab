@@ -470,6 +470,20 @@ frame); and the function-pointer call path counts pushed words, not
 arguments (the same defect fixed on the direct path). Guards
 `cc33_enum.c` … `cc38_funptr.c`; suite 810/810; ceiling 14810 → **15819**.
 
+**32-bit intermediate arithmetic (2026-10-02).** Expression temporaries
+were 64-bit, so C's wraparound did not happen: `(long)(x*x)` for x = 50000
+gave 2500000000 where gcc gives -1794967296, and an `int` product could stay
+positive past 2^31. The operators now apply the usual arithmetic conversions
+(`int_promote`/`int_width`/`arith_type`) and narrow the result to that type
+(`em_narrow`), so an int result is `movslq`-ed to 32 bits, an unsigned one
+zero-extended, and a `long` left alone. The same pass found that
+**integer-literal suffixes were lexed but discarded** - `1L << 40` was a
+32-bit shift that came out 0 - so `lex_suffix` now records u/l in
+`token_sfx` and `num_type` gives the literal its type (int, or long when it
+does not fit). `volatile` is accepted as a no-op qualifier too. Guard
+`cc39_wrap.c` (exit 96). Suite 811/811; hello.c 84 -> 88 instructions,
+ceiling 15819 -> **16704**.
+
 **Pointer codes no longer collide (2026-10-02).** Pointer types were
 `base + 2*depth`, which landed on value codes: `char **` came out as 5 =
 `unsigned int`, `short *` as 9 = signed word, `int **` as 4 = void - so
