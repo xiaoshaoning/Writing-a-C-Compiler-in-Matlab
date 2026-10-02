@@ -550,3 +550,30 @@ place, `cc_int` over all 308 corpus programs emits the same `.s` files on the
 engine and on the C clone, byte for byte (`diff -rq` of the two dumps reports
 0 differences). The engine is therefore a verified second oracle for the
 compiler track, independently of the interpreter gaps above.
+
+## Postscript 5 — 2026-10-02 dist build (`dist/matlab-cli/matlab.exe`)
+
+All three gaps this doc tracked are **fixed** on the `dist/matlab-cli` build:
+
+| issue | before | now |
+|---|---|---|
+| interpreter call cost | 200 calls = 37.6 s (~0.19 s/call) | **0.34 s** (~1.7 ms/call) |
+| `xc('tests/programs/stress2.c')` | hung >9 min at flat ~8 MB | **finishes, exit 0, in 5.0 s** |
+| `find(sparse)` / `nonzeros` / `sum` / `double` / transpose | "Undefined function … 'double'" | **work** |
+| `s.(name).field = value` | `SFA1 unsupported struct field assignment target` | **works** |
+
+`strcmp` (logical, element-wise), `dir` wildcards, the cell-element reshape
+and exact int64 `%d` were already fine and still are.
+
+With that, the harness runs the interpreter track too. The gates pass when
+run individually: double regression 13/13, mx smoke 6/6, mex_run smoke 6/6.
+The full `run_all` could not be completed here — the loaded host kills the
+process mid-run at random points with 0 failing checks (the C clone behaves
+the same on this host).
+
+One shared failure is **not** engine-specific: the gcc cross-track gate
+reports 15/20 under *both* engines with the identical five cases
+(`mxcell_get`, `mxstruct_get`, `mxsparse_build`, `mxsparse_get`, `mxprint`).
+Two independent runtimes agreeing against gcc points at this repo's mx shim /
+output parsing (or a corpus/gcc-shim mismatch), not at one runtime — see
+`MATLAB_in_C/docs/BUG_REPORT_2026-10-02_mex_cross_track_regression.md`.
