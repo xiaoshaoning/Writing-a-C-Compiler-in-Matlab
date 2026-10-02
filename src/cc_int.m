@@ -1167,18 +1167,22 @@ while token ~= 125          % '}'
     name = idname;
     next();
     mt = pcode(mbase, depth);
+    adims = [];
     asz = 1;
-    if token == 91          % '[': member array
+    while token == 91       % '[': member array, any number of dimensions
         next();
         if token ~= 128
             fail('expected a constant array size');
         end
-        asz = double(token_val);
+        adims(end+1) = double(token_val);
         next();
         expect(93);
-        if asz < 0
+        if adims(end) < 0
             fail('bad array size');
         end
+    end
+    if ~isempty(adims)
+        asz = prod(adims);
     end
     if is_struct_code(mbase) && depth == 0
         st = ssize_of(mbase);
@@ -1203,7 +1207,7 @@ while token ~= 125          % '}'
     if isunion
         % every member shares offset 0; the union is as large as its
         % largest member (C 6.7.2.1)
-        membermap.(name) = {0, mt, bw, asz};
+        membermap.(name) = {0, mt, bw, asz, adims};
         if nbytes > off
             off = nbytes;
         end
@@ -1211,7 +1215,7 @@ while token ~= 125          % '}'
         if mt ~= 1
             off = off + mod(-off, 8);   % 8-align non-char members
         end
-        membermap.(name) = {off, mt, bw, asz};
+        membermap.(name) = {off, mt, bw, asz, adims};
         off = off + nbytes;
     end
     mnames{end+1} = name;
@@ -2908,7 +2912,11 @@ if numel(minfo) >= 4 && minfo{4} > 1        % an array member
         msz = tsize(mt);
     end
     if token == 123
-        vals = parse_arr_init(n, 1);
+        if numel(minfo) >= 5 && numel(minfo{5}) > 1
+            vals = parse_arr_init(minfo{5}, 1);
+        else
+            vals = parse_arr_init(n, 1);
+        end
         for q = 1:n
             em_imm_store(vals(q), sprintf('%d(%%rbp)', moff + (q - 1) * msz), msz);
         end
@@ -4166,11 +4174,17 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
             % that sizeof sees the whole array.
             estruc = 0;
             etype = padd(mem{2});
-            bstride = [];
             if mem{2} >= 1000
                 esz = ssize_of(mem{2});
+            elseif is_ptr_code(mem{2})
+                esz = 8;              % an array of pointers
             else
                 esz = tsize(mem{2});
+            end
+            if numel(mem) >= 5 && numel(mem{5}) > 1
+                bstride = cstride_of(mem{5}, esz);   % a[i][j] needs the strides
+            else
+                bstride = [];
             end
             curarrsz = mem{4} * esz;
         elseif etype >= 1000 && ~is_ptr_code(etype)
