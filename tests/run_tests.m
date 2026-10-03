@@ -917,6 +917,9 @@ cctests = {
     % runtime shims) must produce the SAME stdout through both tracks (the
     % interpreter's trailing 'exit(N)' trace is stripped first).
     for ok = 1:numel(ostests)
+        % print the program BEFORE working on it: this loop is silent until a
+        % check completes, so a hang leaves no trace of where it stopped
+        fprintf('... output parity %s\n', ostests{ok});
         try
             oo = evalc(sprintf('rcx = xc(''tests/programs/%s'');', ostests{ok}));
             op = strfind(oo, 'exit(');
