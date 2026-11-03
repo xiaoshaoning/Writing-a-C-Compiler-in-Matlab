@@ -361,10 +361,27 @@ fclose(fid_output);
 end
 
 function s = cc_int_join(lines)
-% cc_int_join — join the emitted line cells into one output string.
+% cc_int_join - join the emitted line cells into one output string.
+%
+% sprintf('%s') is not decoration: the Rust engine's strrep can hand a line
+% back as a column, and concatenating a column into `s` makes the whole string
+% 2-D, which fprintf('%s') then writes COLUMN-WISE - one character per line,
+% which the assembler reads as instructions. sprintf('%s') flattens in column
+% order, giving the intended text for either shape.
+% Each line is rebuilt character by character. This engine returns lines as
+% COLUMNS from strrep, and concatenating a column into `s` makes the whole
+% output 2-D, which fprintf('%s') then writes COLUMN-WISE - one character per
+% line, which the assembler reads as instructions. sprintf('%s'), (:).',
+% reshape and a size() test all fail to normalise it (wrong shape reported, or
+% NUL-padded output), so the row is built by indexing, which cannot lie.
 s = '';
 for k = 1:numel(lines)
-    s = [s, lines{k}, char(10)];
+    ln = lines{k};
+    row = '';
+    for q = 1:numel(ln)
+        row(end+1) = ln(q);
+    end
+    s = [s, row, char(10)];
 end
 end
 
@@ -378,9 +395,10 @@ error(msg);
 end
 
 function idx = em(line)
-% em — append one assembly line to the output cell. MATLAB strings do not
+% em - append one assembly line to the output cell. MATLAB strings do not
 % process C escapes, so a literal backslash-t becomes a tab. Returns the
-% cell index (used to backpatch the frame size).
+% cell index (used to backpatch the frame size). The line's shape is
+% normalised once, in cc_int_join, where the output text is actually built.
 global out
 out{end+1} = strrep(line, '\t', char(9));
 idx = numel(out);
@@ -1305,6 +1323,19 @@ else
 end
 end
 
+function hx = hex_pad(v, digits)
+% hex_pad - v as uppercase hex, zero-padded to `digits`. The engines disagree
+% about sprintf's '0' flag: the C clone pads the field and the Rust engine
+% space-pads it, and a space inside an assembly immediate is a syntax error.
+% Padding here instead of asking for it keeps the emitted text identical on
+% every engine.
+h = sprintf('%X', v);
+if numel(h) < digits
+    h = [repmat('0', 1, digits - numel(h)), h];
+end
+hx = h;
+end
+
 function t = int_promote(t)
 % int_promote - C's integer promotions: anything narrower than int becomes
 % int (the int here is 32-bit), which is also what the arithmetic below
@@ -1877,7 +1908,7 @@ for k = 1:numel(glist)
             em(sprintf('	.quad	%s', new_str(v(2:end))));
         elseif iscell(v) && strcmp(v{1}, 'F')
             % double scalar initializer: exact 64-bit IEEE pattern
-            em(sprintf('	.quad	0x%016X', v{2}));
+            em(sprintf('	.quad	0x%s', hex_pad(v{2}, 16)));
         elseif iscell(v) && strcmp(v{1}, 'B')
             % struct-value initializer (marker cell 'B' + byte layout)
             line = '	.byte	';
@@ -1905,7 +1936,7 @@ for k = 1:numel(glist)
             em(line);
         elseif t == 6
             % an int constant initializer for a double global: promote
-            em(sprintf('	.quad	0x%016X', cc_d2bits(double(v))));
+            em(sprintf('	.quad	0x%s', hex_pad(cc_d2bits(double(v)), 16)));
         else
             em(sprintf('%s%d', dir_of(tsize(t)), v));
         end
@@ -2922,7 +2953,7 @@ n = numel(bytes);
 k = 0;
 while k + 4 <= n
     w = bytes(k+1) + 256*bytes(k+2) + 65536*bytes(k+3) + 16777216*bytes(k+4);
-    em(sprintf('\tmovl\t$0x%08X, %d(%%rbp)', w, off + k));
+    em(sprintf('\tmovl\t$0x%s, %d(%%rbp)', hex_pad(w, 8), off + k));
     k = k + 4;
 end
 while k < n
@@ -3890,7 +3921,7 @@ elseif token == 128         % Num
         % a double literal: movabsq $0x<pattern>, %rax.  The exact
         % 64-bit hex form is parsed exactly by x86sim (sim_num64); the
         % ordinary decimal form would lose precision for large patterns.
-        em(sprintf('\tmovabsq\t$0x%016X, %%rax', cc_d2bits(token_dval)));
+        em(sprintf('\tmovabsq\t$0x%s, %%rax', hex_pad(cc_d2bits(token_dval), 16)));
         em('\tmovq\t%rax, %xmm0');
         etype = 6;
     else
