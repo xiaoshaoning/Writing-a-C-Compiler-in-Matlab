@@ -1264,6 +1264,26 @@ sdefs{nstid} = def;
 sid = nstid;
 end
 
+function n = frame_slot(bytes)
+% frame_slot - the frame space a value of `bytes` bytes occupies: whole 8-byte
+% words, because struct copies and by-value argument moves work a word at a
+% time (`for kk = 1:sz/8`). This is the one owner of that rounding; ssize_slot
+% is this applied to a type. Applying it only to struct-valued slots keeps a
+% char local at one byte, and it is equal to `bytes` for every type that is
+% already a multiple of 8, which is what made introducing it a no-op.
+n = 8 * ceil(bytes / 8);
+end
+
+function n = ssize_slot(t)
+% ssize_slot - how many bytes a struct value occupies in STORAGE: a frame slot,
+% a parameter area, a return slot, or a copy. C's own size is ssize_of, and the
+% two differ once a struct's size is not a multiple of 8, because this compiler
+% copies structs a whole word at a time.
+%   ssize_of(t)   - what sizeof reports, and what member offsets use
+%   ssize_slot(t) - what the frame, the argument area and every copy use
+n = frame_slot(ssize_of(t));
+end
+
 function sz = ssize_of(t)
 % ssize_of — byte size of a struct VALUE type (1000+2*stid).
 global sdefs
@@ -2273,7 +2293,7 @@ while token ~= 41           % ')'
     end
     types{end+1} = t;
     if is_struct_code(base) && depth == 0 && ~decayed
-        sizes{end+1} = ssize_of(t);     % by-value struct
+        sizes{end+1} = ssize_slot(t);   % by-value struct: its storage slot
         bvs{end+1} = 1;
     else
         sizes{end+1} = 8;
@@ -2869,8 +2889,15 @@ while true
             end
         end
         glist{end+1} = {sym, t, isarr, dims, initv, base};
-    else        off = -(fbytes + nbytes);
-        fbytes = fbytes + nbytes;
+    else
+        % a struct value keeps whole words in the frame (the copy loops work a
+        % word at a time); every other local keeps its exact size
+        slot = nbytes;
+        if is_struct_code(base)
+            slot = frame_slot(nbytes);
+        end
+        off = -(fbytes + slot);
+        fbytes = fbytes + slot;
         lvars.(name) = off;
         if token == 61          % '=': initializer
             next();
@@ -2926,7 +2953,7 @@ while true
                 if is_struct_code(base) && depth == 0
                     % struct value initializer: copy ssize bytes from rax
                     em(sprintf('\tleaq\t%d(%%rbp), %%rcx', off));
-                    for kk = 1:ssize_of(base)/8
+                    for kk = 1:ssize_slot(base)/8
                         em('\tmovq\t(%rax), %rdx');
                         em('\tmovq\t%rdx, (%rcx)');
                         em('\taddq\t$8, %rax');
@@ -3211,7 +3238,7 @@ while token == 61 || (token >= 160 && token <= 169)
             % struct-value assignment: copy the whole size (preserve rax)
             em('\tmovq\t%rax, %rcx');
             em('\tmovq\t%rbx, %rdx');
-            st = ssize_of(sav_ltype);
+            st = ssize_slot(sav_ltype);
             for kk = 1:st/8
                 em('\tmovq\t(%rcx), %r8');
                 em('\tmovq\t%r8, (%rdx)');
@@ -3792,7 +3819,7 @@ if token == 40              % '(': a cast (type)unary or parenthesised expr
                 % (struct P){…}: a struct value
                 vals = aggregate_values(cbase, 1);
                 bytes = struct_bytes(vals, cbase);
-                nbytes = numel(bytes);
+                nbytes = frame_slot(numel(bytes));
                 off = -(fbytes + nbytes);
                 fbytes = fbytes + nbytes;
                 for k = 1:numel(bytes)
@@ -3833,7 +3860,7 @@ if token == 40              % '(': a cast (type)unary or parenthesised expr
                     cl_dims = [cnt];
                 end
                 vals = parse_arr_init(cl_dims, 1);
-                nbytes = prod(cl_dims) * elem;
+                nbytes = frame_slot(prod(cl_dims) * elem);
                 off = -(fbytes + nbytes);
                 fbytes = fbytes + nbytes;
                 for k = 1:numel(vals)
@@ -4013,7 +4040,7 @@ elseif token == 150         % Id: function call or variable
         sret_call = 0;
         if isfield(frettype, name) && frettype.(name) >= 1000
             sret_call = 1;
-            rsz = ssize_of(frettype.(name));
+            rsz = ssize_slot(frettype.(name));
             em(sprintf('\tsubq\t$%d, %%rsp', rsz));
             em('\tmovq\t%rsp, %rax');
             em('\tpushq\t%rax');
@@ -4056,7 +4083,7 @@ elseif token == 150         % Id: function call or variable
                 elseif isfield(fparams, name) && nargs + 1 <= numel(fparams.(name))
                     asz = fparams.(name)(nargs + 1);
                 elseif estruc
-                    asz = ssize_of(etype);
+                    asz = ssize_slot(etype);
                 end
                 if asz > 8 || estruc
                     % by-value struct: push the HIGHEST address first, so that
@@ -4251,7 +4278,7 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
         em('\tpushq\t%rax');      % save the function pointer (deepest)
         if psret
             % struct-returning: reserve a slot, push a hidden pointer to it
-            prsz = ssize_of(pret);
+            prsz = ssize_slot(pret);
             em(sprintf('\tsubq\t$%d, %%rsp', prsz));
             em('\tmovq\t%rsp, %rax');
             em('\tpushq\t%rax');
@@ -4264,7 +4291,7 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
                 if estruc
                     % a struct-value arg: copy its full size, highest address
                     % first so that member 0 lands at the lowest stack address
-                    asz = ssize_of(etype);
+                    asz = ssize_slot(etype);
                     em('\tmovq\t%rax, %rdx');
                     em(sprintf('\taddq\t$%d, %%rdx', asz - 8));
                     for kk = 1:asz/8
