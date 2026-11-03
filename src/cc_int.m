@@ -2043,28 +2043,28 @@ for k = 1:numel(names)
                 if li > numel(vals)
                     break;
                 end
-                v = vals(li);
-                if esz == 1
-                    bytes(off + q) = mod(v, 256);
-                else
-                    for bb = 0:esz - 1
-                        bytes(off + (q - 1) * esz + bb + 1) = mod(floor(v / 2^(8*bb)), 256);
-                    end
-                end
+                bytes = store_value(bytes, off + (q - 1) * esz, vals(li), esz);
             end
         end
     elseif first <= numel(vals)
         % a scalar member: its own width, not a fixed 8 bytes - writing 8 into
         % a 4-byte member overruns the next one
-        v = vals(first);
-        msz = member_elem_size(minfo);
-        if msz == 1
-            bytes(off + 1) = mod(v, 256);
-        else
-            for b = 0:msz - 1
-                bytes(off + b + 1) = mod(floor(v / 2^(8*b)), 256);
-            end
-        end
+        bytes = store_value(bytes, off, vals(first), member_elem_size(minfo));
+    end
+end
+end
+
+function bytes = store_value(bytes, base, v, msz)
+% store_value - write one leaf value into a byte image, msz bytes wide,
+% little-endian, and RETURN the image: MATLAB arrays are values, so writing
+% into the local copy would be discarded. The two places that lay values out
+% (a scalar member and an array member's element) differ only in where they
+% start.
+if msz == 1
+    bytes(base + 1) = mod(v, 256);
+else
+    for b = 0:msz - 1
+        bytes(base + b + 1) = mod(floor(v / 2^(8*b)), 256);
     end
 end
 end
@@ -2684,7 +2684,7 @@ function parse_declarators(base, stdef, tdims, was_static)
 % parse_declarators - the declarator list of a declaration, the type having
 % been parsed already. Split out so that `enum { … } v;` can register the
 % constants and then declare v with the same code.
-global token idname lvars lvartype lvararr lvarstruct lvarstride lvararrsz fbytes token_val strtext lstatics gsym
+global token idname lvars lvartype lvararr lvarstruct lvarstride lvararrsz fbytes token_val strtext lstatics
 global globals gtype garr gstruct gvararrsz gstride glist lstatics cfn
 if isa(stdef, 'cell')
     % a local struct definition: register the tag, then either the ';'
@@ -2875,7 +2875,8 @@ while true
                     em_imm_store(vals(k), sprintf('%d(%%rbp)', off + (k-1)*elem), elem);
                 end
             elseif is_struct_code(base) && depth == 0 && token == 123
-                % a struct value: `{ … }` - one store per member, in order
+                % a struct value: read the leaves, lay the type out, store the
+                % byte image (the same image the data section gets)
                 % read the leaves, lay the type out, store the image
                 bytes = struct_bytes(aggregate_values(base, 1), base);
                 em_bytes(bytes, off);
