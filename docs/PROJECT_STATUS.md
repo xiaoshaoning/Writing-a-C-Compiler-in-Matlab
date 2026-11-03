@@ -452,8 +452,7 @@ array/global strides, the global initializer directives (x86sim gained
 `.short`/`.long`) and the local/compound-literal initializers; `is_ptr_code`
 replaces the old `t >= 2` pointer tests (which also fixes `short s; s++`,
 previously +8). Intermediate int arithmetic became 32-bit when the narrowing pass
- landed (it was 64-bit at the time of this entry) and struct
-struct alignment is per-member (2026-11-03: a member sits at the next
+ landed (it was 64-bit at the time of this entry). Struct alignment is per-member (2026-11-03: a member sits at the next
 multiple of its own alignment and the size rounds up to the widest member's,
 so `sizeof` matches gcc; `ssize_slot` keeps the storage a whole number of
 words for the copy loops). Intermediate int arithmetic is 32-bit with C's wraparound (the narrowing pass in the 2026-10-02 commit; measured: `a=0x40000000; a*4`, `b=65536; b*b` and `(long)(b*b)` all agree with gcc). Guard `cc27_int.c`
