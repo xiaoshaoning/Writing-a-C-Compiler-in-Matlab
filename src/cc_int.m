@@ -1001,7 +1001,7 @@ end
 function b = enum_defines()
 % enum_defines - is the `enum` at the cursor a definition (`enum [{tag}] {`)
 % rather than a tag reference (`enum Tag x;`)? Leaves the lexer untouched.
-global src si token token_val idname
+global si token token_val idname
 save_si = si;
 save_tok = token;
 save_tv = token_val;
@@ -1331,7 +1331,6 @@ function hx = hex_pad(v, digits)
 % digits containing A-F (it pads with spaces, which the assembler rejects).
 % Both callers pass a value that fits an integer exactly, so integer shifts
 % give the same digits on every engine.
-global out
 v = int64(v);
 hx = '';
 for k = digits - 1:-1:0
@@ -2952,7 +2951,6 @@ function em_bytes(bytes, off)
 % em_bytes - store a byte image into the current frame at `off`. The image
 % comes from struct_bytes, so the frame layout and the data-section layout are
 % the same function of the type and cannot drift apart.
-global out
 n = numel(bytes);
 k = 0;
 while k + 4 <= n
@@ -2978,7 +2976,7 @@ function vals = aggregate_values(base, braced)
 % (6.7.9p20), which fills the members straight from the ENCLOSING list - it is
 % what makes `struct S { struct P p; int z; } s = {1, 2, 3};` mean `{{1,2},3}`.
 % The separator commas belong to whichever level reads the next element.
-global token idname sdefs token_val
+global token idname sdefs
 stid = (base - 1000) / 2;
 names = sdefs{stid}{3};
 mm = sdefs{stid}{2};

@@ -1239,9 +1239,6 @@ function v = sim_strcodes(str)
 v = double(str);
 end
 
-function sim_mx_deepcopy(h, h2)
-end
-
 function d = sim_bytes2d(addr)
 % sim_bytes2d — build a double VALUE from the 8 bytes at addr (IEEE
 % little-endian), via small integer parts only (exact in the clone).
@@ -2252,19 +2249,6 @@ end
 t = pad_cv(s, w, left, zero);
 end
 
-function t = sim_oct(v)
-t = [];
-while v > 0
-    t = [mod(v, 8) + 48, t];
-    v = floor(v / 8);
-end
-if isempty(t)
-    t = 48;
-end
-end
-
-% --------------------------------------------------------------------------
-% ---- code-vector helpers ----
 function t = cv_of(s)
 % cv_of — the code vector of a string literal (in the main workspace the
 % literal is intact; helpers only ever receive/return double vectors).
