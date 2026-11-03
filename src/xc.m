@@ -812,7 +812,7 @@ function seed_symbols()
 % keyword+syscall string so the identifiers land in the symbol table:
 % keywords get Token = Char..While, syscalls get Class=Sys/Type=INT/
 % Value=opcode, 'void' becomes Void (165), 'main' is recorded as idmain.
-global src si current_id symbols symbol_names idmain
+global src si current_id symbols idmain
 
 src = ['char else enum if int return sizeof while ', ...
        'open read close printf malloc memset memcmp exit void main', ...
@@ -2073,7 +2073,7 @@ end
 function function_declaration()
 % function_declaration — port of xc.c: (params) { body }, then unwind the
 % local symbol entries (restore B fields).
-global token current_id symbols
+global symbols
 
 % tokens
 Loc=132;

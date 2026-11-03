@@ -564,7 +564,6 @@ end
 
 % --------------------------------------------------------------------------
 function v = sim_opval(a)
-global mem
 k = a{1};
 if k == 1
     v = a{2};
@@ -624,7 +623,6 @@ end
 end
 
 function sim_opstore(a, v, bits)
-global mem
 if a{1} == 2
     sim_regwrite(a{2}, bits, v);
 elseif a{1} == 3
@@ -1119,12 +1117,33 @@ h = sim_mx_alloc(class_id, dims, complexflag, 0);
 end
 
 function h = sim_mx_alloc(class_id, dims, complexflag, extra)
-% sim_mx_alloc — raw header with `extra` extra bytes past +80 (sparse
+% sim_mx_alloc - raw header with `extra` extra bytes past +80 (sparse
 % and struct store their extended fields there).  With extra == 0 the
 % data block is allocated: every class gets an 8-byte-slot block except
 % the packed integer classes; class 2 (struct) gets none (the struct
 % shim owns the field-major handle block).  A complex flag also
 % allocates the pi block (mxGetPi on a complex matrix must be writable).
+%
+% THE HEADER LAYOUT, every field 8 bytes, defined here and nowhere else
+% stated in full. The shims below and the mx_* library calls read these
+% offsets as bare numbers, so this table is the place to look one up:
+%
+%   +0   'MXAR' sentinel (1298231634)
+%   +8   class id (mxClassID)
+%   +16  complex flag
+%   +24  numel, i.e. the number of dimensions
+%   +32  dims(1)          +40 dims(2)          +48 dims(3)
+%   +56  pr   - real data pointer
+%   +64  pi   - imaginary data pointer (complex only)
+%   +72  (reserved)
+%   +80  ir   - sparse row indices; a struct reuses it for its field
+%               count (the header is per-class, not per-layout)
+%   +88  jc   - sparse column pointers; a struct reuses it for its field
+%               block
+%   +96  nzmax
+%
+% A future cleanup would wrap these in one accessor and delete the 65
+% literal uses; until then, keep this table in step with the stores below.
 global mem
 h = sim_malloc(80 + extra);
 sim_storeN(h + 0, 1298231634, 8);          % 'MXAR'
@@ -1396,7 +1415,7 @@ end
 
 % --------------------------------------------------------------------------
 function sim_libcall(namecodes)
-global regs mem fids simdone xmms
+global regs mem simdone 
 if cv_eq(namecodes, cv_of('printf'))
     fmt = mem_strcodes(double(regs(2)));
     n = sim_printf(fmt, regs(3), regs(9), regs(10));
@@ -1929,7 +1948,7 @@ function n = sim_printf(fmt, a2, a3, a4)
 % sim_printf — the corpus formats (%d %i %u %x %X %o %c %s %p %n %%, flags,
 % width incl. *, precision). fmt is a code vector; args a2..a4 are rdx/r8/
 % r9 and the rest come from the stack at [rsp+32+8k].
-global regs mem
+global mem
 argvals = [a2, a3, a4];
 out = [];
 ai = 0;
