@@ -1939,6 +1939,13 @@ end
 function r = is_fptr_type(t)
 % is_fptr_type — is t a function-pointer type (2000 + return type; struct
 % returns are 3000+2*stid)?
+%
+% KNOWN LIMIT: unlike the data-pointer band (pcode, 4000+), this space is still
+% encoded as 2000 + base + 2*depth, so it can collide with a struct VALUE code:
+% a struct whose stid reaches 1000 lands in 3000.., which this predicate claims.
+% That needs 1000 struct types in one translation unit, so it cannot happen in
+% practice. Giving function pointers their own band, as pcode did for data
+% pointers, is the fix if it ever can.
 r = (t >= 2000 && t < 2100) || (t >= 3000 && t < 4000);   % the pointer band starts at 4000
 end
 
