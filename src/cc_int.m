@@ -361,27 +361,15 @@ fclose(fid_output);
 end
 
 function s = cc_int_join(lines)
-% cc_int_join - join the emitted line cells into one output string.
-%
-% sprintf('%s') is not decoration: the Rust engine's strrep can hand a line
-% back as a column, and concatenating a column into `s` makes the whole string
-% 2-D, which fprintf('%s') then writes COLUMN-WISE - one character per line,
-% which the assembler reads as instructions. sprintf('%s') flattens in column
-% order, giving the intended text for either shape.
-% Each line is rebuilt character by character. This engine returns lines as
-% COLUMNS from strrep, and concatenating a column into `s` makes the whole
-% output 2-D, which fprintf('%s') then writes COLUMN-WISE - one character per
-% line, which the assembler reads as instructions. sprintf('%s'), (:).',
-% reshape and a size() test all fail to normalise it (wrong shape reported, or
-% NUL-padded output), so the row is built by indexing, which cannot lie.
+% cc_int_join - join the emitted line cells into one output string, one line
+% per cell. Plain concatenation: the column-wise-output bug that once needed a
+% character-by-character rebuild was matlab-cli's cell-to-text path
+% ([c{:}] and char(cellstr(c))), fixed in v8 - see
+% docs/BUG_REPORT_2026-11-03,
+% item (4).
 s = '';
 for k = 1:numel(lines)
-    ln = lines{k};
-    row = '';
-    for q = 1:numel(ln)
-        row(end+1) = ln(q);
-    end
-    s = [s, row, char(10)];
+    s = [s, lines{k}, char(10)];
 end
 end
 
@@ -1349,19 +1337,12 @@ end
 end
 
 function hx = hex_pad(v, digits)
-% hex_pad - v as uppercase hex, zero-padded to `digits`, computed digit by
-% digit. Neither engine's sprintf can be trusted here: the C clone cannot
-% format %X for a double (it returns the empty string, which silently made the
-% assembly immediate '$0x'), and the Rust engine ignores the '0' flag for hex
-% digits containing A-F (it pads with spaces, which the assembler rejects).
-% Both callers pass a value that fits an integer exactly, so integer shifts
-% give the same digits on every engine.
-v = int64(v);
-hx = '';
-for k = digits - 1:-1:0
-    d = bitand(bitshift(v, -4 * k), int64(15));
-    hx(end+1) = '0123456789ABCDEF'(double(d) + 1);
-end
+% hex_pad - v as uppercase hex, zero-padded to `digits`. One line, because the
+% engines now agree: both zero-pad %X correctly (matlab-cli v8 per
+% docs/BUG_REPORT_2026-11-03, and the C clone always did). The argument is
+% int64 because the C clone cannot format %X for a double - it returns the
+% empty string, which once made an assembly immediate read '$0x'.
+hx = sprintf(['%0' num2str(digits) 'X'], int64(v));
 end
 
 function t = int_promote(t)
