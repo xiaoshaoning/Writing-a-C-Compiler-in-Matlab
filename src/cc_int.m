@@ -1324,16 +1324,20 @@ end
 end
 
 function hx = hex_pad(v, digits)
-% hex_pad - v as uppercase hex, zero-padded to `digits`. The engines disagree
-% about sprintf's '0' flag: the C clone pads the field and the Rust engine
-% space-pads it, and a space inside an assembly immediate is a syntax error.
-% Padding here instead of asking for it keeps the emitted text identical on
-% every engine.
-h = sprintf('%X', v);
-if numel(h) < digits
-    h = [repmat('0', 1, digits - numel(h)), h];
+% hex_pad - v as uppercase hex, zero-padded to `digits`, computed digit by
+% digit. Neither engine's sprintf can be trusted here: the C clone cannot
+% format %X for a double (it returns the empty string, which silently made the
+% assembly immediate '$0x'), and the Rust engine ignores the '0' flag for hex
+% digits containing A-F (it pads with spaces, which the assembler rejects).
+% Both callers pass a value that fits an integer exactly, so integer shifts
+% give the same digits on every engine.
+global out
+v = int64(v);
+hx = '';
+for k = digits - 1:-1:0
+    d = bitand(bitshift(v, -4 * k), int64(15));
+    hx(end+1) = '0123456789ABCDEF'(double(d) + 1);
 end
-hx = h;
 end
 
 function t = int_promote(t)
