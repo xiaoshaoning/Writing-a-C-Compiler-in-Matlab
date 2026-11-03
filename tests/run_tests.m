@@ -663,7 +663,7 @@ cctests = {
         'cc13_si1.c',      4;   % sizeof(int) is 4 (32-bit int)
         'cc13_si2.c',      1;
         'cc13_si3.c',      8;
-        'cc13_si4.c',     16;
+        'cc13_si4.c',      8;   % sizeof(struct {int,int}) - per-member alignment
         'cc13_si5.c',      1;
         'cc13_init.c',    65;   % 321 mod 256
         'cc13_ginit.c',   65;   % 321 mod 256
@@ -1229,7 +1229,7 @@ cctests = {
     % cc26_signed.c the signed/unsigned narrow-type widening (which also
     % sign-extends char/short loads via movsbq/movswq/movslq). Making int
     % 32-bit (cc27_int.c) then moved int loads/stores to movslq/movl and
-    % added the int-pointer scaling, so the total is 18235. See
+    % added the int-pointer scaling, so the total is 18120. See
     % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
@@ -1255,8 +1255,8 @@ cctests = {
     if corpus_sliced
         fprintf('SKIP  instr regression: corpus total (sliced run)\n');
     else
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 18235, ...
-        sprintf('instr regression: corpus %d <= 18235', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 18120, ...
+        sprintf('instr regression: corpus %d <= 18120', ic_total));
     end
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 88, ...
         sprintf('instr regression: hello.c %d <= 88', ic_hello));

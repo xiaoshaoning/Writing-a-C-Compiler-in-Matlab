@@ -1168,14 +1168,17 @@ end
 
 function def = parse_struct_members(isunion)
 % members := (type ('*')* name (('[' size ']')? …) ';')* '}' — returns
-% {size, membermap, names, isunion}; membermap maps member name ->
+% {size, membermap, names, isunion, alignment}; membermap maps member name ->
 % {offset, type}; names lists the members in declaration order (for
 % initializers). A union lays every member at offset 0 and is as large as
-% its largest member (C 6.7.2.1).
+% its largest member (C 6.7.2.1). A member sits at the next multiple of its own
+% alignment (align_of) and the total is rounded up to the widest member's, which
+% is what makes sizeof agree with C.
 global token idname stags token_val
 membermap = struct();
 mnames = {};
 off = 0;
+algn = 1;                   % the widest member alignment seen so far
 while token ~= 125          % '}'
     [mbase, mdef] = parse_basetype();
     if isa(mdef, 'cell')
@@ -1229,6 +1232,10 @@ while token ~= 125          % '}'
         end
     end
     nbytes = st * asz;
+    mal = align_of(mt);             % this member's alignment
+    if mal > algn
+        algn = mal;
+    end
     if isunion
         % every member shares offset 0; the union is as large as its
         % largest member (C 6.7.2.1)
@@ -1237,9 +1244,7 @@ while token ~= 125          % '}'
             off = nbytes;
         end
     else
-        if mt ~= 1
-            off = off + mod(-off, 8);   % 8-align non-char members
-        end
+        off = off + mod(-off, mal);     % align to the member's own width
         membermap.(name) = {off, mt, bw, asz, adims};
         off = off + nbytes;
     end
@@ -1247,9 +1252,9 @@ while token ~= 125          % '}'
     expect(59);             % ';'
 end
 next();                     % consume '}'
-% C allows trailing padding; 8-align the total size
-sz = off + mod(-off, 8);
-def = {sz, membermap, mnames, isunion};
+% C allows trailing padding: round the size up to the widest member's alignment
+sz = off + mod(-off, algn);
+def = {sz, membermap, mnames, isunion, algn};
 end
 
 function sid = register_struct(tag, def)
@@ -1651,7 +1656,7 @@ cret = ischarfn;
 cvoid = (rettype == 4);     % void-returning (no value in rax)
 sret = (rettype >= 1000 && ~is_ptr_code(rettype));   % struct-returning
 if sret
-    sretsize = ssize_of(rettype);
+    sretsize = ssize_slot(rettype);   % the callee's return slot is storage
     sretbase = 16 + 8 * nparams;
 else
     sretsize = 0;
@@ -2007,6 +2012,22 @@ function r = fptr_rettype(t)
 % fptr_rettype — the return type of a function-pointer type t (0 int,
 % 1 char, 1000+2*stid struct).
 r = t - 2000;
+end
+
+function a = align_of(t)
+% align_of - the alignment a value of type t needs. A scalar aligns to its own
+% width, capped at 8, which is the widest alignment any type here has; a struct
+% value aligns to its own member-wise maximum (sdefs{stid}{5}). This is the one
+% owner of that decision: member offsets and the struct's own alignment both
+% ask it. It is C's alignment, not the storage width - ssize_slot handles that.
+global sdefs
+if is_struct_code(t)
+    a = sdefs{(t - 1000) / 2}{5};
+elseif is_ptr_code(t)
+    a = 8;
+else
+    a = min(tsize(t), 8);
+end
 end
 
 function esz = member_elem_size(minfo)

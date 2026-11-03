@@ -452,7 +452,10 @@ array/global strides, the global initializer directives (x86sim gained
 `.short`/`.long`) and the local/compound-literal initializers; `is_ptr_code`
 replaces the old `t >= 2` pointer tests (which also fixes `short s; s++`,
 previously +8). Intermediate int arithmetic is still 64-bit and struct
-alignment stays 8-byte coarse — documented deviations. Guard `cc27_int.c`
+struct alignment is per-member (2026-11-03: a member sits at the next
+multiple of its own alignment and the size rounds up to the widest member's,
+so `sizeof` matches gcc; `ssize_slot` keeps the storage a whole number of
+words for the copy loops). Intermediate int arithmetic is still 64-bit. Guard `cc27_int.c`
 (exit 96, gcc-comparable); ceiling 11673 → **14072**, hello.c 72 → 84.
 
 Interpreter divergence: `xc`'s VM word is 8 bytes (`sizeof(int)` = 8), its
@@ -485,6 +488,8 @@ owner of "where does this member's leaves start" removed the cursor entirely,
 and the two can no longer drift by one. Guards `cc45` (array of struct values)
 and `cc46` (the three shapes the two parsers disagreed on) pass. Ceiling
 17947 -> **18235**.
+
+**Struct alignment matches gcc (2026-11-03).** `sizeof` was 8-byte coarse: `{int,int}` was 16 where gcc says 8, `{char,int}` 16 where gcc says 8. It is now C$^\prime$s rule: a member sits at the next multiple of its own alignment (`align_of`: its width capped at 8; a struct member uses that struct's own maximum) and the size rounds up to the widest member's. Introduced in two commits, deliberately: first `ssize_slot` (the *storage* size - a frame slot, parameter area, return slot, every copy) as a proven no-op, because seven copy loops assume whole 8-byte words and the old coarse layout had been hiding that; then the layout switch itself. `ssize_of` stays C$^\prime$s size (sizeof, offsets, strides, the data image). Guard: a layout probe comparing sizeof, member gaps and array strides against gcc on six structs - all match. Verified: 12/12 aggregate guards x gcc/simulator x C clone/Rust engine (16 combinations), tables 245/245, instr 142/142, corpus 655/655, ceiling 18235 -> **18120** (smaller structs).
 
 **The aggregate-initializer family (2026-10-02).** Five items, one commit
 each: C's brace elision (`{1,2,3}` meaning `{{1,2},3}`); multi-dimensional
