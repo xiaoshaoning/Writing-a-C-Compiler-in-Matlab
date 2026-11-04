@@ -701,6 +701,27 @@ and the runtime library are the changelog entries above:
   here (the R2023b install is a stub with no `matlab.exe`), so the
   suite's "green oracle" is unverified on it. The instruction-count
   ceiling is a clone-lineage baseline, not a real-MATLAB number.
+- **matlab_in_rust engine now on `cli-v13` (2026-11-04).** Tagged at the
+  repo's `083452f`; `dist/matlab-cli/matlab.exe` is 20,533,155 bytes and
+  md5-identical to `target/release/matlab.exe`, so the cut is the build it
+  claims to be. It closes the last engine gap tracked here: a **brace write
+  now nests a 1x1 cell** (`c{1} = {'x'}` leaves a cell; a paren write into a
+  cell still unwraps - `c(2) = {7}` stores 7, invisible through `c{2}`).
+  `tests/probe_globinit2.m` goes from claim E FAIL on v12 to **C, E, D, A, B,
+  B2, B3 all PASS**: `numel(out)` 51 -> **45** (the C clone's count), one 1x7
+  cell instead of seven characters, the assembly file **727 bytes / 45
+  lines, byte-identical to the C clone**, gcc accepts it and the program
+  exits 42 - the whole `pp_globinit2` residual is gone. Verified on v13:
+  double regression 13/13, tables 245/245, instr 142/142, ostests 196/196,
+  corpus slice programs 1..80 = 296/296.
+- **Run the suite through `tests/env.sh`, not by hand.** `run_tests.m` reads
+  `TMPDIR`/`TMPWIN`/`CC_REPO` from it; invoking the runtime as
+  `matlab -e "addpath('tests'); run_tests"` works for the table sections but
+  makes the *corpus* report mass failures (`CC_CORPUS=1:80` gave 155 of 305
+  failing, then the same slice was 296/296 the moment `env.sh` was sourced).
+  The corpus compiles and runs programs, so the missing scratch paths land
+  everywhere. Use `bash tests/run_all.sh`, or `. tests/env.sh` and then
+  `"$MATLAB" tests/run_tests.m`, for anything involving the corpus.
 - **matlab_in_rust engine — the three filed gaps are FIXED (2026-10-02
   `dist/matlab-cli` build).** Interpreter: 200 calls 37.6 s → **0.34 s** and
   `xc('tests/programs/stress2.c')` **finishes in 5.0 s** (was a >9-min
