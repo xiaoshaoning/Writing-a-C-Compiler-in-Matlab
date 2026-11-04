@@ -23,3 +23,6 @@ run_tests.log
 # check_globals self-test fixture (delete() may be a no-op on the runtime)
 tmp_globals_selftest.m
 tmp_gccd_out.txt
+
+# engine cut dropped in for local runs (binary, never committed)
+/dist/
