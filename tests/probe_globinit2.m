@@ -89,6 +89,27 @@ cC = (numel(c) == 1) && isequal(size(c{1}), [1 7]) && ...
      (numel(d) == 1) && isequal(size(d{1}), [1 7]) && isequal(size(line), [1 7]);
 report('C  (a 1x7 row appends one cell)', cC);
 
+% ---------------------------------------------------------------- claim E
+fprintf('\n-- claim E: a 1x1 cell stored into a cell brace stays a cell\n');
+% The ginit capture ends with `ginit{end+1} = icodes` where icodes is a 1x1
+% cell. MATLAB nests it; an engine that unwraps a 1x1 cell stores the char
+% instead, and every later numel()/{} reads the string's characters.
+inner = {'call f'};
+E1 = {};      E1{end+1} = inner;
+E2 = {};      E2{1} = inner;
+E3 = cell(1, 1); E3{1} = inner;
+inner_num = {42};
+E4 = {};      E4{end+1} = inner_num;
+E5 = {};      E5{end+1} = {'a', 'b'};
+fprintf('   1x1 char cell   via end+1 : class=%s\n', class(E1{1}));
+fprintf('   1x1 char cell   direct    : class=%s\n', class(E2{1}));
+fprintf('   1x1 char cell   prealloc  : class=%s\n', class(E3{1}));
+fprintf('   1x1 numeric cell          : class=%s\n', class(E4{1}));
+fprintf('   1x2 cell (control)        : class=%s\n', class(E5{1}));
+cE = strcmp(class(E1{1}), 'cell') && strcmp(class(E2{1}), 'cell') && ...
+     strcmp(class(E3{1}), 'cell') && strcmp(class(E4{1}), 'cell');
+report('E  (a 1x1 cell is nested, not unwrapped)', cE);
+
 % ---------------------------------------------------------------- claim D
 fprintf('\n-- claim D: the ginit capture pattern (save / rebind / append / restore)\n');
 global PROBE_CELL
