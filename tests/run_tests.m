@@ -765,6 +765,7 @@ cctests = {
         'cc44_enumstatic.c', 96;  % enum declarators + per-function statics (compiler track only)
         'cc45_structarr.c', 96;    % an array of struct values as a member (compiler track only)
         'cc46_aggrinit2.c', 96;    % the shapes the two parsers disagreed on (compiler track only)
+        'cc47_proto.c', 96;        % a prototype with no body, unnamed + variadic params (compiler track only)
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
@@ -1229,8 +1230,9 @@ cctests = {
     % cc26_signed.c the signed/unsigned narrow-type widening (which also
     % sign-extends char/short loads via movsbq/movswq/movslq). Making int
     % 32-bit (cc27_int.c) then moved int loads/stores to movslq/movl and
-    % added the int-pointer scaling, so the total is 18120. See
-    % docs/2026-09-07-x86sim-peephole-divergences.md.
+    % added the int-pointer scaling, so the total is 18120. cc47_proto.c
+    % (164) added the prototype-with-no-body acceptance, so the total is
+    % 18284. See docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
     if run_instr
@@ -1255,8 +1257,8 @@ cctests = {
     if corpus_sliced
         fprintf('SKIP  instr regression: corpus total (sliced run)\n');
     else
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 18120, ...
-        sprintf('instr regression: corpus %d <= 18120', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 18284, ...
+        sprintf('instr regression: corpus %d <= 18284', ic_total));
     end
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 88, ...
         sprintf('instr regression: hello.c %d <= 88', ic_hello));

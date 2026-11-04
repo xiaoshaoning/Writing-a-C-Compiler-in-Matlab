@@ -569,6 +569,22 @@ disagreed: x86sim returned 96, the gcc-assembled cctests path returned **5**
 `cc32_byval.c` runs through the cctests path so that class now fails the
 suite. Ceiling 14810.
 
+**Function prototypes (2026-11-04).** `int f(int);` — a declaration with no
+body — was a parse error (`expected token 123, got 59`: every file-scope
+`type name(params)` had to be a definition), so forward declarations, the
+declarations mutual recursion wants, and the header-free way to declare a
+variadic function (`int printf(const char *, ...);`) were all rejected. A
+prototype is now parsed and discarded: a call records its own arity in
+`called` and `parse_program` checks every call against the definitions at the
+end, so a declaration needs no registration, and a declared-but-never-defined
+callee is still `call to undefined function`. Two gaps came with it: an
+**unnamed parameter** (`const char *`) was `expected a parameter name` — legal
+in a declaration; it now keeps its stack slot and binds nothing — and `...`
+had no token at all (new token 210, lexed only for three dots, so `.` stays
+member access). Guard `cc47_proto.c` (exit 96: mutual recursion through
+prototypes, unnamed and variadic forms); ceiling 18120 → **18284** (the guard
+is 164 of it).
+
 **Bit-fields (2026-10-02).** `struct S { unsigned int a : 3; int b : 5; };`
 parses and works: a read returns only the field's `width` bits, sign- or
 zero-extended per the declared type, so the value is confined to the field.
@@ -745,6 +761,9 @@ and the runtime library are the changelog entries above:
 ## Post-parity features (beyond the reference)
 
 - `/* */` block comments (multi-line, line-counted; unterminated → error)
+- Function prototypes: `int f(int);` with no body, unnamed parameters and a
+  variadic tail (`int printf(const char *, ...);`); a call to a function that
+  is declared but never defined is still an error
 - `%s` in printf (width/precision/truncation preserved)
 - Array declarations: `int a[10];` global and local; `a[i]`, `&a`, passing
   to functions (decay-to-pointer) all work
@@ -792,6 +811,14 @@ interpreter-style stack convention.
 - The `-s` mnemonic column is padded manually to reproduce the reference's
   `%8.4s` over its 4-char mnemonic field (`'LEA '` -> `'    LEA '`), which
   matches byte-for-byte on every runtime
+- **Bit-fields are unpacked.** Each field owns a whole 8-byte slot, so
+  `struct { unsigned a:3; unsigned b:5; }` is 8 bytes where gcc says 4. The
+  values are right (masking on load), only the layout differs; every other
+  shape measured against gcc matches — unions `{char,int}` 4, `{char,double}`
+  8, `{char[12],int}` 12, `{struct A1,char}` 8; nested in structs 8/16/16 with
+  member offsets 4/8/0 and 12; bitfield `sizeof` matches where the slack of an
+  unpacked slot happens to equal gcc's padding (`{unsigned a:3; char c}` is 8
+  both ways, `{char c; unsigned a:3}` is 8 both ways)
 
 ## Runtime notes
 

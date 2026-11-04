@@ -488,6 +488,10 @@ c = src(si);
 if c >= '0' && c <= '9'
     lex_number();
     return;
+elseif c == '.' && si + 2 <= numel(src) && src(si+1) == '.' && src(si+2) == '.'
+    si = si + 3;
+    token = 210;                % '...' - the variable-argument list marker
+    return;
 elseif (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
     start = si;
     while si <= numel(src)
@@ -1626,6 +1630,21 @@ glabels = struct();
 fbytes = 0;
 [nparams, psize, ptypes] = parse_params(rettype >= 1000 && ~is_ptr_code(rettype));
 expect(41);                 % )
+if token == 59              % ';' - a declaration, not a definition
+    % A prototype needs no registration: a call records its own arity in
+    % `called`, and parse_program checks every call against the definitions at
+    % the end, so a declaration only has to be accepted. The frame globals
+    % were reset above, so put them back before returning.
+    next();
+    lvars = save_lvars;
+    lvartype = save_lvartype;
+    lvararr = save_lvararr;
+    lvarstruct = save_lvarstruct;
+    lstatics = save_lstatics;
+    fbytes = save_fbytes;
+    glabels = save_glabels;
+    return;
+end
 expect(123);                % {
 if isfield(funcs, fname2)
     fail(sprintf('duplicate function %s', fname2));
@@ -2266,6 +2285,10 @@ while token ~= 41           % ')'
         next();             % leave the ')' for the caller's expect(41)
         break;
     end
+    if token == 210         % '...': the variadic marker, always last
+        next();
+        break;
+    end
     [base, stdef] = parse_basetype();
     if isa(stdef, 'cell')
         fail('struct definitions are not allowed in parameter lists');
@@ -2275,12 +2298,15 @@ while token ~= 41           % ')'
         depth = depth + 1;
         next();
     end
-    if token ~= 150
-        fail('expected a parameter name');
+    if token == 150
+        names{end+1} = idname;
+        next();             % consume the name
+    else
+        % Unnamed: legal in a declaration, as in int printf(const char *, ...).
+        % The parameter still owns its stack slot, it just has no binding.
+        names{end+1} = '';
     end
-    names{end+1} = idname;
     t = pcode(base, depth);
-    next();
     decayed = 0;
     if token == 91          % '[': array parameter decays to a pointer
         while token == 91
@@ -2313,6 +2339,10 @@ base = 16;
 acc = 0;
 for k = nparams:-1:1
     nm = names{k};
+    if isempty(nm)          % unnamed: occupies its slot, nothing to bind
+        acc = acc + sizes{k};
+        continue;
+    end
     if isfield(lvars, nm)
         fail(sprintf('duplicate parameter %s', nm));
     end
