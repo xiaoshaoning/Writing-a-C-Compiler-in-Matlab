@@ -453,7 +453,7 @@ function next()
 % next — tokenizer. Num=128, Return=130, Int=131, Char=134, Str=172, Id=150,
 % Shl=140, Shr=141, Lan=142, Lor=143, Lt=144, Gt=145, Le=146, Ge=147,
 % Eq=148, Ne=149, Assign=61 ('='), AddAssign=160 .. XorAssign=169, Inc=170,
-% Dec=171, For=173, Do=174, Break=175, Continue=176; single-char
+% Dec=171, For=173, Do=174, Break=175, Continue=176, Ellipsis=210; single-char
 % operators/braces keep their ASCII code; 0 = EOF. Skips whitespace and
 % `//`/`/* */` comments. Identifier text goes into idname; char literals
 % ('A', '\n') become Num; string literals become Str (text in strtext).
@@ -1628,7 +1628,7 @@ lvarstruct = struct();
 lstatics = struct();
 glabels = struct();
 fbytes = 0;
-[nparams, psize, ptypes] = parse_params(rettype >= 1000 && ~is_ptr_code(rettype));
+[nparams, psize, ptypes, nunnamed] = parse_params(rettype >= 1000 && ~is_ptr_code(rettype));
 expect(41);                 % )
 if token == 59              % ';' - a declaration, not a definition
     % A prototype needs no registration: a call records its own arity in
@@ -1646,6 +1646,9 @@ if token == 59              % ';' - a declaration, not a definition
     return;
 end
 expect(123);                % {
+if nunnamed > 0
+    fail('a parameter of a definition needs a name');
+end
 if isfield(funcs, fname2)
     fail(sprintf('duplicate function %s', fname2));
 end
@@ -2269,13 +2272,17 @@ end
 next();                     % ')'
 end
 
-function [nparams, psize, ptypes] = parse_params(returns_struct)
-% params := (type ('*')* name (('[' … ']')? (',' …)*))? — collect
+function [nparams, psize, ptypes, nunnamed] = parse_params(returns_struct)
+% params := (type ('*')* name? (('[' … ']')? (',' …)*))? — collect
 % names/types first, then assign rbp offsets. Args are pushed left-to-right
 % (arg1 deepest); by-value struct params occupy their full size, and a
 % struct-returning function's hidden return pointer shifts the args by 8.
+% nunnamed counts the parameters written without a name, which a declaration
+% may do (`int printf(const char *, ...)`) but a definition may not - the
+% caller checks that once it knows which of the two it has.
 global token idname lvars lvartype lvararr lvarstruct sdefs
 nparams = 0;
+nunnamed = 0;
 names = {};
 types = {};
 sizes = {};
@@ -2305,6 +2312,7 @@ while token ~= 41           % ')'
         % Unnamed: legal in a declaration, as in int printf(const char *, ...).
         % The parameter still owns its stack slot, it just has no binding.
         names{end+1} = '';
+        nunnamed = nunnamed + 1;
     end
     t = pcode(base, depth);
     decayed = 0;

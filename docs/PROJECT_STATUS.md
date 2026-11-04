@@ -579,7 +579,9 @@ prototype is now parsed and discarded: a call records its own arity in
 end, so a declaration needs no registration, and a declared-but-never-defined
 callee is still `call to undefined function`. Two gaps came with it: an
 **unnamed parameter** (`const char *`) was `expected a parameter name` — legal
-in a declaration; it now keeps its stack slot and binds nothing — and `...`
+in a declaration; it now keeps its stack slot and binds nothing, and a
+*definition* still rejects it (`a parameter of a definition needs a name`,
+which is the error gcc gives too) — and `...`
 had no token at all (new token 210, lexed only for three dots, so `.` stays
 member access). Guard `cc47_proto.c` (exit 96: mutual recursion through
 prototypes, unnamed and variadic forms); ceiling 18120 → **18284** (the guard
