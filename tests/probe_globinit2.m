@@ -167,21 +167,38 @@ else
             numel(txt), numel(strfind(txt, char(10))), oneline);
     report('B2 (the call line is intact in the file)', oneline);
 
-    [st, msg] = system('C:\msys64\ucrt64\bin\gcc.exe tmp_probe_globinit2.s -o tmp_probe_globinit2.exe');
-    fprintf('   gcc on the .s: exit=%d\n', st);
-    if st ~= 0
-        fprintf('   %s\n', strtrim(msg));
-    else
-        [rst, ~] = system('tmp_probe_globinit2.exe');
-        fprintf('   program exit=%d (the C clone gives 42)\n', rst);
+    % Find an assembler. A missing tool is not a failed claim, so this step is
+    % SKIPPED rather than FAILED when neither gcc nor cc exists; B2 above
+    % already shows the file's text is right.
+    assembler = '';
+    asm_cands = {'gcc', 'cc', 'C:\msys64\ucrt64\bin\gcc.exe'};
+    for k = 1:numel(asm_cands)
+        [q, ~] = system([asm_cands{k} ' --version']);
+        if q == 0
+            assembler = asm_cands{k};
+            break;
+        end
     end
-    report('B3 (the assembly is accepted)', st == 0);
+    if isempty(assembler)
+        fprintf('   B3 SKIPPED: no assembler on this machine (looked for gcc, cc)\n');
+    else
+        [st, msg] = system([assembler ' tmp_probe_globinit2.s -o tmp_probe_globinit2.exe']);
+        fprintf('   %s on the .s: exit=%d\n', assembler, st);
+        if st ~= 0
+            fprintf('   %s\n', strtrim(msg));
+        else
+            [rst, ~] = system('tmp_probe_globinit2.exe');
+            fprintf('   program exit=%d (the C clone gives 42)\n', rst);
+        end
+        report('B3 (the assembly is accepted)', st == 0);
+    end
 end
 
 fprintf('\n=== verdict ===\n');
-fprintf('If C, D, A, B, B2 and B3 all pass, the consumer is correct under real\n');
-fprintf('MATLAB and the pp_globinit2 failure is matlab-cli-specific. Paste this\n');
-fprintf('output into docs/NOTE_2026-11-04_pp_globinit2_residual.md as round two.\n');
+fprintf('If C, D, A, B and B2 all pass, the consumer is correct under real\n');
+fprintf('MATLAB and the pp_globinit2 failure is matlab-cli-specific. B3 needs an\n');
+fprintf('assembler and is skipped without one; it is a convenience, not the claim.\n');
+fprintf('Paste this output into docs/NOTE_2026-11-04_pp_globinit2_residual.md.\n');
 
 cd(old);
 end
