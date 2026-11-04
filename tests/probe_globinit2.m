@@ -38,8 +38,32 @@ end
 fprintf('\n');
 
 here = fileparts(mfilename('fullpath'));
-root = fileparts(here);            % tests/ -> project root
+% Find the project root. The probe may be run from anywhere (or copied
+% elsewhere), so try the file's parent directory first, then the current
+% directory, then CC_ROOT. Fail loudly rather than letting addpath('src')
+% resolve to a 'src' that does not exist.
 old = pwd;
+cands = {fullfile(fileparts(here), ''), pwd, getenv('CC_ROOT')};
+root = '';
+for k = 1:numel(cands)
+    c = cands{k};
+    if isempty(c)
+        continue;
+    end
+    if exist(fullfile(c, 'src', 'cc_int.m'), 'file') == 2
+        root = c;
+        break;
+    end
+end
+if isempty(root)
+    fprintf('\nERROR: cannot find src/cc_int.m.\n');
+    fprintf('  Tried: %s\n', strjoin(cands(cellfun(@(x) ~isempty(x), cands)), ', '));
+    fprintf('  Run this probe from the project root, or set CC_ROOT:\n');
+    fprintf('    >> setenv(''CC_ROOT'', ''D:\\path\\to\\Writing-a-C-Compiler-in-Matlab'')\n');
+    fprintf('  Claims C and D above do not need the project; A, B, B2, B3 do.\n');
+    return;
+end
+fprintf('project root: %s\n', root);
 cd(root);
 
 % ---------------------------------------------------------------- claim C
