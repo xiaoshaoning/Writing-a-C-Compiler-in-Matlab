@@ -4,6 +4,12 @@
 % Run from the project root (this is a function file, not a script):
 %   >> addpath('tests'); probe_globinit2
 %
+% If the probe file does not sit inside the project (it is copied elsewhere),
+% give it the root explicitly - otherwise it stops with an ERROR, because
+% addpath('src') would silently resolve to a 'src' that does not exist:
+%   >> setenv('CC_ROOT', 'D:\path\to\Writing-a-C-Compiler-in-Matlab')
+%   >> addpath('tests'); probe_globinit2
+%
 % Background: on matlab-cli (v8 and v11) compiling tests/programs/pp_globinit2.c
 % writes an assembly file in which the line
 %
