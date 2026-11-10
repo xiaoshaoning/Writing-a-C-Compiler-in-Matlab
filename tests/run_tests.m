@@ -966,7 +966,10 @@ cctests = {
     % exit code through the x86sim interpreter (x86sim.m) as through gcc.
     simok = 0;
     simtot = 0;
-    for sk = 1:size(cctests, 1)
+    % CC_CORPUS slices this loop too: it compiles and simulates EVERY program,
+    % and it logs nothing unless a check fails, so an unsliced run looks like a
+    % hang with no progress - a 20-program slice still paid for all 326 here.
+    for sk = corpus_first:corpus_last(size(cctests, 1))
         try
             delete('tmp_cc.s');
             cc_int(['tests/programs/' cctests{sk,1}], 'tmp_cc.s');

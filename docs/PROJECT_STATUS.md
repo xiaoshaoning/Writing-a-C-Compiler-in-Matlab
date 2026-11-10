@@ -759,18 +759,18 @@ and the runtime library are the changelog entries above:
 
 ## Open items (2026-09-29)
 
-- **Long runs now wedge at a fixed point (2026-11-04, late).** From about
-  21:00 this host stopped finishing section runs at all: the process completes
-  the whole pp output-parity group (56 checks, ending at
-  `output parity stress2.c`) and then stops writing to `run_tests.log`, with no
-  output and no failure. Reproduced on slices of 8, 20 and 80 corpus programs
-  that had completed earlier in the same session, so it is not section size and
-  not the code under test: `xc` and `cc_int` on `stress2.c` both finish fine on
-  their own. It looks like an accumulation inside the engine process (roughly
-  100 checks in), which belongs in the matlab_in_rust bug reports rather than
-  here. Until then, verify with the sections that still complete in one process
-  (`instr` compiles all 326 corpus programs and passes) and treat a wedge as an
-  environment result, not a test result.
+- **`CC_CORPUS` used to slice only two of the three corpus loops (fixed
+  2026-11-04).** The gcc-free x86sim track compiles and simulates every corpus
+  program and logs nothing unless a check fails, so with the slice ignored there
+  it ground through all 326 of them on every run - and a 20-program slice looked
+  like a hang with no progress at all, after the pp parity group, for anything
+  up to fifteen minutes. That is what three "the host wedges" runs actually
+  were; `xc` and `cc_int` were never at fault, and the engine is not either.
+  Fixed by giving that loop the same `corpus_first:corpus_last(...)` bounds the
+  other two use: `CC_SECTIONS=cctests CC_CORPUS=81:20` now finishes in 6
+  minutes with 179/179 instead of timing out. If a sliced run seems to stall,
+  check whether the section loop it is in honours `corpus_last` before blaming
+  the host.
 - **Real-MATLAB validation.** No runnable MathWorks MATLAB is installed
   here (the R2023b install is a stub with no `matlab.exe`), so the
   suite's "green oracle" is unverified on it. The instruction-count
