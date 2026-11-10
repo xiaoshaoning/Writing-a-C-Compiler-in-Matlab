@@ -455,13 +455,19 @@ else
 end
 end
 
-function em_store_bitfield(t, addr, bf)
-% em_store_bitfield - store %rax into the bit-field bf = [bit_off width] whose
-% storage unit is at `addr`, leaving the unit's other fields alone. gcc packs
-% consecutive bit-fields into one unit, so a plain store would clobber them:
-% this masks the value into place, reads the unit at the declared type's width,
-% clears just the field's bits, ors the value in, and writes the unit back.
-% %rdx and %r11 are scratch; %r11 is not used anywhere else in the assembly.
+function em_store_lvalue(t, addr, bf)
+% em_store_lvalue - store %rax into the lvalue at `addr`. bf = [bit_off width]
+% describes a bit-field, and [] an ordinary one. A bit-field shares its storage
+% unit with its neighbours (gcc packs them), so a plain store would clobber
+% them: that path masks the value into place, reads the unit at the declared
+% type's width, clears just the field's bits, ors the value in and writes the
+% unit back. %rdx and %r11 are scratch there; %r11 is not used elsewhere.
+% Callers pass whatever lvalue_addr gave them and do not branch on it - the
+% three store sites used to repeat that branch.
+if isempty(bf)
+    em_store(t, addr);
+    return;
+end
 bof = bf(1);
 bw = bf(2);
 em(sprintf('\tshlq\t$%d, %%rax', 64 - bw));        % the value's bits to the top
@@ -2263,7 +2269,7 @@ function bytes = store_member(bytes, base, v, minfo)
 % store_member - put one member's value into the byte image. A bit-field needs
 % its unit's other bits kept: gcc packs consecutive fields into one storage
 % unit, so storing the member's whole width would erase its neighbours. This is
-% the image-domain counterpart of em_store_bitfield, and the same rule: mask the
+% the image-domain counterpart of em_store_lvalue, and the same rule: mask the
 % value to the field, shift it to the field's place, merge it into the unit.
 msz = member_elem_size(minfo);
 bf = member_bitfield(minfo);
@@ -3414,10 +3420,8 @@ while token == 61 || (token >= 160 && token <= 169)
                 em('\taddq\t$8, %rcx');
                 em('\taddq\t$8, %rdx');
             end
-        elseif ~isempty(sav_bf)
-            em_store_bitfield(sav_ltype, '(%rbx)', sav_bf);
         else
-            em_store(sav_ltype, '(%rbx)');
+            em_store_lvalue(sav_ltype, '(%rbx)', sav_bf);
         end
     elseif sav_ltype == 6
         % compound on a double lvalue: load-modify-store in %xmm
@@ -3494,7 +3498,7 @@ while token == 61 || (token >= 160 && token <= 169)
         end
         em('\tpopq\t%rbx');              % the address
         if ~isempty(sav_bf)
-            em_store_bitfield(sav_ltype, '(%rbx)', sav_bf);
+            em_store_lvalue(sav_ltype, '(%rbx)', sav_bf);
         elseif sav_ltype == 1
             em('\tmovb\t%al, (%rbx)');
         else
@@ -4728,11 +4732,7 @@ else
 end
 if post
     em('\tpopq\t%rcx');         % the address
-    if isempty(bf)
-        em_store(t, '(%rcx)');
-    else
-        em_store_bitfield(t, '(%rcx)', bf);
-    end
+    em_store_lvalue(t, '(%rcx)', bf);
     if t == 6
         em('\tmovsd\t%xmm2, %xmm0');   % old value
     else
@@ -4740,11 +4740,7 @@ if post
     end
 else
     em('\tpopq\t%rbx');         % the address
-    if isempty(bf)
-        em_store(t, '(%rbx)');
-    else
-        em_store_bitfield(t, '(%rbx)', bf);
-    end
+    em_store_lvalue(t, '(%rbx)', bf);
 end
 end
 
