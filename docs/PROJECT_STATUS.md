@@ -589,8 +589,10 @@ field's bits, or the masked value in, write the unit back. One helper
 assignment, compound assignment, `++`/`--`), and `store_member` applies the same
 rule in the initializer image, so a data-section or frame initializer merges
 into the unit instead of overwriting it. The field's place in its unit is the
-`membermap`'s sixth field; `lbf` carries it from the load that `lvalue_addr`
-drops to the store that has to re-mask.
+`membermap`'s sixth field, and `member_bitfield` is the only place that reads
+it: the load site records the answer in `lbf`, `lvalue_addr` hands it back as
+`bf` while dropping the extraction, and the three store sites mask from that -
+nothing re-derives it, and no reader has to agree by luck.
 
 Guard `cc48_bitfield_layout.c` (exit 96, identical output on gcc and both
 engines): ten `sizeof`s, two member offsets, an array stride, the

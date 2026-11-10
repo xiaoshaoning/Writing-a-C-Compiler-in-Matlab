@@ -134,7 +134,9 @@ glabels = struct();    % label name -> {defined, line index, pending jmps}
 sret = 0;             % the current function returns a struct
 sretsize = 0;         % its size (bytes)
 sretbase = 0;         % the hidden slot pointer's rbp offset
-lbf = [];             % the bit-field the last member load extracted, if any
+lbf = [];             % the bit-field the last member load extracted: written
+                      % by the load site, consumed by lvalue_addr, which hands
+                      % it to the store. Never read past that one hop.
 % runtime library: name -> CRT symbol. Calls to these emit a Win64-ABI
 % shim (`__cc_<name>_<nargs>`) in the generated assembly instead of a
 % direct `call`, so our stack-arg convention adapts to RCX/RDX/R8/R9.
@@ -1266,6 +1268,9 @@ while token ~= 125          % '}'
     end
     bw = 0;
     if token == 58          % ':': a bit-field width
+        if depth > 0 || is_struct_code(mbase) || mbase == 6
+            fail('a bit-field needs an integer type');
+        end
         next();
         if token ~= 128
             fail('expected a bit-field width');
@@ -2132,6 +2137,22 @@ else
 end
 end
 
+function bf = member_bitfield(minfo)
+% member_bitfield - [bit_offset width] for a bit-field member, [] for any other.
+% The only reader of the membermap's bit-field fields: the load site and the
+% initializer image both ask this, so the layout's answer cannot be interpreted
+% two ways. The guard on numel keeps entries built before bit-fields existed
+% readable.
+bf = [];
+if numel(minfo) >= 3 && minfo{3} > 0
+    bof = 0;
+    if numel(minfo) >= 6
+        bof = minfo{6};
+    end
+    bf = [bof minfo{3}];
+end
+end
+
 function n = member_leaves(minfo)
 % member_leaves - how many flattened leaves a member contributes: a nested
 % struct contributes its own members' leaves (recursively), an array its
@@ -2245,18 +2266,13 @@ function bytes = store_member(bytes, base, v, minfo)
 % the image-domain counterpart of em_store_bitfield, and the same rule: mask the
 % value to the field, shift it to the field's place, merge it into the unit.
 msz = member_elem_size(minfo);
-bw = 0;
-bof = 0;
-if numel(minfo) >= 3
-    bw = minfo{3};
-end
-if numel(minfo) >= 6
-    bof = minfo{6};
-end
-if bw <= 0
+bf = member_bitfield(minfo);
+if isempty(bf)
     bytes = store_value(bytes, base, v, msz);
     return;
 end
+bof = bf(1);
+bw = bf(2);
 unit = 0;                       % the storage unit, little-endian, as it stands
 for b = msz - 1:-1:0
     unit = unit * 256 + bytes(base + b + 1);
@@ -3345,17 +3361,17 @@ function parse_assignment()
 % the address is pushed, the RHS evaluated, then stored, so the value (in
 % eax) is the RHS — `y = x = 5` chains work. Compound ops load-modify-store
 % and scale by the element size for pointer `+=`/`-=`.
-global token out ltype etype sdefs bstride curarrsz lbf
+global token out ltype etype sdefs bstride curarrsz
 parse_conditional();
 while token == 61 || (token >= 160 && token <= 169)
     op = token;
     sav_ltype = ltype;      % the LHS's type (RHS parsing may change ltype)
     sav_bstride = bstride;  % the LHS's array strides (empty for scalars)
     sav_asz = curarrsz;     % the LHS array's total byte size (0 if not)
-    if ~lvalue_addr()
+    [is_lv, sav_bf] = lvalue_addr();    % sav_bf: the bit-field, [] if not one
+    if ~is_lv
         fail('bad lvalue in assignment');
     end
-    sav_bf = lbf;           % the bit-field just dropped, [] if it is not one
     if op == 61             % plain '='
         em('\tpushq\t%rax');
         next();
@@ -4531,27 +4547,24 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
         else
             estruc = 0;
             em_val(etype);
-            if numel(mem) >= 3 && mem{3} > 0
+            bf = member_bitfield(mem);
+            if ~isempty(bf)
                 % a bit-field: keep only its `width` bits, sign- or
-                % zero-extended. lbf says where the field sits, because a
-                % store or a ++/-- has to re-mask and rewrite the whole unit;
-                % lvalue_addr drops exactly this sequence and leaves lbf set.
-                bw = mem{3};
-                bof = 0;
-                if numel(mem) >= 6
-                    bof = mem{6};       % bit offset inside the storage unit
-                end
-                lbf = [bof bw];
-                em_bf_extract(bof, bw, ~is_unsigned_type(etype));
+                % zero-extended, and record where it sits. A store or a ++/--
+                % has to re-mask and rewrite the whole unit, and lvalue_addr
+                % hands this description to it when it drops this sequence.
+                lbf = bf;
+                em_bf_extract(bf(1), bf(2), ~is_unsigned_type(etype));
             end
         end
     else                    % postfix ++/--
         op = token;
         next();
-        if ~lvalue_addr()
+        [is_lv, bf1] = lvalue_addr();
+        if ~is_lv
             fail('bad lvalue for increment');
         end
-        incdec(op, etype, 1);   % postfix: leave the old value
+        incdec(op, etype, 1, bf1);   % postfix: leave the old value
     end
 end
 
@@ -4584,8 +4597,15 @@ for k = numel(ops):-1:1
         em('\tsete\t%al');
         em('\tmovzbl\t%al, %eax');
     elseif op == 38         % '&': address-of — drop the trailing load
-        if ~lvalue_addr() && etype < 2
+        [is_lv, bf2] = lvalue_addr();
+        if ~is_lv && etype < 2
             fail('bad address of');
+        end
+        if ~isempty(bf2)
+            % C 6.5.3.2: a bit-field has no address, since its bits are not
+            % separately addressable. gcc rejects this; so do we, rather than
+            % silently handing out the storage unit's address.
+            fail('cannot take the address of a bit-field');
         end
         etype = pdecay(etype);
         estruc = 0;
@@ -4614,25 +4634,30 @@ for k = numel(ops):-1:1
             end
         end
     elseif op == 170 || op == 171    % prefix ++/--
-        if ~lvalue_addr()
+        [is_lv, bf1] = lvalue_addr();
+        if ~is_lv
             fail('bad lvalue for increment');
         end
-        incdec(op, etype, 0);   % prefix: leave the new value
+        incdec(op, etype, 0, bf1);   % prefix: leave the new value
     end
     % unary '+' is a no-op
 end
 ltype = etype;   % for assignment store widths
 end
 
-function ok = lvalue_addr()
-% lvalue_addr — if the expression ended with a load (variable/deref/index),
-% drop it so eax holds the lvalue's address; a struct value / address is
-% already in rax. Returns success.
+function [ok, bf] = lvalue_addr()
+% lvalue_addr - if the expression ended with a load (variable/deref/index),
+% drop it so rax holds the lvalue's address; a struct value / address is
+% already in rax. ok says whether the expression was an lvalue at all, and bf
+% is the bit-field it addressed - [bit_offset width], empty for an ordinary
+% one - because a store into a bit-field has to re-mask and rewrite the whole
+% storage unit instead of writing the field's own bytes.
 global out lbf
 % a bit-field member: the load is followed by its shlq + sarq/shrq extraction
-% (em_bf_extract), and lbf says where the field sits in its unit. Drop all
-% three so rax holds the unit's address; a caller that stores re-masks from
-% lbf. Anything else clears lbf, so a stale description cannot reach a store.
+% (em_bf_extract), and lbf holds where the field sits in its unit. Drop all
+% three so rax holds the unit's address and hand the description to the caller.
+bf = lbf;
+lbf = [];                   % consumed here, so nothing can go stale
 if numel(out) >= 3 && ...
    (strncmp(out{end}, [char(9), 'sarq'], 5) || strncmp(out{end}, [char(9), 'shrq'], 5)) && ...
    strncmp(out{end - 1}, [char(9), 'shlq'], 5) && ...
@@ -4641,9 +4666,9 @@ if numel(out) >= 3 && ...
     out(end) = [];
     out(end) = [];
     ok = 1;
-    return;             % lbf stays set: it describes the load just dropped
+    return;             % bf describes the load just dropped
 end
-lbf = [];
+bf = [];
 if numel(out) >= 1 && ...
    (strcmp(out{end}, sprintf('\tmovq\t(%%rax), %%rax')) || ...
     strcmp(out{end}, sprintf('\tmovzbl\t(%%rax), %%eax')) || ...
@@ -4664,21 +4689,22 @@ else
 end
 end
 
-function incdec(op, t, post)
+function incdec(op, t, post, bf)
 % incdec — ++/-- on the lvalue whose address is in rax, type t. Scale is
 % the element size (1 for scalars/char*, the struct size for struct
 % pointers, 8 otherwise). post=1 leaves the OLD value in rax; post=0 the NEW.
-% For a bit-field the old value has to be extracted from its unit and the new
-% one masked back into it, so the neighbours in that unit survive.
-global out lbf
+% For a bit-field (bf = [bit_offset width], from lvalue_addr) the old value has
+% to be extracted from its unit and the new one masked back into it, so the
+% neighbours in that unit survive.
+global out
 scale = 1;
 if is_ptr_code(t)
     scale = elem_size(t);
 end
 em('\tpushq\t%rax');            % save the address
 em_val(t);
-if ~isempty(lbf)
-    em_bf_extract(lbf(1), lbf(2), ~is_unsigned_type(t));
+if ~isempty(bf)
+    em_bf_extract(bf(1), bf(2), ~is_unsigned_type(t));
 end
 if post
     if t == 6
@@ -4702,10 +4728,10 @@ else
 end
 if post
     em('\tpopq\t%rcx');         % the address
-    if isempty(lbf)
+    if isempty(bf)
         em_store(t, '(%rcx)');
     else
-        em_store_bitfield(t, '(%rcx)', lbf);
+        em_store_bitfield(t, '(%rcx)', bf);
     end
     if t == 6
         em('\tmovsd\t%xmm2, %xmm0');   % old value
@@ -4714,10 +4740,10 @@ if post
     end
 else
     em('\tpopq\t%rbx');         % the address
-    if isempty(lbf)
+    if isempty(bf)
         em_store(t, '(%rbx)');
     else
-        em_store_bitfield(t, '(%rbx)', lbf);
+        em_store_bitfield(t, '(%rbx)', bf);
     end
 end
 end
