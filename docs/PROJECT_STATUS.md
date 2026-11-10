@@ -813,14 +813,46 @@ interpreter-style stack convention.
 - The `-s` mnemonic column is padded manually to reproduce the reference's
   `%8.4s` over its 4-char mnemonic field (`'LEA '` -> `'    LEA '`), which
   matches byte-for-byte on every runtime
-- **Bit-fields are unpacked.** Each field owns a whole 8-byte slot, so
-  `struct { unsigned a:3; unsigned b:5; }` is 8 bytes where gcc says 4. The
-  values are right (masking on load), only the layout differs; every other
-  shape measured against gcc matches — unions `{char,int}` 4, `{char,double}`
-  8, `{char[12],int}` 12, `{struct A1,char}` 8; nested in structs 8/16/16 with
-  member offsets 4/8/0 and 12; bitfield `sizeof` matches where the slack of an
-  unpacked slot happens to equal gcc's padding (`{unsigned a:3; char c}` is 8
-  both ways, `{char c; unsigned a:3}` is 8 both ways)
+- **Bit-fields are unpacked.** Each field owns a whole storage unit of its
+  declared type, so a layout that gcc packs into one unit comes out one unit
+  per field. The values are right (masking on load, sign-extended); only the
+  layout differs, and `sizeof` therefore does too. Measured against gcc with
+  `tests/probe_bf`-style shapes (probe kept out of the repo until it can pass):
+
+  | shape | here | gcc |
+  |---|---|---|
+  | `{unsigned a:3; unsigned b:5}` | 8 | 4 |
+  | `{unsigned char a:3; b:5}` | 2 | 1 |
+  | `{int a:4; b:4; c:4; d:4}` | 16 | 4 |
+  | `{char c; unsigned short a:4; b:4}` | 6 | 4 |
+  | `{unsigned a:3; b:5; int n}` | 12, n at 8 | 8, n at 4 |
+  | `{struct B1 s; char c}` | 12, c at 8 | 8, c at 4 |
+  | array of `{unsigned a:3; b:5}` | stride 8 | stride 4 |
+
+  Everything else measured matches gcc: unions (`{char,int}` 4,
+  `{char,double}` 8, `{char[12],int}` 12, `{struct A1,char}` 8), unions and
+  structs nested in structs (sizes 8/16/16, member offsets 4/8/0 and 12), and
+  the bitfield shapes whose slack happens to equal gcc's padding
+  (`{unsigned a:3; char c}` 8, `{char c; unsigned a:3}` 8, `{unsigned a:31;
+  b:2}` 8). `unsigned int : 0;` — an anonymous zero-width field — does not
+  parse yet (`expected a member name`).
+
+  **Why this is not an offset tweak.** `lvalue_addr` recognises a bit-field by
+  matching the three instructions the load emitted (`shlq` + `sarq`/`shrq` on
+  `(%rax)`) and deletes them, because a field that owns its unit can be stored
+  with one plain 8-byte write. Packing makes the store a read-modify-write
+  (load the unit, clear the field's bits, or in the new value, store the
+  unit), so the bit offset and width must reach the store sites —
+  assignment, compound assignment, `++`/`--`, and the initializer image
+  writer. That is the work, and it is one commit because a layout that packs
+  without it would make `sizeof` right and the values wrong.
+
+  Stage one has landed: the membermap carries the bit offset inside the unit
+  as its sixth field, and the load path folds it in as
+  `shlq $(64 - bit_off - width)` + `sarq $(64 - width)`. At `bit_off` 0 that
+  is the previous text exactly — verified byte-identical assembly for
+  `cc31_bitfield`, `cc45_structarr`, `cc46_aggrinit2`, `hello` and `stress2`
+  before and after, so the instruction baseline cannot have moved.
 
 ## Runtime notes
 

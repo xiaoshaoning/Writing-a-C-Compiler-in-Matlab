@@ -1231,13 +1231,18 @@ while token ~= 125          % '}'
     if isunion
         % every member shares offset 0; the union is as large as its
         % largest member (C 6.7.2.1)
-        membermap.(name) = {0, mt, bw, asz, adims};
+        membermap.(name) = {0, mt, bw, asz, adims, 0};
         if nbytes > off
             off = nbytes;
         end
     else
         off = off + mod(-off, mal);     % align to the member's own width
-        membermap.(name) = {off, mt, bw, asz, adims};
+        % The sixth field is the bit offset inside the field's storage unit.
+        % A bit-field owns a whole unit today, so it is always 0 and the load
+        % path that reads it emits what it always did; packing will make it
+        % real. Written down here so the answer to "where does a field sit in
+        % its unit" has one home.
+        membermap.(name) = {off, mt, bw, asz, adims, 0};
         off = off + nbytes;
     end
     mnames{end+1} = name;
@@ -4412,12 +4417,18 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
             estruc = 0;
             em_val(etype);
             if numel(mem) >= 3 && mem{3} > 0
-                % a bit-field: keep only its low `width` bits (sign- or
-                % zero-extended). The field owns a whole 8-byte slot, so
+                % a bit-field: keep only its `width` bits, sign- or
+                % zero-extended. The field owns a whole 8-byte slot, so
                 % the store needs no change; masking on load is enough for
-                % every C-level observation.
+                % every C-level observation. The left shift also clears the
+                % bits below the field, which is zero today (the field starts
+                % its own unit) and is what packing will use.
                 bw = mem{3};
-                em(sprintf('\tshlq\t$%d, %%rax', 64 - bw));
+                bof = 0;
+                if numel(mem) >= 6
+                    bof = mem{6};       % bit offset inside the storage unit
+                end
+                em(sprintf('\tshlq\t$%d, %%rax', 64 - bw - bof));
                 if is_unsigned_type(etype)
                     em(sprintf('\tshrq\t$%d, %%rax', 64 - bw));
                 else
