@@ -134,6 +134,7 @@ glabels = struct();    % label name -> {defined, line index, pending jmps}
 sret = 0;             % the current function returns a struct
 sretsize = 0;         % its size (bytes)
 sretbase = 0;         % the hidden slot pointer's rbp offset
+lbf = [];             % the bit-field the last member load extracted, if any
 % runtime library: name -> CRT symbol. Calls to these emit a Win64-ABI
 % shim (`__cc_<name>_<nargs>`) in the generated assembly instead of a
 % direct `call`, so our stack-arg convention adapts to RCX/RDX/R8/R9.
@@ -437,6 +438,43 @@ elseif t == 6
 else
     em(sprintf('\tmovq\t%%rax, %s', addr));
 end
+end
+
+function em_bf_extract(bof, bw, signed)
+% em_bf_extract - the storage unit in %rax becomes the field's own value: the
+% bw bits that start bof bits into the unit, sign- or zero-extended. The left
+% shift also discards everything above the field, so a neighbouring field in
+% the same unit cannot leak in.
+em(sprintf('\tshlq\t$%d, %%rax', 64 - bof - bw));
+if signed
+    em(sprintf('\tsarq\t$%d, %%rax', 64 - bw));
+else
+    em(sprintf('\tshrq\t$%d, %%rax', 64 - bw));
+end
+end
+
+function em_store_bitfield(t, addr, bf)
+% em_store_bitfield - store %rax into the bit-field bf = [bit_off width] whose
+% storage unit is at `addr`, leaving the unit's other fields alone. gcc packs
+% consecutive bit-fields into one unit, so a plain store would clobber them:
+% this masks the value into place, reads the unit at the declared type's width,
+% clears just the field's bits, ors the value in, and writes the unit back.
+% %rdx and %r11 are scratch; %r11 is not used anywhere else in the assembly.
+bof = bf(1);
+bw = bf(2);
+em(sprintf('\tshlq\t$%d, %%rax', 64 - bw));        % the value's bits to the top
+em(sprintf('\tshrq\t$%d, %%rax', 64 - bof - bw));  % down into place, zeroed
+em('\tmovq\t%rax, %rdx');                         % the packed value
+em(sprintf('\tleaq\t%s, %%rax', addr));            % the unit's address
+em_val(t);                                        % the unit, at its own width
+em('\tmovq\t$-1, %r11');
+em(sprintf('\tshlq\t$%d, %%r11', 64 - bw));
+em(sprintf('\tshrq\t$%d, %%r11', 64 - bw));        % 2^bw - 1
+em(sprintf('\tshlq\t$%d, %%r11', bof));            % the field's bits
+em('\tnotq\t%r11');                               % everything but the field
+em('\tandq\t%r11, %rax');
+em('\torq\t%rdx, %rax');
+em_store(t, addr);
 end
 
 function expect(tk)
@@ -1159,18 +1197,28 @@ end
 end
 
 function def = parse_struct_members(isunion)
-% members := (type ('*')* name (('[' size ']')? …) ';')* '}' — returns
-% {size, membermap, names, isunion, alignment}; membermap maps member name ->
-% {offset, type}; names lists the members in declaration order (for
-% initializers). A union lays every member at offset 0 and is as large as
-% its largest member (C 6.7.2.1). A member sits at the next multiple of its own
-% alignment (align_of) and the total is rounded up to the widest member's, which
-% is what makes sizeof agree with C.
+% members := (type ('*')* name? (('[' size ']')? | ':' width) ';')* '}' — returns
+% {size, membermap, names, isunion, alignment}. membermap maps a member name ->
+% {offset, type, bit_width, element_count, dims, bit_offset}: a bit-field's
+% offset is its storage unit's and bit_offset is where the field starts inside
+% it, so the two together are the field's address. names lists the named
+% members in declaration order (for initializers).
+%
+% A union lays every member at offset 0 and is as large as its largest member
+% (C 6.7.2.1). A member sits at the next multiple of its own alignment
+% (align_of) and the total is rounded up to the widest member's, which is what
+% makes sizeof agree with C. Consecutive bit-fields of one declared type share
+% a storage unit while they fit (gcc's MS layout, this target's), which is why
+% a bit-field's offset is not its own byte position.
 global token idname stags token_val
 membermap = struct();
 mnames = {};
 off = 0;
 algn = 1;                   % the widest member alignment seen so far
+run_off = -1;               % the current bit-field storage unit, -1 for none
+run_used = 0;               % bits of it already taken
+run_st = 0;                 % and its size in bytes
+run_t = -1;                 % and its declared type
 while token ~= 125          % '}'
     [mbase, mdef] = parse_basetype();
     if isa(mdef, 'cell')
@@ -1181,11 +1229,16 @@ while token ~= 125          % '}'
         depth = depth + 1;
         next();
     end
-    if token ~= 150
-        fail('expected a member name');
+    anonymous = (token == 58);   % ':' straight after the type: no member name
+    if anonymous
+        name = '';
+    else
+        if token ~= 150
+            fail('expected a member name');
+        end
+        name = idname;
+        next();
     end
-    name = idname;
-    next();
     mt = pcode(mbase, depth);
     adims = [];
     asz = 1;
@@ -1222,6 +1275,9 @@ while token ~= 125          % '}'
         if bw < 0 || bw > 8 * st
             fail('bad bit-field width');
         end
+        if bw == 0 && ~anonymous
+            fail('a named bit-field cannot have zero width');
+        end
     end
     nbytes = st * asz;
     mal = align_of(mt);             % this member's alignment
@@ -1231,21 +1287,44 @@ while token ~= 125          % '}'
     if isunion
         % every member shares offset 0; the union is as large as its
         % largest member (C 6.7.2.1)
-        membermap.(name) = {0, mt, bw, asz, adims, 0};
+        if ~anonymous
+            membermap.(name) = {0, mt, bw, asz, adims, 0};
+        end
         if nbytes > off
             off = nbytes;
         end
+    elseif bw > 0 || anonymous
+        % A bit-field lives in a storage unit of its declared type. gcc - the
+        % MS layout this target uses - shares one unit between consecutive
+        % bit-fields of the same declared type while they fit, starts a new
+        % unit when they do not or when the type changes, and reads an unnamed
+        % `: 0` as "this unit ends here". The sixth membermap field is the
+        % field's bit offset inside its unit.
+        if anonymous && bw == 0
+            run_off = -1;               % ': 0': close the run, take no space
+        else
+            if run_off < 0 || run_t ~= mt || run_st ~= st || run_used + bw > 8 * st
+                off = off + mod(-off, mal);
+                run_off = off;
+                run_st = st;
+                run_t = mt;
+                run_used = 0;
+                off = off + st;         % the unit takes its whole size
+            end
+            if ~anonymous
+                membermap.(name) = {run_off, mt, bw, asz, adims, run_used};
+            end
+            run_used = run_used + bw;
+        end
     else
+        run_off = -1;                   % a plain member ends the unit
         off = off + mod(-off, mal);     % align to the member's own width
-        % The sixth field is the bit offset inside the field's storage unit.
-        % A bit-field owns a whole unit today, so it is always 0 and the load
-        % path that reads it emits what it always did; packing will make it
-        % real. Written down here so the answer to "where does a field sit in
-        % its unit" has one home.
         membermap.(name) = {off, mt, bw, asz, adims, 0};
         off = off + nbytes;
     end
-    mnames{end+1} = name;
+    if ~anonymous
+        mnames{end+1} = name;
+    end
     expect(59);             % ';'
 end
 next();                     % consume '}'
@@ -2139,7 +2218,7 @@ for k = 1:numel(names)
     elseif first <= numel(vals)
         % a scalar member: its own width, not a fixed 8 bytes - writing 8 into
         % a 4-byte member overruns the next one
-        bytes = store_value(bytes, off, vals(first), member_elem_size(minfo));
+        bytes = store_member(bytes, off, vals(first), minfo);
     end
 end
 end
@@ -2157,6 +2236,34 @@ else
         bytes(base + b + 1) = mod(floor(v / 2^(8*b)), 256);
     end
 end
+end
+
+function bytes = store_member(bytes, base, v, minfo)
+% store_member - put one member's value into the byte image. A bit-field needs
+% its unit's other bits kept: gcc packs consecutive fields into one storage
+% unit, so storing the member's whole width would erase its neighbours. This is
+% the image-domain counterpart of em_store_bitfield, and the same rule: mask the
+% value to the field, shift it to the field's place, merge it into the unit.
+msz = member_elem_size(minfo);
+bw = 0;
+bof = 0;
+if numel(minfo) >= 3
+    bw = minfo{3};
+end
+if numel(minfo) >= 6
+    bof = minfo{6};
+end
+if bw <= 0
+    bytes = store_value(bytes, base, v, msz);
+    return;
+end
+unit = 0;                       % the storage unit, little-endian, as it stands
+for b = msz - 1:-1:0
+    unit = unit * 256 + bytes(base + b + 1);
+end
+unit = unit - mod(floor(unit / 2^bof), 2^bw) * 2^bof;   % clear the field
+unit = unit + mod(v, 2^bw) * 2^bof;                     % and set it
+bytes = store_value(bytes, base, unit, msz);
 end
 
 function lab = new_str(text)
@@ -3238,7 +3345,7 @@ function parse_assignment()
 % the address is pushed, the RHS evaluated, then stored, so the value (in
 % eax) is the RHS — `y = x = 5` chains work. Compound ops load-modify-store
 % and scale by the element size for pointer `+=`/`-=`.
-global token out ltype etype sdefs bstride curarrsz
+global token out ltype etype sdefs bstride curarrsz lbf
 parse_conditional();
 while token == 61 || (token >= 160 && token <= 169)
     op = token;
@@ -3248,6 +3355,7 @@ while token == 61 || (token >= 160 && token <= 169)
     if ~lvalue_addr()
         fail('bad lvalue in assignment');
     end
+    sav_bf = lbf;           % the bit-field just dropped, [] if it is not one
     if op == 61             % plain '='
         em('\tpushq\t%rax');
         next();
@@ -3290,6 +3398,8 @@ while token == 61 || (token >= 160 && token <= 169)
                 em('\taddq\t$8, %rcx');
                 em('\taddq\t$8, %rdx');
             end
+        elseif ~isempty(sav_bf)
+            em_store_bitfield(sav_ltype, '(%rbx)', sav_bf);
         else
             em_store(sav_ltype, '(%rbx)');
         end
@@ -3324,6 +3434,9 @@ while token == 61 || (token >= 160 && token <= 169)
         % compound: load-modify-store through the address
         em('\tpushq\t%rax');            % save the address
         em_val(sav_ltype);              % load with the type's sign/width
+        if ~isempty(sav_bf)
+            em_bf_extract(sav_bf(1), sav_bf(2), ~is_unsigned_type(sav_ltype));
+        end
         em('\tpushq\t%rax');            % save the old value
         next();
         parse_assignment();
@@ -3364,7 +3477,9 @@ while token == 61 || (token >= 160 && token <= 169)
             end
         end
         em('\tpopq\t%rbx');              % the address
-        if sav_ltype == 1
+        if ~isempty(sav_bf)
+            em_store_bitfield(sav_ltype, '(%rbx)', sav_bf);
+        elseif sav_ltype == 1
             em('\tmovb\t%al, (%rbx)');
         else
             em('\tmovq\t%rax, (%rbx)');
@@ -3810,7 +3925,7 @@ function parse_unary()
 % decay (no load, estruc = 1 for struct values).
 global token token_val token_dval token_isflt token_sfx idname strtext lvars lvartype lvararr lvarstruct ...
        globals gtype garr gstruct funcs fret frettype fparams called ltype libfns libcalls ...
-       etype estruc lvarstride gstride bstride lvararrsz gvararrsz curarrsz si typedefs fbytes fptypes libargt libret enums out lstatics
+       etype estruc lvarstride gstride bstride lvararrsz gvararrsz curarrsz si typedefs fbytes fptypes libargt libret enums out lstatics lbf
 ops = [];
 while token == 45 || token == 126 || token == 33 || token == 43 || ...   % - ~ ! +
       token == 38 || token == 42 || token == 170 || token == 171          % & * ++ --
@@ -4418,22 +4533,16 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
             em_val(etype);
             if numel(mem) >= 3 && mem{3} > 0
                 % a bit-field: keep only its `width` bits, sign- or
-                % zero-extended. The field owns a whole 8-byte slot, so
-                % the store needs no change; masking on load is enough for
-                % every C-level observation. The left shift also clears the
-                % bits below the field, which is zero today (the field starts
-                % its own unit) and is what packing will use.
+                % zero-extended. lbf says where the field sits, because a
+                % store or a ++/-- has to re-mask and rewrite the whole unit;
+                % lvalue_addr drops exactly this sequence and leaves lbf set.
                 bw = mem{3};
                 bof = 0;
                 if numel(mem) >= 6
                     bof = mem{6};       % bit offset inside the storage unit
                 end
-                em(sprintf('\tshlq\t$%d, %%rax', 64 - bw - bof));
-                if is_unsigned_type(etype)
-                    em(sprintf('\tshrq\t$%d, %%rax', 64 - bw));
-                else
-                    em(sprintf('\tsarq\t$%d, %%rax', 64 - bw));
-                end
+                lbf = [bof bw];
+                em_bf_extract(bof, bw, ~is_unsigned_type(etype));
             end
         end
     else                    % postfix ++/--
@@ -4519,10 +4628,11 @@ function ok = lvalue_addr()
 % lvalue_addr — if the expression ended with a load (variable/deref/index),
 % drop it so eax holds the lvalue's address; a struct value / address is
 % already in rax. Returns success.
-global out
-% a bit-field member: the load is followed by its shlq + sarq/shrq extraction.
-% Drop all three (the address beneath is already in rax); the store writes the
-% whole slot and the masking happens again on the next load.
+global out lbf
+% a bit-field member: the load is followed by its shlq + sarq/shrq extraction
+% (em_bf_extract), and lbf says where the field sits in its unit. Drop all
+% three so rax holds the unit's address; a caller that stores re-masks from
+% lbf. Anything else clears lbf, so a stale description cannot reach a store.
 if numel(out) >= 3 && ...
    (strncmp(out{end}, [char(9), 'sarq'], 5) || strncmp(out{end}, [char(9), 'shrq'], 5)) && ...
    strncmp(out{end - 1}, [char(9), 'shlq'], 5) && ...
@@ -4531,8 +4641,9 @@ if numel(out) >= 3 && ...
     out(end) = [];
     out(end) = [];
     ok = 1;
-    return;
+    return;             % lbf stays set: it describes the load just dropped
 end
+lbf = [];
 if numel(out) >= 1 && ...
    (strcmp(out{end}, sprintf('\tmovq\t(%%rax), %%rax')) || ...
     strcmp(out{end}, sprintf('\tmovzbl\t(%%rax), %%eax')) || ...
@@ -4557,13 +4668,18 @@ function incdec(op, t, post)
 % incdec — ++/-- on the lvalue whose address is in rax, type t. Scale is
 % the element size (1 for scalars/char*, the struct size for struct
 % pointers, 8 otherwise). post=1 leaves the OLD value in rax; post=0 the NEW.
-global out
+% For a bit-field the old value has to be extracted from its unit and the new
+% one masked back into it, so the neighbours in that unit survive.
+global out lbf
 scale = 1;
 if is_ptr_code(t)
     scale = elem_size(t);
 end
 em('\tpushq\t%rax');            % save the address
 em_val(t);
+if ~isempty(lbf)
+    em_bf_extract(lbf(1), lbf(2), ~is_unsigned_type(t));
+end
 if post
     if t == 6
         em('\tmovsd\t%xmm0, %xmm2');   % old value
@@ -4586,7 +4702,11 @@ else
 end
 if post
     em('\tpopq\t%rcx');         % the address
-    em_store(t, '(%rcx)');
+    if isempty(lbf)
+        em_store(t, '(%rcx)');
+    else
+        em_store_bitfield(t, '(%rcx)', lbf);
+    end
     if t == 6
         em('\tmovsd\t%xmm2, %xmm0');   % old value
     else
@@ -4594,7 +4714,11 @@ if post
     end
 else
     em('\tpopq\t%rbx');         % the address
-    em_store(t, '(%rbx)');
+    if isempty(lbf)
+        em_store(t, '(%rbx)');
+    else
+        em_store_bitfield(t, '(%rbx)', lbf);
+    end
 end
 end
 

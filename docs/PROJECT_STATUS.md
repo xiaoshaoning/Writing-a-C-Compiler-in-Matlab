@@ -569,6 +569,36 @@ disagreed: x86sim returned 96, the gcc-assembled cctests path returned **5**
 `cc32_byval.c` runs through the cctests path so that class now fails the
 suite. Ceiling 14810.
 
+**Bit-fields pack, and `sizeof` matches gcc (2026-11-04).** Consecutive
+bit-fields of the same declared type now share one storage unit - gcc's MS
+layout, which is what this target (x86-64 ucrt64) uses: a different declared
+type or a field that does not fit starts a new unit, an unnamed `: 0` ends the
+current one, an unnamed field with a width is padding, and a plain member
+resumes after the unit's whole size. The shapes that were 2-4x too big are now
+exact, measured against gcc: `{unsigned a:3; b:5}` 4, `{int a:4; b:4; c:4;
+d:4}` 4, `{unsigned char a:3; b:5}` 1, `{char c; unsigned short a:4; b:4}` 4,
+`{unsigned short a:9; b:9}` 4, `{u:3; u:5; int n}` 8 with `n` at 4, an array of
+the first striding 4, and the mixed-type `{u:3; uc:3}` 8 with the next member
+at 5.
+
+Packing is what makes the *store* change too: with several fields in one unit a
+plain write would erase its neighbours, so every store is now a masked
+read-modify-write - read the unit at the declared type's width, clear the
+field's bits, or the masked value in, write the unit back. One helper
+(`em_store_bitfield`) owns that sequence for all three store sites (plain
+assignment, compound assignment, `++`/`--`), and `store_member` applies the same
+rule in the initializer image, so a data-section or frame initializer merges
+into the unit instead of overwriting it. The field's place in its unit is the
+`membermap`'s sixth field; `lbf` carries it from the load that `lvalue_addr`
+drops to the store that has to re-mask.
+
+Guard `cc48_bitfield_layout.c` (exit 96, identical output on gcc and both
+engines): ten `sizeof`s, two member offsets, an array stride, the
+neighbour-preserving store, compound and `++`/`--`, 4-bit wraparound
+(`7++` is -8, `-8--` is 7), `int:4` sign preservation, struct copies and
+initializer images. Ceiling 18284 -> **19474** (the guard is 1118; the masked
+stores added 72 to `cc31_bitfield.c`), hello.c 88 unchanged.
+
 **Function prototypes (2026-11-04).** `int f(int);` — a declaration with no
 body — was a parse error (`expected token 123, got 59`: every file-scope
 `type name(params)` had to be a definition), so forward declarations, the
@@ -813,46 +843,6 @@ interpreter-style stack convention.
 - The `-s` mnemonic column is padded manually to reproduce the reference's
   `%8.4s` over its 4-char mnemonic field (`'LEA '` -> `'    LEA '`), which
   matches byte-for-byte on every runtime
-- **Bit-fields are unpacked.** Each field owns a whole storage unit of its
-  declared type, so a layout that gcc packs into one unit comes out one unit
-  per field. The values are right (masking on load, sign-extended); only the
-  layout differs, and `sizeof` therefore does too. Measured against gcc with
-  `tests/probe_bf`-style shapes (probe kept out of the repo until it can pass):
-
-  | shape | here | gcc |
-  |---|---|---|
-  | `{unsigned a:3; unsigned b:5}` | 8 | 4 |
-  | `{unsigned char a:3; b:5}` | 2 | 1 |
-  | `{int a:4; b:4; c:4; d:4}` | 16 | 4 |
-  | `{char c; unsigned short a:4; b:4}` | 6 | 4 |
-  | `{unsigned a:3; b:5; int n}` | 12, n at 8 | 8, n at 4 |
-  | `{struct B1 s; char c}` | 12, c at 8 | 8, c at 4 |
-  | array of `{unsigned a:3; b:5}` | stride 8 | stride 4 |
-
-  Everything else measured matches gcc: unions (`{char,int}` 4,
-  `{char,double}` 8, `{char[12],int}` 12, `{struct A1,char}` 8), unions and
-  structs nested in structs (sizes 8/16/16, member offsets 4/8/0 and 12), and
-  the bitfield shapes whose slack happens to equal gcc's padding
-  (`{unsigned a:3; char c}` 8, `{char c; unsigned a:3}` 8, `{unsigned a:31;
-  b:2}` 8). `unsigned int : 0;` — an anonymous zero-width field — does not
-  parse yet (`expected a member name`).
-
-  **Why this is not an offset tweak.** `lvalue_addr` recognises a bit-field by
-  matching the three instructions the load emitted (`shlq` + `sarq`/`shrq` on
-  `(%rax)`) and deletes them, because a field that owns its unit can be stored
-  with one plain 8-byte write. Packing makes the store a read-modify-write
-  (load the unit, clear the field's bits, or in the new value, store the
-  unit), so the bit offset and width must reach the store sites —
-  assignment, compound assignment, `++`/`--`, and the initializer image
-  writer. That is the work, and it is one commit because a layout that packs
-  without it would make `sizeof` right and the values wrong.
-
-  Stage one has landed: the membermap carries the bit offset inside the unit
-  as its sixth field, and the load path folds it in as
-  `shlq $(64 - bit_off - width)` + `sarq $(64 - width)`. At `bit_off` 0 that
-  is the previous text exactly — verified byte-identical assembly for
-  `cc31_bitfield`, `cc45_structarr`, `cc46_aggrinit2`, `hello` and `stress2`
-  before and after, so the instruction baseline cannot have moved.
 
 ## Runtime notes
 

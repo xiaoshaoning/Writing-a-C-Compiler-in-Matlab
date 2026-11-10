@@ -766,6 +766,7 @@ cctests = {
         'cc45_structarr.c', 96;    % an array of struct values as a member (compiler track only)
         'cc46_aggrinit2.c', 96;    % the shapes the two parsers disagreed on (compiler track only)
         'cc47_proto.c', 96;        % a prototype with no body, unnamed + variadic params (compiler track only)
+        'cc48_bitfield_layout.c', 96;  % bit-fields share a unit; layout + values vs gcc (compiler track only)
     };
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
@@ -1232,7 +1233,11 @@ cctests = {
     % 32-bit (cc27_int.c) then moved int loads/stores to movslq/movl and
     % added the int-pointer scaling, so the total is 18120. cc47_proto.c
     % (164) added the prototype-with-no-body acceptance, so the total is
-    % 18284. See docs/2026-09-07-x86sim-peephole-divergences.md.
+    % 18284. Packing bit-fields into shared storage units then made each store a
+    % masked read-modify-write (+72, in cc31_bitfield.c) and shrank the structs
+    % themselves, so that total was 18356; cc48_bitfield_layout.c (1118) added
+    % the layout and value matrix, so it is 19474. See
+    % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
     if run_instr
@@ -1257,8 +1262,8 @@ cctests = {
     if corpus_sliced
         fprintf('SKIP  instr regression: corpus total (sliced run)\n');
     else
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 18284, ...
-        sprintf('instr regression: corpus %d <= 18284', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 19474, ...
+        sprintf('instr regression: corpus %d <= 19474', ic_total));
     end
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 88, ...
         sprintf('instr regression: hello.c %d <= 88', ic_hello));
