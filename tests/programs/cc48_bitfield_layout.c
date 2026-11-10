@@ -16,7 +16,7 @@ struct B6 { unsigned int a : 4; unsigned int b : 4; int n; };     /* 8, n at 4 *
 struct B7 { char c; unsigned int a : 3; };                        /* 8, unit at 4 */
 struct B8 { unsigned short a : 9; unsigned short b : 9; };        /* 4 */
 struct B9 { int a : 4; int b : 4; int c : 4; int d : 4; };        /* 4 */
-struct BA { unsigned int a : 3; unsigned int : 3; unsigned int b : 3; };
+struct B15 { unsigned int a : 3; unsigned int : 3; unsigned int b : 3; };
 /* the run's key is the declared type's SIZE, not its identity: signedness does
  * not split a unit, a different size does (measured from gcc) */
 struct B10 { int a : 3; unsigned int b : 3; };           /* 4, shares */
@@ -46,7 +46,7 @@ int main() {
     if (sizeof(struct B7) != 8) { return 7; }
     if (sizeof(struct B8) != 4) { return 8; }
     if (sizeof(struct B9) != 4) { return 9; }
-    if (sizeof(struct BA) != 4) { return 10; }
+    if (sizeof(struct B15) != 4) { return 10; }
     if (sizeof(struct B10) != 4) { return 29; }
     if (sizeof(struct B11) != 2) { return 30; }
     if (sizeof(struct B12) != 1) { return 31; }

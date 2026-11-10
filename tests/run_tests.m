@@ -768,6 +768,11 @@ cctests = {
         'cc47_proto.c', 96;        % a prototype with no body, unnamed + variadic params (compiler track only)
         'cc48_bitfield_layout.c', 96;  % bit-fields share a unit; layout + values vs gcc (compiler track only)
     };
+    % The one range every corpus loop iterates. Three loops need it, and the
+    % one that spelled the bounds out for itself was silently running the whole
+    % corpus on every sliced run - so it is computed once, here, and no loop
+    % writes its own.
+    corpus_range = corpus_first:corpus_last(size(cctests, 1));
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
     % Divergences are the known dialect gaps (structs, switch, typedef,
@@ -878,7 +883,7 @@ cctests = {
         fprintf('SKIP  gcc-dependent groups (gcc not found)\n');
     else
     if run_cctests
-    for k = corpus_first:corpus_last(size(cctests, 1))
+    for k = corpus_range
         try
             got = -999;
             for attempt = 1:5   % retry: a lingering process can hold tmp_cc.exe so gcc cannot write it (a real assembler error still fails every attempt)
@@ -966,10 +971,7 @@ cctests = {
     % exit code through the x86sim interpreter (x86sim.m) as through gcc.
     simok = 0;
     simtot = 0;
-    % CC_CORPUS slices this loop too: it compiles and simulates EVERY program,
-    % and it logs nothing unless a check fails, so an unsliced run looks like a
-    % hang with no progress - a 20-program slice still paid for all 326 here.
-    for sk = corpus_first:corpus_last(size(cctests, 1))
+    for sk = corpus_range
         try
             delete('tmp_cc.s');
             cc_int(['tests/programs/' cctests{sk,1}], 'tmp_cc.s');
@@ -987,7 +989,7 @@ cctests = {
                 sprintf('x86sim %s: %s', cctests{sk,1}, e.message));
         end
     end
-    [npass nfail] = addcheck(npass, nfail, simok == simtot, ...
+    [npass nfail] = addcheck(npass, nfail, simtot > 0 && simok == simtot, ...
         sprintf('x86sim corpus: %d/%d exit codes match gcc', simok, simtot));
 
     % x86sim printf edge cases (no interpreter counterpart): %X must be
@@ -1245,7 +1247,7 @@ cctests = {
     ic_total = 0;
     ic_hello = 0;
     if run_instr
-    for ick = corpus_first:corpus_last(size(cctests, 1))
+    for ick = corpus_range
         try
             delete('tmp_cc.s');
             cc_int(['tests/programs/' cctests{ick,1}], 'tmp_cc.s');
