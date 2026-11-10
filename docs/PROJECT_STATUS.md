@@ -570,11 +570,21 @@ disagreed: x86sim returned 96, the gcc-assembled cctests path returned **5**
 suite. Ceiling 14810.
 
 **Bit-fields pack, and `sizeof` matches gcc (2026-11-04).** Consecutive
-bit-fields of the same declared type now share one storage unit - gcc's MS
-layout, which is what this target (x86-64 ucrt64) uses: a different declared
-type or a field that does not fit starts a new unit, an unnamed `: 0` ends the
-current one, an unnamed field with a width is padding, and a plain member
-resumes after the unit's whole size. The shapes that were 2-4x too big are now
+bit-fields share one storage unit - gcc's MS layout, which is what this target
+(x86-64 ucrt64) uses. The key is the declared type's **size**, not its identity:
+signedness does not split a unit (`{int a:3; unsigned b:3}` is 4 and
+`{short a:3; unsigned short b:3}` is 2), a different size does (`{int a:3;
+short b:3}` is 8, the 2-byte unit at offset 4), an unnamed `: 0` ends the current
+unit, an unnamed field with a width is padding, and a plain member resumes after
+the unit's whole size. The first version of this compared declared types and so
+split `int` from `unsigned int`, which is why the same-size cases are in the
+guard now: six of eight shapes were wrong until that was measured.
+
+Shapes involving `long` bit-fields differ from gcc for a separate, documented
+reason: `long` is 8 bytes in this dialect (`word` is the 4-byte type), so
+`{long a:3; unsigned long b:3}` is 8 here against gcc's 4 with its 4-byte
+`long`. That is the width choice, not the packing rule, and the guard avoids
+`long` so it stays comparable with gcc. The shapes that were 2-4x too big are now
 exact, measured against gcc: `{unsigned a:3; b:5}` 4, `{int a:4; b:4; c:4;
 d:4}` 4, `{unsigned char a:3; b:5}` 1, `{char c; unsigned short a:4; b:4}` 4,
 `{unsigned short a:9; b:9}` 4, `{u:3; u:5; int n}` 8 with `n` at 4, an array of
@@ -595,11 +605,13 @@ it: the load site records the answer in `lbf`, `lvalue_addr` hands it back as
 nothing re-derives it, and no reader has to agree by luck.
 
 Guard `cc48_bitfield_layout.c` (exit 96, identical output on gcc and both
-engines): ten `sizeof`s, two member offsets, an array stride, the
+engines): fifteen `sizeof`s, two member offsets, an array stride, the
 neighbour-preserving store, compound and `++`/`--`, 4-bit wraparound
-(`7++` is -8, `-8--` is 7), `int:4` sign preservation, struct copies and
+(`7++` is -8, `-8--` is 7), `int:4` sign preservation, a unit shared by an `int`
+and an `unsigned int` field (each keeps its own reading), struct copies and
 initializer images. Ceiling 18284 -> **19474** (the guard is 1118; the masked
-stores added 72 to `cc31_bitfield.c`), hello.c 88 unchanged.
+stores added 72 to `cc31_bitfield.c`), then **19660** (+186 for the same-size
+cases), hello.c 88 unchanged.
 
 **Function prototypes (2026-11-04).** `int f(int);` — a declaration with no
 body — was a parse error (`expected token 123, got 59`: every file-scope

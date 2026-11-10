@@ -1236,7 +1236,8 @@ cctests = {
     % 18284. Packing bit-fields into shared storage units then made each store a
     % masked read-modify-write (+72, in cc31_bitfield.c) and shrank the structs
     % themselves, so that total was 18356; cc48_bitfield_layout.c (1118) added
-    % the layout and value matrix, so it is 19474. See
+    % the layout and value matrix, so it was 19474; the same-size sharing cases
+    % (signed and unsigned in one unit) added 186, so it is 19660. See
     % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
@@ -1262,8 +1263,8 @@ cctests = {
     if corpus_sliced
         fprintf('SKIP  instr regression: corpus total (sliced run)\n');
     else
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 19474, ...
-        sprintf('instr regression: corpus %d <= 19474', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 19660, ...
+        sprintf('instr regression: corpus %d <= 19660', ic_total));
     end
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 88, ...
         sprintf('instr regression: hello.c %d <= 88', ic_hello));

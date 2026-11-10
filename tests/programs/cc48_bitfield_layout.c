@@ -17,8 +17,15 @@ struct B7 { char c; unsigned int a : 3; };                        /* 8, unit at 
 struct B8 { unsigned short a : 9; unsigned short b : 9; };        /* 4 */
 struct B9 { int a : 4; int b : 4; int c : 4; int d : 4; };        /* 4 */
 struct BA { unsigned int a : 3; unsigned int : 3; unsigned int b : 3; };
+/* the run's key is the declared type's SIZE, not its identity: signedness does
+ * not split a unit, a different size does (measured from gcc) */
+struct B10 { int a : 3; unsigned int b : 3; };           /* 4, shares */
+struct B11 { short a : 3; unsigned short b : 3; };       /* 2, shares */
+struct B12 { char a : 3; signed char b : 3; };           /* 1, shares */
+struct B13 { int a : 3; short b : 3; };                  /* 8, unit at 4 */
+struct B14 { unsigned short a : 9; short b : 9; };       /* 4, b moves */
 
-struct B1 g1; struct B2 g2; struct B3 g3; struct B6 g6;
+struct B1 g1; struct B2 g2; struct B3 g3; struct B6 g6; struct B10 g10;
 struct B7 g7; struct B8 g8; struct B9 g9; struct B1 arr[3];
 struct B1 init1 = {5, 17};          /* a data-section image, one unit */
 struct B6 init6 = {3, 9, 77};
@@ -40,6 +47,11 @@ int main() {
     if (sizeof(struct B8) != 4) { return 8; }
     if (sizeof(struct B9) != 4) { return 9; }
     if (sizeof(struct BA) != 4) { return 10; }
+    if (sizeof(struct B10) != 4) { return 29; }
+    if (sizeof(struct B11) != 2) { return 30; }
+    if (sizeof(struct B12) != 1) { return 31; }
+    if (sizeof(struct B13) != 8) { return 32; }
+    if (sizeof(struct B14) != 4) { return 33; }
     if ((char *)&g6.n - (char *)&g6 != 4) { return 11; }     /* after the unit */
     if ((char *)&g7.c - (char *)&g7 != 0) { return 12; }
     if ((char *)&arr[1] - (char *)&arr[0] != 4) { return 13; }  /* stride */
@@ -81,7 +93,15 @@ int main() {
     l.a = 5; l.b = 17;
     if (l.a != 5 || l.b != 17) { return 27; }
 
+    /* one unit, two signednesses: each field keeps its own reading */
+    g10.a = -3; g10.b = 5;
+    if (g10.a != -3 || g10.b != 5) { return 34; }
+    g10.b = 7;
+    if (g10.a != -3 || g10.b != 7) { return 35; }
+
     printf("%d %d %d %d %d %d\n", g1.a, g1.b, g9.a, g9.c, init1.b, init6.n);
+    printf("mix %d %d %d %d\n", g10.a, g10.b, (int)sizeof(struct B11),
+           (int)sizeof(struct B13));
     g9.a = -5;                      /* int:4 is signed, so the sign survives */
     if (g9.a != -5) { return 28; }
     return 96;

@@ -1225,8 +1225,7 @@ off = 0;
 algn = 1;                   % the widest member alignment seen so far
 run_off = -1;               % the current bit-field storage unit, -1 for none
 run_used = 0;               % bits of it already taken
-run_st = 0;                 % and its size in bytes
-run_t = -1;                 % and its declared type
+run_st = 0;                 % and its size in bytes - the only key: see below
 while token ~= 125          % '}'
     [mbase, mdef] = parse_basetype();
     if isa(mdef, 'cell')
@@ -1305,20 +1304,20 @@ while token ~= 125          % '}'
             off = nbytes;
         end
     elseif bw > 0 || anonymous
-        % A bit-field lives in a storage unit of its declared type. gcc - the
-        % MS layout this target uses - shares one unit between consecutive
-        % bit-fields of the same declared type while they fit, starts a new
-        % unit when they do not or when the type changes, and reads an unnamed
-        % `: 0` as "this unit ends here". The sixth membermap field is the
-        % field's bit offset inside its unit.
+        % A bit-field lives in a storage unit the size of its declared type.
+        % gcc - the MS layout this target uses - shares one unit between
+        % consecutive bit-fields of the same SIZE while they fit, whatever
+        % their signedness: {int a:3; unsigned b:3} is 4 bytes, and
+        % {short a:3; unsigned short b:3} is 2. A different size starts a new
+        % unit, and an unnamed `: 0` reads as "this unit ends here". The sixth
+        % membermap field is the field's bit offset inside its unit.
         if anonymous && bw == 0
             run_off = -1;               % ': 0': close the run, take no space
         else
-            if run_off < 0 || run_t ~= mt || run_st ~= st || run_used + bw > 8 * st
+            if run_off < 0 || run_st ~= st || run_used + bw > 8 * st
                 off = off + mod(-off, mal);
                 run_off = off;
                 run_st = st;
-                run_t = mt;
                 run_used = 0;
                 off = off + st;         % the unit takes its whole size
             end
