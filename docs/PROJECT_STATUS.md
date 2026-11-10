@@ -759,6 +759,18 @@ and the runtime library are the changelog entries above:
 
 ## Open items (2026-09-29)
 
+- **Long runs now wedge at a fixed point (2026-11-04, late).** From about
+  21:00 this host stopped finishing section runs at all: the process completes
+  the whole pp output-parity group (56 checks, ending at
+  `output parity stress2.c`) and then stops writing to `run_tests.log`, with no
+  output and no failure. Reproduced on slices of 8, 20 and 80 corpus programs
+  that had completed earlier in the same session, so it is not section size and
+  not the code under test: `xc` and `cc_int` on `stress2.c` both finish fine on
+  their own. It looks like an accumulation inside the engine process (roughly
+  100 checks in), which belongs in the matlab_in_rust bug reports rather than
+  here. Until then, verify with the sections that still complete in one process
+  (`instr` compiles all 326 corpus programs and passes) and treat a wedge as an
+  environment result, not a test result.
 - **Real-MATLAB validation.** No runnable MathWorks MATLAB is installed
   here (the R2023b install is a stub with no `matlab.exe`), so the
   suite's "green oracle" is unverified on it. The instruction-count
