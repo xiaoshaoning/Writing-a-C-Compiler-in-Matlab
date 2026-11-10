@@ -715,6 +715,15 @@ and the runtime library are the changelog entries above:
 
 ## Verification
 
+- **Every section verified on `cli-v13` after the bit-field round
+  (2026-11-04)**, sliced with `CC_SECTIONS`/`CC_CORPUS` because a whole-suite
+  run is 25+ minutes here: tables **245/245**, ostests **196/196**, instr
+  **142/142** (corpus 19660, hello.c 88 - this section compiles all 326 corpus
+  programs, so it counters every one of them), and the corpus itself in five
+  slices - 1..80 **296/296**, 81..100 **179/179**, 101..180 **283/283**,
+  181..240 **227/227**, 241..325 **231/231** - plus the guard range 320..327
+  **147/147**. Guards `cc31_bitfield` and `cc48_bitfield_layout` also exit 96
+  on the C clone, and `cc48` under gcc itself.
 - **Test suite**: `tests/run_tests.m` — **802/802** on the C clone
   (v1.3.76 tag and the Sep 27 build). Groups: runtime-primitive
   gate (probe), 30-case VM selftest, 9-case lexer selftest, program
