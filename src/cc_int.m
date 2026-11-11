@@ -138,6 +138,8 @@ glabels = struct();    % label name -> {defined, line index, pending jmps}
 sret = 0;             % the current function returns a struct
 sretsize = 0;         % its size (bytes)
 sretbase = 0;         % the hidden slot pointer's rbp offset
+atypes = {};           % array types (int[3] as a TYPE): code 3000+id -> {elem, dims}
+natype = 0;
 lbf = [];             % the bit-field the last member load extracted: written
                       % by the load site, consumed by lvalue_addr, which hands
                       % it to the store. Never read past that one hop.
@@ -1597,7 +1599,7 @@ function b = is_struct_code(t)
 % is_struct_code - t is a struct/union VALUE type code. Not a pointer (a
 % typedef can name one, e.g. `typedef int *ip;`, and that code is in the
 % pointer band) and not a function pointer.
-b = t >= 1000 && t < 4000 && ~is_ptr_code(t) && ~is_fptr_type(t);
+b = t >= 1000 && t < 4000 && ~is_arrtype(t) && ~is_ptr_code(t) && ~is_fptr_type(t);
 end
 
 function b = is_charptr(t)
@@ -1622,6 +1624,41 @@ function b = is_ptr_code(t)
 b = t >= 4000;
 end
 
+function c = array_type(elem, dims)
+% array_type - the TYPE of `elem[dims]`, e.g. int[3]. C needs this as a type,
+% not only as a variable property, for `&a[0]` (an int (*)[3]) and for
+% `int (*p)[3]`. Codes live in 3000..3999, below the pointer band, and identical
+% shapes are interned so the same array type is one code.
+global atypes natype
+if isempty(atypes), atypes = {}; natype = 0; end
+for k = 1:numel(atypes)
+    if atypes{k}{1} == elem && isequal(atypes{k}{2}, dims)
+        c = 3000 + k - 1;
+        return;
+    end
+end
+atypes{end+1} = {elem, dims};
+natype = natype + 1;
+c = 3000 + numel(atypes) - 1;
+end
+
+function b = is_arrtype(t)
+% is_arrtype - t is the type of an array of a known shape (not a pointer to it)
+b = t >= 3000 && t < 4000;
+end
+
+function e = arr_elem(t)
+% arr_elem - the element type of an array type
+global atypes
+e = atypes{t - 3000 + 1}{1};
+end
+
+function d = arr_dims(t)
+% arr_dims - the dimensions of an array type
+global atypes
+d = atypes{t - 3000 + 1}{2};
+end
+
 function tsz = tsize(t)
 % tsize — byte size of a VALUE type code: char 1, short 2, int/word 4,
 % long/double/pointer 8, a struct its registered size. The single source of
@@ -1632,6 +1669,8 @@ elseif t == 7 || t == 13
     tsz = 2;
 elseif t == 0 || t == 5 || t == 9 || t == 16 || t == 18 || t == 21
     tsz = 4;                % int, word, long and their unsigned forms
+elseif is_arrtype(t)
+    tsz = prod(arr_dims(t)) * tsize(arr_elem(t));   % the whole array
 elseif t >= 1000 && t < 1002
     tsz = ssize_of(t);
 elseif t >= 1002 && t < 2000
@@ -1653,7 +1692,9 @@ elseif pdepth(t) > 1
 else
     b = pbase(t);           % the pointee
 end
-if b >= 1000
+if is_arrtype(b)
+    sz = tsize(b);          % a pointer to a row steps the whole row
+elseif is_struct_code(b)
     sz = ssize_of(b);
 else
     sz = tsize(b);
@@ -2995,16 +3036,36 @@ while true
     end
     name = idname;
     next();
+    ptrelem = [];               % a pointer to an array: `int (*p)[3]`
     if is_fptr
-        expect(41);             % ')'
-        skip_prototype();       % (params): parsed and discarded
+        expect(41);             % ')' - a function pointer's params come next,
+                                % a pointer-to-array's dimensions do
+        if token == 40          % '(': a function pointer, as before
+            skip_prototype();       % (params): parsed and discarded
+        else
+            % `int (*p)[3]`: pointer to an array, so the shape follows. The
+            % pointer keeps a pointer's size; its pointee is the array type,
+            % which is what makes p[i] step a whole row.
+            adims = [];
+            while token == 91
+                next();
+                adims(end+1) = double(token_val);
+                next();
+                expect(93);
+            end
+            ptrelem = array_type(pcode(base, depth), adims);
+        end
     end
     if isfield(blkdecl, name)
         fail(sprintf('duplicate local %s', name));
     end
     blkdecl.(name) = 1;         % shadows an enclosing local, if there is one
     if is_fptr
-        t = 2000 + base + 2 * depth;   % 2000 + the full return type
+        if isempty(ptrelem)
+            t = 2000 + base + 2 * depth;   % 2000 + the full return type
+        else
+            t = pcode(ptrelem, 1);         % int (*)[3]: a pointer to a row
+        end
     else
         t = pcode(base, depth);
     end
@@ -4533,12 +4594,22 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
             end
         else
             et = pderef(t);
-            etype = et;
-            if et >= 1000 && ~is_ptr_code(et)
-                estruc = 1;               % struct element: address, no load
-            else
-                em_val(et);
+            if is_arrtype(et)
+                % `p[i]` on a pointer to a row: the row's address is the value,
+                % so it is not loaded - the strides do the rest, exactly as they
+                % do for a named 2-D array.
+                etype = pcode(arr_elem(et), 1);   % the row, decayed
+                bstride = cstride_of(arr_dims(et), tsize(arr_elem(et)));
+                curarrsz = tsize(et);
                 estruc = 0;
+            else
+                etype = et;
+                if et >= 1000 && ~is_ptr_code(et)
+                    estruc = 1;               % struct element: address, no load
+                else
+                    em_val(et);
+                    estruc = 0;
+                end
             end
         end
     elseif token == 40      % '(': call through a function pointer
@@ -4695,6 +4766,10 @@ for k = numel(ops):-1:1
         em('\tmovzbl\t%al, %eax');
     elseif op == 38         % '&': address-of — drop the trailing load
         [is_lv, bf2] = lvalue_addr();
+        % the value's own array shape, taken BEFORE it is dropped below: `&a` on
+        % an int[3] is an int (*)[3], so the shape is what types the result
+        sav_arrsz = curarrsz;
+        sav_arrstride = bstride;
         % the result is a pointer even when the operand is an array, so the
         % array size the expression carried must not survive: sizeof(&a) is 8,
         % not sizeof(a)
@@ -4708,11 +4783,31 @@ for k = numel(ops):-1:1
             % silently handing out the storage unit's address.
             fail('cannot take the address of a bit-field');
         end
-        % one more pointer level. This used to be pdecay() = t + 1, a leftover
-        % from the scheme where a pointer was base + 2*depth: under the pointer
-        % band it produced a VALUE code, so &x on an int was typed char and every
-        % later * on it failed. padd() answers the question for both cases.
-        etype = padd(etype);
+        if sav_arrsz > 0 && ~isempty(sav_arrstride)
+            % the operand is an ARRAY, so the result is a pointer to it - a
+            % pointer to a ROW for `&a[0]` on a 2-D array. The shape comes back
+            % from what the value carried: the total bytes and the per-level
+            % strides (dims(1) = bytes/stride1, dims(k) = stride(k-1)/stride(k)).
+            dims = [sav_arrsz / sav_arrstride(1)];
+            for kk = 2:numel(sav_arrstride)
+                dims(end+1) = sav_arrstride(kk - 1) / sav_arrstride(kk);
+            end
+            belem = etype;
+            if is_ptr_code(belem)
+                % the operand had already decayed to a pointer, so the array's
+                % element type is its pointee - int[3], not (int *)[3]
+                belem = pderef(belem);
+            end
+            etype = pcode(array_type(belem, dims), 1);
+            bstride = [];
+        else
+            % one more pointer level. This used to be pdecay() = t + 1, a
+            % leftover from the scheme where a pointer was base + 2*depth: under
+            % the pointer band it produced a VALUE code, so &x on an int was
+            % typed char and every later * on it failed. padd() answers the
+            % question for both cases.
+            etype = padd(etype);
+        end
         estruc = 0;
     elseif op == 42         % '*': dereference — load through the pointer
         if is_fptr_type(etype)
@@ -4721,7 +4816,14 @@ for k = numel(ops):-1:1
             fail('bad dereference');
         else
             etype = pderef(etype);
-            if is_ptr_code(etype) && pdepth(etype) == 1 && pbase(etype) == 1
+            if is_arrtype(etype)
+                % `*p` on an int (*)[3]: the ARRAY, whose value is its address,
+                % so nothing is loaded and the strides make it indexable
+                bstride = cstride_of(arr_dims(etype), tsize(arr_elem(etype)));
+                curarrsz = tsize(etype);
+                etype = pcode(arr_elem(etype), 1);   % the array, decayed
+                estruc = 0;
+            elseif is_ptr_code(etype) && pdepth(etype) == 1 && pbase(etype) == 1
                 em('\tmovzbl\t(%rax), %eax');
                 estruc = 0;
             elseif etype >= 1000 && ~is_ptr_code(etype)

@@ -4,9 +4,11 @@
  * The one- and two-dimensional forms are both exercised, and `sizeof` a decayed
  * parameter is the pointer's 8. Exit 96.
  *
- * Not asserted here, and still a limitation: `&a[0] + 1` (a pointer to a ROW,
- * i.e. int (*)[3]) steps by a pointer instead of a row, and `int (*p)[3]`
- * declarations do not parse. See PROJECT_STATUS. */
+ * Also here: a pointer to a ROW. `&a` on an int[3] has type int (*)[3], so
+ * `&a + 1` steps a whole array; `int (*p)[3]` is a declarator and `p[i]`/`(*p)`
+ * yield the row. Not asserted: the same shape written as a PARAMETER
+ * (`int (*p)[3]`), which does not parse - `int a[][3]` is the idiom and works.
+ * See PROJECT_STATUS. */
 int printf(const char *, ...);
 
 int rowsum(int a[][3], int rows) {
@@ -58,6 +60,23 @@ int main() {
     /* the same array through both spellings */
     if (rowsum(m, 1) != 6) { return 6; }
     if (flat(v, 1) != 0) { return 7; }
+
+    /* a pointer to a row: &a steps a whole array, and int (*p)[3] indexes it */
+    {
+        int one[3];
+        int (*p)[3];
+        int (*q)[3];
+        one[0] = 5; one[1] = 6; one[2] = 7;
+        if ((int)((char *)(&one + 1) - (char *)&one) != 12) { return 8; }
+        if ((int)sizeof(&one) != 8) { return 9; }
+        p = &one;
+        if ((*p)[1] != 6) { return 10; }
+        if (p[0][2] != 7) { return 11; }
+        if ((int)sizeof(p) != 8) { return 12; }
+        q = m;
+        if (q[1][0] != 4) { return 13; }
+        if ((int)((char *)(q + 1) - (char *)q) != 12) { return 14; }
+    }
 
     printf("%d %d %d %d\n", rowsum(m, 2), col2(m, 0), flat(v, 4), sz(m));
     return 96;

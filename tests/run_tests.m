@@ -1320,7 +1320,8 @@ cctests = {
     % type is 32-bit unsigned) makes it 20854; the commutative '+' and the address-of
     % type fix add 30, so it was 20884; the 2-D parameter work and the bstride save
     % that made m[i][j] work with variable indices add cc51 and its own code, so it
-    % is 21290. See
+    % is 21290; the pointer-to-a-row type (array types, &a carrying its shape, and
+    % int (*p)[3]) makes it 21404. See
     % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
@@ -1346,8 +1347,8 @@ cctests = {
     if corpus_sliced
         fprintf('SKIP  instr regression: corpus total (sliced run)\n');
     else
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 21290, ...
-        sprintf('instr regression: corpus %d <= 21290', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 21404, ...
+        sprintf('instr regression: corpus %d <= 21404', ic_total));
     end
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 88, ...
         sprintf('instr regression: hello.c %d <= 88', ic_hello));

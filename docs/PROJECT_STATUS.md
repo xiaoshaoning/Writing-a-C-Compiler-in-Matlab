@@ -572,6 +572,39 @@ disagreed: x86sim returned 96, the gcc-assembled cctests path returned **5**
 `cc32_byval.c` runs through the cctests path so that class now fails the
 suite. Ceiling 14810.
 
+**Pointers to arrays: the last known limitation (2026-11-04).** `&a` on an
+`int[3]` is an `int (*)[3]`, and the type model had no way to say that - a
+pointer was `pcode(elem, depth)` and nothing else - so `&a + 1` stepped 4 bytes
+where C steps 12, and `int (*p)[3]` did not parse.
+
+Array types are now a first-class type: `array_type(elem, dims)` interns a shape
+into the free 3000..3999 band (`is_struct_code` had to stop claiming it), and a
+pointer to one is an ordinary pointer code whose *pointee* is the array, so
+`elem_size` - the one function that decides what `+ 1` steps - answers with the
+whole row because `tsize` of an array type is its byte size.
+
+With that, three things follow:
+
+- **`&a` carries the array it points at.** The shape is recoverable from what the
+  value already carried (total bytes and per-level strides: dims(1) =
+  bytes/stride1, dims(k) = stride(k-1)/stride(k)), so `&a + 1` steps 12, `&a[0]`
+  on a 2-D array is a row pointer, and `sizeof(&a)` is still the pointer's 8.
+- **`int (*p)[3]` parses**, locally, with `p[i][j]` and `(*p)[i]` reaching the
+  elements and `sizeof(p)` = 8. The declarator shares the function-pointer form:
+  after `(*name)` the discriminator is what follows - `(` is a function pointer,
+  `[` is an array.
+- `p[i]` on such a pointer yields the ROW: its address, no load, with the row's
+  strides - the state a named 2-D array has, so the same indexing code works.
+
+Guard `cc51_mdimparam.c` grew eight checks for it (row stepping, `sizeof`, both
+indexing spellings, and a `q = m` row pointer). Ceiling 21290 -> **21404**.
+Corpus swept in full on the clone: 1..164 **455/455** and 165..327 **345/345**,
+stdout byte-identical to gcc (164/164, 160/160); instr 142/142, hello.c 88.
+
+One spelling still does not parse: `int (*p)[3]` as a PARAMETER. `int a[][3]` is
+the idiom for that and works, so this is a corner - noted in the guard's header
+rather than silently.
+
 **Two-dimensional array parameters, and `m[i][j]` with variable indices
 (2026-11-04).** The parameter case is done, and it uncovered a worse bug than the
 one it set out to fix.
