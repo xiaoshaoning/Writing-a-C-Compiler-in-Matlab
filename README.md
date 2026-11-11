@@ -8,10 +8,11 @@ Building compilers/interpreters in MATLAB, following two classic tutorials:
    operators (`-`, `~`, `!`, unary `+`, nested). Part 3: bitwise binary
    operators (`|`, `&`, `^`, `<<`, `>>`) with C precedence. Part 4:
    logical operators (`||`, `&&`) with short-circuit jumps and 0/1
-   results. Part 5: comparisons (`==`, `!=`, `<`, `>`, `<=`, `>=`, signed)
-   with 0/1 results via setcc. Part 6: arithmetic (`+`, `-`, `*`, `/`, `%`)
-   with full C precedence, parenthesised expressions, `cltd`/`idivl`
-   division (truncation toward zero, remainder with the dividend's sign).
+   results. Part 5: comparisons (`==`, `!=`, `<`, `>`, `<=`, `>=`, signed or
+   unsigned by the operands' common type) with 0/1 results via setcc. Part 6: arithmetic (`+`, `-`, `*`, `/`, `%`)
+   with full C precedence, parenthesised expressions, `cqto`/`idivq`
+   division (truncation toward zero, the remainder taking the dividend's sign,
+   and the quotient narrowed back to its C width).
    Part 7: statements and variables — `int x;` / `int x = 5;` (comma
    lists), a local stack frame, expression statements, right-associative
    address-based assignment (`y = x = 5`), locals as primaries. Part 8:
@@ -25,8 +26,9 @@ Building compilers/interpreters in MATLAB, following two classic tutorials:
    `<<=`, `>>=`, `&=`, `|=`, `^=`). Part 11: pointers and arrays (`int *p`,
    `int a[10]`, `&`/`*`, `p[i]`, scaled pointer arithmetic), string
    literals, `++`/`--`, `?:`, `for`/`do-while`, `break`/`continue`, and
-   `//`/`/* */` comments. All values are 64-bit (like the interpreter) so
-   addresses round-trip correctly. Part 12: structs — `struct Tag { … };`
+   `//`/`/* */` comments. Values live in 64-bit registers but keep their C
+   width — int 32, long 4, long long 8 — so a store narrows and addresses still
+   round-trip. Part 12: structs — `struct Tag { … };`
    definitions, struct variables/arrays/pointers (`.`, `->`, nested),
    element-scaled pointer arithmetic; params/returns are by-value (a
    hidden return slot at `16+8*nparams(%rbp)`, chunked 8-byte copies).

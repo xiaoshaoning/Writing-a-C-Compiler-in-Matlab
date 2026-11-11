@@ -1083,9 +1083,12 @@ and the runtime library are the changelog entries above:
   `xc('tests/programs/stress2.c')` **finishes in 5.0 s** (was a >9-min
   hang). `find`/`nonzeros`/`sum`/`double`/transpose on a sparse, and
   `s.(name).field = value`, both work now. The gates pass individually
-  (double 13/13, mx smoke 6/6, mex_run smoke 6/6); `run_all` still cannot
-  complete here because the loaded host kills the process mid-run with 0
-  failing checks (the C clone behaves the same). The gcc cross-track 15/20 was
+  (double 13/13, mx smoke 6/6, mex_run smoke 6/6). `run_all` — the documented
+  one-command gate — needs about **30 minutes** on the C clone (instr 200 s,
+  cctests 500 s, gccstdout 550 s, tables 200 s, ostests 250 s, gates 60 s) and
+  about four times that on `cli-v13`, so it is run as sections rather than as one
+  command; a 28-minute window stops inside the stdout sweep, which looks like a
+  hang and is not. The gcc cross-track 15/20 was
   **shared with the C clone** and **is now fixed** (2026-10-02): the mex
   input count was stored with `sim_storeN(nrsec, nk, 8)` though
   `__mex_nrhs` is a 4-byte `int`, so the extra bytes overwrote the next
