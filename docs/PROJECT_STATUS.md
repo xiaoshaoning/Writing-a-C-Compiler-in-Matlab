@@ -806,6 +806,18 @@ and the runtime library are the changelog entries above:
 
 ## Verification
 
+- **Every corpus program's stdout is compared with gcc's own build of the same
+  source (2026-11-04, `CC_SECTIONS=gccstdout`).** 324 of the 327 programs are
+  byte-identical; the three skipped are `cc16_strarray{,2,3}.c`, which assign to
+  a `char` array - the port's extension, invalid C in every dialect. Two things
+  make it work: the reference build asks for `-std=gnu89`, because the corpus
+  declares nothing (`printf`, `malloc` and its own functions come from the
+  port's `libfns` table), which is legal C89 and an error in C23 - without that
+  flag ten programs look uncompilable when they are merely dated; and stdin is
+  redirected from `NUL`, because the syscall tests read it and would block
+  otherwise. Skips are printed by name, so an exclusion cannot go quiet. This is
+  the oracle that would have caught the truncated `%lld` and the saturating
+  literal before they were found by hand: exit codes cannot see a wrong print.
 - **Every section verified on `cli-v13` after the bit-field round
   (2026-11-04)**, sliced with `CC_SECTIONS`/`CC_CORPUS` because a whole-suite
   run is 25+ minutes here: tables **245/245**, ostests **196/196**, instr

@@ -16,6 +16,10 @@
 %   CC_SECTIONS=cctests   the corpus: compile, run, and interpreter parity
 %   CC_SECTIONS=ostests   the gcc-free x86sim output parity table
 %   CC_SECTIONS=instr     the instruction-count regression (142 checks, ~4m)
+%   CC_SECTIONS=gccstdout every corpus program's stdout against gcc's own build
+%                         of the same source (~8m, the one oracle exit codes
+%                         cannot replace: a program can return 96 and print
+%                         garbage)
 %   CC_SECTIONS=cctests,instr   any comma-separated combination
 %
 % CC_CORPUS=first:count slices the corpus itself (1-based), which is how to
@@ -36,6 +40,7 @@ run_cctests = sec_want('cctests');
 run_ostests = sec_want('ostests');
 run_instr   = sec_want('instr');
 run_tables  = sec_want('tables');   % groups 5-9, the interpretive tables
+run_gccstdout = sec_want('gccstdout');   % stdout vs the same source under gcc
 
 % CC_CORPUS=first:count slices the corpus itself (1-based). The corpus is the
 % biggest single unit (~6 minutes for 324 programs) so a section slice is not
@@ -1212,6 +1217,86 @@ cctests = {
         end
     end
     end                     % CC_SECTIONS=ostests
+
+    % Every corpus program's stdout against gcc's own build of the same source.
+    % Nothing else asks this: the corpus checks compare exit codes, the x86sim
+    % corpus compares exit codes too, and the parity group compares cc_int
+    % against the INTERPRETER, not against gcc. So a program can return 96 and
+    % print rubbish and the suite stays green - which is how a truncated %lld
+    % and a saturating literal both survived until they were probed by hand.
+    %
+    % A program gcc refuses to compile is skipped BY NAME (the `word` extension
+    % and the intended-error tests); the list is printed, so the exclusions stay
+    % visible instead of becoming a silent hole.
+    if run_gccstdout
+        gskip = {};
+        gbad = {};
+        gtot = 0;
+        for gk = corpus_range
+            gnm = cctests{gk,1};
+            delete('tmp_gcc.exe');
+            delete('tmp_gcc_out.txt');
+            % -std=gnu89: the corpus declares nothing (printf, malloc and its own
+            % functions come from the port's libfns table), which is legal C89 and an
+            % error in C23, so the reference build must be asked for the older
+            % dialect or ten programs look uncompilable when they are merely dated.
+            if system([gcc ' -std=gnu89 -w tests/programs/' gnm ' -o tmp_gcc.exe']) ~= 0 || ...
+                    exist('tmp_gcc.exe', 'file') ~= 2
+                gskip{end+1} = gnm;
+                continue;
+            end
+            system('.\tmp_gcc.exe < NUL > tmp_gcc_out.txt');
+            fid = fopen('tmp_gcc_out.txt', 'r');
+            if fid < 0
+                gskip{end+1} = gnm;
+                continue;
+            end
+            gw = char(fread(fid, inf, 'uint8')');
+            fclose(fid);
+            delete('tmp_gcc_out.txt');
+            gw(gw == char(13)) = [];
+            delete('tmp_cc.s');
+            delete('tmp_cc.exe');
+            delete('tmp_cc_out.txt');
+            try
+                cc_int(['tests/programs/' gnm], 'tmp_cc.s');
+                if system([gcc ' tmp_cc.s -o tmp_cc.exe']) ~= 0
+                    gbad{end+1} = [gnm ' (assembly rejected)'];
+                    continue;
+                end
+                system('.\tmp_cc.exe < NUL > tmp_cc_out.txt');
+                fid = fopen('tmp_cc_out.txt', 'r');
+                if fid < 0
+                    gbad{end+1} = [gnm ' (no output file)'];
+                    continue;
+                end
+                gp = char(fread(fid, inf, 'uint8')');
+                fclose(fid);
+                delete('tmp_cc_out.txt');
+                gp(gp == char(13)) = [];
+                gtot = gtot + 1;
+                if ~strcmp(gp, gw)
+                    gbad{end+1} = gnm;
+                end
+            catch e
+                gbad{end+1} = [gnm ': ' e.message];
+            end
+        end
+        if ~isempty(gskip)
+            fprintf('SKIP  gcc stdout (gcc will not compile):');
+            for gq = 1:numel(gskip)
+                fprintf(' %s', gskip{gq});
+            end
+            fprintf('\n');
+        end
+        for gq = 1:numel(gbad)
+            [npass nfail] = addcheck(npass, nfail, false, ...
+                sprintf('gcc stdout %s', gbad{gq}));
+        end
+        [npass nfail] = addcheck(npass, nfail, isempty(gbad), ...
+            sprintf('gcc stdout: %d/%d corpus programs byte-identical', ...
+                    gtot - numel(gbad), gtot));
+    end                     % CC_SECTIONS=gccstdout
 
     % instruction-count regression: the corpus's total emitted
     % instructions must stay at or below the recorded ceiling, so a future
