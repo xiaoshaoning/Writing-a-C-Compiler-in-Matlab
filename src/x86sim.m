@@ -2091,6 +2091,9 @@ while i <= nf
         if zero
             fmt2 = [fmt2, '0'];
         end
+        if plus
+            fmt2 = [fmt2, '+'];    % '+' flag: same slot sprintf expects
+        end
         if w > 0
             fmt2 = [fmt2, sprintf('%d', w)];
         end

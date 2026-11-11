@@ -614,7 +614,8 @@ widths, found two more divergences that no guard covered:
   2^64 the way the hex path always did.
 - **The `+` flag was parsed and thrown away** by the simulator's formatter, so
   `%+d` of 7 printed `7`. It now takes the slot the `-` already had, which keeps
-  zero padding between the sign and the digits.
+  zero padding between the sign and the digits - and it is passed to the double
+  formatter too, where `%+.2f` of 0.5 printed `0.50`.
 
 With those, the whole matrix - `%d/%u/%x/%X/%o` at plain, `l`, `ll`, `h`, `hh`,
 with negatives, widths, `-`/`0`/`+`/precision flags, `%c`, `%s` with precision -
