@@ -1314,7 +1314,9 @@ cctests = {
     % (signed and unsigned in one unit) added 186, so it was 19660; making long
     % 4 bytes and long long 8 moved every long load/store to the 32-bit forms
     % and added cc49_long.c, so it was 20005; cc50_corners.c plus the conversions
-    % the unsigned division now emits make it 20805. See
+    % the unsigned division now emits make it 20805; applying the same conversions
+    % to the comparison operators (which zero-extend both operands when the common
+    % type is 32-bit unsigned) makes it 20854. See
     % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
@@ -1340,8 +1342,8 @@ cctests = {
     if corpus_sliced
         fprintf('SKIP  instr regression: corpus total (sliced run)\n');
     else
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 20805, ...
-        sprintf('instr regression: corpus %d <= 20805', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 20854, ...
+        sprintf('instr regression: corpus %d <= 20854', ic_total));
     end
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 88, ...
         sprintf('instr regression: hello.c %d <= 88', ic_hello));

@@ -3711,8 +3711,9 @@ end
 end
 
 function parse_relational()
-% relational := shift (('<' | '>' | '<=' | '>=') shift)* — signed
-% comparisons; eax = left, ebx = right, so setl/setg/etc. read eax-ebx.
+% relational := shift (('<' | '>' | '<=' | '>=') shift)* — a comparison is
+% signed or unsigned by C 6.3.1.8's common type of the two operands; eax = left,
+% ebx = right, so setl/setg/etc. read eax-ebx.
 global token etype
 parse_shift();
 while token == 144 || token == 145 || token == 146 || token == 147  % Lt Gt Le Ge
@@ -3761,34 +3762,45 @@ while token == 144 || token == 145 || token == 146 || token == 147  % Lt Gt Le G
     else
         em('\tmovq\t%rax, %rbx');   % R -> rbx
         em('\tpopq\t%rax');   % L -> rax
+        % C 6.3.1.8 applies the usual arithmetic conversions before the
+        % comparison, so a relational operator is unsigned when the COMMON type
+        % is - not when the left operand happens to be - and it happens at that
+        % width, so a 32-bit type zero-extends both operands first: -1 > 0u is
+        % 4294967295 > 0, which is true, where a signed compare says false.
+        ctype = arith_type(sav_etype, rhs_t);
+        uns = is_unsigned_type(ctype);
+        if uns && int_width(ctype) == 4
+            em('\tmovl\t%eax, %eax');
+            em('\tmovl\t%ebx, %ebx');
+        end
         em('\tcmpq\t%rbx, %rax');
         if op == 144        % Lt
-        if sav_etype == 5
-            em('\tsetb\t%al');     % unsigned: below
-        else
-            em('\tsetl\t%al');
+            if uns
+                em('\tsetb\t%al');     % unsigned: below
+            else
+                em('\tsetl\t%al');
+            end
+        elseif op == 145    % Gt
+            if uns
+                em('\tseta\t%al');     % unsigned: above
+            else
+                em('\tsetg\t%al');
+            end
+        elseif op == 146    % Le
+            if uns
+                em('\tsetbe\t%al');    % unsigned: below-or-equal
+            else
+                em('\tsetle\t%al');
+            end
+        else                % Ge
+            if uns
+                em('\tsetae\t%al');    % unsigned: above-or-equal
+            else
+                em('\tsetge\t%al');
+            end
         end
-    elseif op == 145    % Gt
-        if sav_etype == 5
-            em('\tseta\t%al');     % unsigned: above
-        else
-            em('\tsetg\t%al');
-        end
-    elseif op == 146    % Le
-        if sav_etype == 5
-            em('\tsetbe\t%al');    % unsigned: below-or-equal
-        else
-            em('\tsetle\t%al');
-        end
-    else                % Ge
-        if sav_etype == 5
-            em('\tsetae\t%al');    % unsigned: above-or-equal
-        else
-            em('\tsetge\t%al');
-        end
-    end
-    em('\tmovzbl\t%al, %eax');
-    etype = 0;
+        em('\tmovzbl\t%al, %eax');
+        etype = 0;
     end
 end
 end

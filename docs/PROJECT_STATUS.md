@@ -572,6 +572,28 @@ disagreed: x86sim returned 96, the gcc-assembled cctests path returned **5**
 `cc32_byval.c` runs through the cctests path so that class now fails the
 suite. Ceiling 14810.
 
+**The comparison operators apply the conversions too (2026-11-04).** The last
+piece of C 6.3.1.8. `parse_relational` asked `sav_etype == 5` - only the exact
+`unsigned int` code, and only the LEFT operand - so a relational operator was
+unsigned only by luck:
+
+  `-1 > 0u`    answered 0    C: 4294967295 > 0, so 1
+  `-1 < 0u`    answered 1    C: 0
+  `-5 < 3u`    answered 1    C: 0
+  `0u > -1`    answered 0    correct by accident
+
+It now takes the signedness from `arith_type(left, right)` and zero-extends both
+operands when the common type is a 32-bit unsigned one, exactly as the division
+does - so `setb/seta/setbe/setae` replace `setl/setg/setle/setge` on the same
+decision. Equality never needed it (`==`/`!=` are sign-agnostic). The guard's
+two comparison checks are back, plus `-5 < 3u`. Ceiling 20805 -> **20854**. The
+corpus was swept in full on the clone afterwards: 1..164 **455/455** and
+165..327 **345/345**, with every stdout command byte-identical to gcc (164/164
+and 160/160, the three `cc16_strarray` extensions skipped as always).
+
+One gap from that round is still open and documented: **only the left operand of
+`+` decays an array**, so `*(1 + a)` is wrong while `*(a + 1)` is right.
+
 **Six semantics bugs from one corner probe (2026-11-04).** A single C file
 (`cc50_corners.c`) of well-defined language corners no existing guard covered -
 shadowing, `sizeof` not evaluating, the comma operator, the conditional's common
@@ -602,11 +624,10 @@ signedness from the *common* type and zero-extend both operands to its width
 first - 32 bits for `int`/`unsigned`, so the conversion happens where C does it,
 not at 64 bits. Compound `/= %=` had the same bug and the same fix.
 
-Two more gaps were found and are deliberately NOT fixed yet, both also the usual
-arithmetic conversions: **the comparison operators ignore unsigned-ness**
-(`-1 > 0u` answers 0, C says 1) and **only the left operand of `+` decays an
-array** (`*(1 + a)` is wrong). The guard states both in its header rather than
-asserting them.
+Two more gaps were found in that round; **the comparison operators were fixed
+next** (see the entry above), and one remains: **only the left operand of `+`
+decays an array** (`*(1 + a)` is wrong). The guard states that one in its header
+rather than asserting it.
 
 Guard `cc50_corners.c` (exit 96, identical output under gcc and on both
 engines). Ceiling 20005 -> **20805** (the guard plus the zero-extends the

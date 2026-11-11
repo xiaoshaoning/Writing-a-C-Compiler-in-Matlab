@@ -7,10 +7,9 @@
  * declarators. Every expression is well-defined C, so gcc's answer is the spec.
  * Exit 96.
  *
- * Two C rules are deliberately NOT asserted here because this compiler does not
- * implement them yet - both are the usual arithmetic conversions: the COMPARISON
- * operators ignore unsigned-ness (`-1 > 0u` answers 0, C says 1) and only the
- * left operand of '+' decays an array. Both are recorded in PROJECT_STATUS. */
+ * One C rule is deliberately NOT asserted here because this compiler does not
+ * implement it yet: only the LEFT operand of '+' decays an array, so `*(1 + a)`
+ * is wrong. It is recorded in PROJECT_STATUS. */
 int printf(const char *, ...);
 
 enum E { A = 5, B, C = -2, D };
@@ -36,11 +35,11 @@ int main(void) {
     if (sizeof(1 ? 1 : 2.0) != 8) { return 4; }
     if ((1 ? 1 : 2.0) != 1.0) { return 5; }
 
-    /* The usual arithmetic conversions on DIVISION and modulo: -1 converts to
-       unsigned, so -1 / 2u is 4294967295 / 2 and not 0. (The same conversions
-       are still missing from the COMPARISON operators - `-1 > 0u` answers 0
-       where C says 1 - so those two checks are not here yet; see
-       PROJECT_STATUS.) */
+    /* The usual arithmetic conversions: -1 converts to unsigned before the
+       operation, so the comparison and the division both work in unsigned. */
+    if (!(-1 > 0u)) { return 6; }
+    if (!((unsigned)-1 > 0)) { return 7; }
+    if (-5 < 3u) { return 36; }              /* and not as a signed comparison */
     if ((-1 / 2u) != 2147483647u) { return 8; }
     if ((-1 % 2u) != 1u) { return 9; }
 
