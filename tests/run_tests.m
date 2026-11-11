@@ -953,17 +953,10 @@ cctests = {
             if st_gcc ~= 0
                 error('gcc failed');
             end
-            st_run = system('.\tmp_cc.exe > tmp_cc_out.txt');
-            if st_run < 0
-                st_run = st_run + 256;
-            end
-            fid = fopen('tmp_cc_out.txt', 'r');
-            if fid < 0
+            [oc, oc_ok] = run_out('tmp_cc.exe', 'tmp_cc_out.txt');
+            if ~oc_ok
                 error('could not read the compiler output');
             end
-            oc = char(fread(fid, inf, 'uint8')');
-            fclose(fid);
-            delete('tmp_cc_out.txt');
             [npass nfail] = addcheck(npass, nfail, strcmp(oc, oo), ...
                 sprintf('output parity %s (xc == cc_int stdout)', ostests{ok}));
         catch e
@@ -1060,14 +1053,10 @@ cctests = {
             delete('tmp_gccd.exe');
             if system([gcc, ' tests/programs/dreg_denseprint.c -o tmp_gccd.exe']) == 0 ...
                     && exist('tmp_gccd.exe', 'file') == 2
-                system('.\tmp_gccd.exe > tmp_gccd_out.txt');
-                fid = fopen('tmp_gccd_out.txt', 'r');
-                if fid > 0
-                    gold = char(fread(fid, inf, 'uint8')');
-                    fclose(fid);
-                    gold(gold == char(13)) = [];
+                [ggold, ggok] = run_out('tmp_gccd.exe', 'tmp_gccd_out.txt');
+                if ggok
+                    gold = ggold;
                 end
-                delete('tmp_gccd_out.txt');
             end
             delete('tmp_gccd.exe');
         end
@@ -1229,9 +1218,10 @@ cctests = {
     % and the intended-error tests); the list is printed, so the exclusions stay
     % visible instead of becoming a silent hole.
     if run_gccstdout
-        gskip = {};
-        gbad = {};
-        gtot = 0;
+        gskip = {};         % gcc will not compile it: the port's extensions
+        gbad = {};          % attempted and wrong, whichever way it was wrong
+        gatt = 0;           % comparable: gcc built it, so its stdout is the spec
+        gok = 0;
         for gk = corpus_range
             gnm = cctests{gk,1};
             delete('tmp_gcc.exe');
@@ -1245,16 +1235,12 @@ cctests = {
                 gskip{end+1} = gnm;
                 continue;
             end
-            system('.\tmp_gcc.exe < NUL > tmp_gcc_out.txt');
-            fid = fopen('tmp_gcc_out.txt', 'r');
-            if fid < 0
-                gskip{end+1} = gnm;
+            [gwant, gran] = run_out('tmp_gcc.exe', 'tmp_gcc_out.txt');
+            if ~gran
+                gbad{end+1} = [gnm ' (gcc build produced no output file)'];
                 continue;
             end
-            gw = char(fread(fid, inf, 'uint8')');
-            fclose(fid);
-            delete('tmp_gcc_out.txt');
-            gw(gw == char(13)) = [];
+            gatt = gatt + 1;
             delete('tmp_cc.s');
             delete('tmp_cc.exe');
             delete('tmp_cc_out.txt');
@@ -1264,18 +1250,14 @@ cctests = {
                     gbad{end+1} = [gnm ' (assembly rejected)'];
                     continue;
                 end
-                system('.\tmp_cc.exe < NUL > tmp_cc_out.txt');
-                fid = fopen('tmp_cc_out.txt', 'r');
-                if fid < 0
+                [gp, pok] = run_out('tmp_cc.exe', 'tmp_cc_out.txt');
+                if ~pok
                     gbad{end+1} = [gnm ' (no output file)'];
                     continue;
                 end
-                gp = char(fread(fid, inf, 'uint8')');
-                fclose(fid);
-                delete('tmp_cc_out.txt');
-                gp(gp == char(13)) = [];
-                gtot = gtot + 1;
-                if ~strcmp(gp, gw)
+                if strcmp(gp, gwant)
+                    gok = gok + 1;
+                else
                     gbad{end+1} = gnm;
                 end
             catch e
@@ -1295,7 +1277,7 @@ cctests = {
         end
         [npass nfail] = addcheck(npass, nfail, isempty(gbad), ...
             sprintf('gcc stdout: %d/%d corpus programs byte-identical', ...
-                    gtot - numel(gbad), gtot));
+                    gok, gatt));
     end                     % CC_SECTIONS=gccstdout
 
     % instruction-count regression: the corpus's total emitted
@@ -1547,6 +1529,26 @@ for k = 1:numel(list)
         return;
     end
 end
+end
+
+function [t, ok] = run_out(exe, outfile)
+% run_out - run a built program and return its stdout. ok is 0 when the run
+% left no output file behind, which is how a failed system() call shows.
+%
+% stdin comes from NUL: the syscall tests read stdin, and without this they
+% block forever - which reads as a hang with no output rather than an error,
+% and cost an hour once. fopen 'r' is TEXT mode, so the CRs the CRT writes are
+% already gone and no stripping is needed; every caller that did it by hand was
+% doing nothing.
+t = '';
+system(sprintf('.\\%s < NUL > %s', exe, outfile));
+fid = fopen(outfile, 'r');
+ok = (fid >= 0);
+if ok
+    t = char(fread(fid, inf, 'uint8')');
+    fclose(fid);
+end
+delete(outfile);
 end
 
 function n = count_instr(fname)
