@@ -806,6 +806,19 @@ and the runtime library are the changelog entries above:
 
 ## Verification
 
+- **Run the compile-heavy sections on the C clone; keep `cli-v13` for engine
+  compatibility (measured 2026-11-04).** The same `src/` code is far cheaper to
+  run on the clone: `CC_SECTIONS=instr` (all 327 corpus programs compiled and
+  counted) takes **183 s** there against **798 s** on the Rust engine, with
+  identical numbers - corpus 20005, hello.c 88, 142/142. A 12-program
+  `gccstdout` slice is 96 s against ~200 s. The reason is in the other repo's
+  note: on `cli-v13` a compile costs 270x the clone's and grows superlinearly
+  with source size (a 10 KB file parses in 18-26 s against 0.096 s), while every
+  primitive in isolation - `fileread`, indexing into local and global `char`
+  arrays, the tokenizer's own skip loop with its eight globals - measures fast.
+  So the engine's slowness is not attributable to this code, and verification
+  should not pay for it: use the clone for sweeps, and run one section on
+  `cli-v13` when an engine-compat claim is what is being checked.
 - **Every corpus program's stdout is compared with gcc's own build of the same
   source (2026-11-04, `CC_SECTIONS=gccstdout`).** 324 of the 327 programs are
   byte-identical; the three skipped are `cc16_strarray{,2,3}.c`, which assign to
