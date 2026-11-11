@@ -616,10 +616,9 @@ decision. Equality never needed it (`==`/`!=` are sign-agnostic). The guard's
 two comparison checks are back, plus `-5 < 3u`. Ceiling 20805 -> **20854**. The
 corpus was swept in full on the clone afterwards: 1..164 **455/455** and
 165..327 **345/345**, with every stdout command byte-identical to gcc (164/164
-and 160/160, the three `cc16_strarray` extensions skipped as always).
-
-One gap from that round is still open and documented: **only the left operand of
-`+` decays an array**, so `*(1 + a)` is wrong while `*(a + 1)` is right.
+and 160/160, the three `cc16_strarray` extensions skipped as always). The
+remaining gap from that round - array decay on the right of `+`, and the
+`&`-on-a-value type behind it - is closed in the entry above.
 
 **Six semantics bugs from one corner probe (2026-11-04).** A single C file
 (`cc50_corners.c`) of well-defined language corners no existing guard covered -
