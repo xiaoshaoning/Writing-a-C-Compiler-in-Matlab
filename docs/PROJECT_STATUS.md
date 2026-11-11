@@ -572,6 +572,33 @@ disagreed: x86sim returned 96, the gcc-assembled cctests path returned **5**
 `cc32_byval.c` runs through the cctests path so that class now fails the
 suite. Ceiling 14810.
 
+**The last measured gap closed, and the address-of type (2026-11-04).** The two
+open items from the corner-probe round are both gone, and the second one found a
+third bug on the way.
+
+- **Addition is commutative for pointers.** `1 + p` and `1 + a` fell into the
+  integer add, so the integer was never scaled: `*(1 + p)` printed 184549376
+  where C says 11, and only `char *` worked (element size 1 made the error
+  invisible). The additive parser had a branch for "the left is a pointer" and
+  none for the right; there is one now, and it scales the *integer* by
+  `elem_size(rhs_t)` and keeps the pointer type.
+- **`&` on a value produced a value type.** `pdecay(t) = t + 1` survived from the
+  scheme where a pointer was `base + 2*depth`; under the pointer band it returns
+  a VALUE code, so `&x` on an `int` was typed `char` - which is why
+  `*(1 + &a[0])` answered "bad dereference" while every use that only needed the
+  address kept working. `padd()` already answers the question for both cases (a
+  value type becomes a pointer to it, a pointer gains a level), so `pdecay` was
+  deleted rather than fixed.
+- Guard `cc50_corners.c` asserts `*(1 + a)` and `*(1 + &a[0])` now. Ceiling
+  20854 -> **20884**. Corpus swept in full on the clone: 1..164 **455/455** and
+  165..327 **345/345**, stdout byte-identical to gcc (164/164 and 160/160, the
+  three `cc16_strarray` extensions skipped); instr 142/142, hello.c 88.
+
+With that, every divergence from gcc this project has been able to *measure* is
+closed. That is a statement about the probes, not about the language: the areas
+nobody has aimed at yet are evaluation order, `switch` on 64-bit values, and
+pointer-to-array arithmetic.
+
 **The comparison operators apply the conversions too (2026-11-04).** The last
 piece of C 6.3.1.8. `parse_relational` asked `sav_etype == 5` - only the exact
 `unsigned int` code, and only the LEFT operand - so a relational operator was
@@ -624,10 +651,9 @@ signedness from the *common* type and zero-extend both operands to its width
 first - 32 bits for `int`/`unsigned`, so the conversion happens where C does it,
 not at 64 bits. Compound `/= %=` had the same bug and the same fix.
 
-Two more gaps were found in that round; **the comparison operators were fixed
-next** (see the entry above), and one remains: **only the left operand of `+`
-decays an array** (`*(1 + a)` is wrong). The guard states that one in its header
-rather than asserting it.
+Two more gaps were found in that round - the comparison operators and the
+missing array decay on the right of `+` - and **both were fixed in the entries
+above**.
 
 Guard `cc50_corners.c` (exit 96, identical output under gcc and on both
 engines). Ceiling 20005 -> **20805** (the guard plus the zero-extends the

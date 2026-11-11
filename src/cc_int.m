@@ -1582,11 +1582,6 @@ function d = pdepth(t)
 d = mod(t - 4000, 64);
 end
 
-function c = pdecay(t)
-% pdecay - one more pointer level (address-of on a pointer value).
-c = t + 1;
-end
-
 function c = padd(t)
 % padd - the type of a pointer/array whose ELEMENT type is t (array decay).
 % A value type becomes a pointer to it; a pointer type gains a level, so
@@ -3832,8 +3827,9 @@ end
 
 function parse_additive()
 % additive := term (('+' | '-') term)* — pointer operands scale the
-% integer by the element size (1 for char*, 4 otherwise); ptr - ptr gives
-% the element difference.  Double operands live in %xmm0 (value model);
+% integer by the element size (1 for char*, 4 otherwise); '+' is commutative,
+% so the scal ing happens whichever side the pointer is on; ptr - ptr gives the
+% element difference.  Double operands live in %xmm0 (value model);
 % the left operand is saved on the xmm-stack (double) or on the stack (int)
 % so a call inside the right operand cannot corrupt it.
 global token etype
@@ -3902,6 +3898,22 @@ while token == 43 || token == 45   % '+' '-'
             end
             etype = t;      % still a pointer
         end
+    elseif is_ptr_code(rhs_t)      % the RIGHT is the pointer: `1 + p`, `1 + a`
+        % C 6.5.6 makes addition commutative, so an integer on the left and a
+        % pointer on the right means what the other order means: the INTEGER is
+        % scaled by the element size and the result is the pointer. Without
+        % this, `1 + p` added 1 to the address itself - right for char* (scale
+        % 1) and wrong for every other element type.
+        em('\tmovq\t%rax, %rbx');   % R (the pointer) -> rbx
+        em('\tpopq\t%rax');         % L (the integer)
+        if op == 45
+            fail('an integer minus a pointer is not C');
+        end
+        if ~is_charptr(rhs_t)
+            em(sprintf('\timulq\t$%d, %%rax', elem_size(rhs_t)));
+        end
+        em('\taddq\t%rbx, %rax');
+        etype = rhs_t;              % still a pointer
     else
         % int op int
         em('\tmovq\t%rax, %rbx');   % R -> rbx
@@ -4659,7 +4671,11 @@ for k = numel(ops):-1:1
             % silently handing out the storage unit's address.
             fail('cannot take the address of a bit-field');
         end
-        etype = pdecay(etype);
+        % one more pointer level. This used to be pdecay() = t + 1, a leftover
+        % from the scheme where a pointer was base + 2*depth: under the pointer
+        % band it produced a VALUE code, so &x on an int was typed char and every
+        % later * on it failed. padd() answers the question for both cases.
+        etype = padd(etype);
         estruc = 0;
     elseif op == 42         % '*': dereference — load through the pointer
         if is_fptr_type(etype)

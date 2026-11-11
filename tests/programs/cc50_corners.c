@@ -7,9 +7,7 @@
  * declarators. Every expression is well-defined C, so gcc's answer is the spec.
  * Exit 96.
  *
- * One C rule is deliberately NOT asserted here because this compiler does not
- * implement it yet: only the LEFT operand of '+' decays an array, so `*(1 + a)`
- * is wrong. It is recorded in PROJECT_STATUS. */
+ */
 int printf(const char *, ...);
 
 enum E { A = 5, B, C = -2, D };
@@ -121,9 +119,10 @@ int main(void) {
         int a[3];
         a[0] = 10; a[1] = 11; a[2] = 12;
         if ((a + 1)[0] != 11) { return 27; }   /* an expression as the base */
-        /* a[b] is *(a + b) in C, so *(1 + a) is also a[1] - but this compiler
-           only decays an array on the LEFT of '+', so that form is not checked
-           here yet (see PROJECT_STATUS, same note as the comparisons). */
+        /* a[b] is *(a + b), and '+' is commutative: the integer is scaled by
+           the element size whichever side it is on */
+        if (*(1 + a) != 11) { return 28; }
+        if (*(1 + &a[0]) != 11) { return 37; }
         if (*(a + 2) != 12) { return 29; }
         if ((int)sizeof(a) != 12) { return 30; }
         if ((int)sizeof(&a) != 8) { return 31; }
