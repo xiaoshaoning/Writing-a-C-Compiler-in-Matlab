@@ -572,6 +572,42 @@ disagreed: x86sim returned 96, the gcc-assembled cctests path returned **5**
 `cc32_byval.c` runs through the cctests path so that class now fails the
 suite. Ceiling 14810.
 
+**Two-dimensional array parameters, and `m[i][j]` with variable indices
+(2026-11-04).** The parameter case is done, and it uncovered a worse bug than the
+one it set out to fix.
+
+- **`int a[][3]` now decays to a pointer to a ROW.** The declarator's dimensions
+  were parsed and thrown away, so `a` was an `int *` and `a[i]` yielded an int -
+  `a[i][j]` was "pointer type expected for indexing". The dimensions are kept
+  now (0 for the one that decayed), and a parameter with inner dimensions is
+  marked 2 in `lvararr`: the variable path LOADS the slot (its value is the
+  address) instead of addressing it, and carries the stride vector
+  `[row bytes, element bytes]`, which is the state a local `int[2][3]` has after
+  its first index. `sizeof(a)` stays the pointer's 8.
+- **`m[i][j]` with VARIABLE indices did not compile at all** - not for parameters,
+  for ordinary local 2-D arrays. The `[` handler read the global `bstride` *after*
+  parsing the index, and parsing an index variable clears it, so only constant
+  indices ever worked: `int m[2][3]; m[i][j] = i*3 + j;` in a double loop was
+  "pointer type expected for indexing", which is every matrix routine ever
+  written. One saved copy (`sav_stride`) fixes it.
+- Guard `cc51_mdimparam.c` (exit 96, gcc-identical output `21 3 60 8`): a matrix
+  walk, a column extract, the 1-D form, and `sizeof` of a decayed parameter.
+  Ceiling 20884 -> **21290**. Corpus swept in full on the clone: 1..164
+  **455/455** and 165..327 **345/345**, stdout byte-identical to gcc (164/164 and
+  160/160); instr 142/142, hello.c 88.
+
+Two failures on the way are worth recording, because both were *mine* and both
+were found only by running the other engine: a replacement lost an `end`, and two
+new per-parameter cells were used without being initialised - the neighbouring
+tables say `names = {}; types = {};` for a reason, and `{end+1}` on an inherited
+value gave the dimension list a phantom first element. There is also an engine
+bug behind that: on `cli-v13`, `c{end+1} = []` is a no-op, so appending an empty
+cell element silently does nothing (filed in `matlab_in_rust/docs/`).
+
+Still a limitation, and now the only one known: a pointer to a ROW - `&a[0] + 1`,
+which C steps by a whole row, and `int (*p)[3]` declarations. Neither parses or
+steps correctly; both are recorded in the guard's header.
+
 **The last measured gap closed, and the address-of type (2026-11-04).** The two
 open items from the corner-probe round are both gone, and the second one found a
 third bug on the way.

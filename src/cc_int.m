@@ -2422,11 +2422,13 @@ function [nparams, psize, ptypes, nunnamed] = parse_params(returns_struct)
 % nunnamed counts the parameters written without a name, which a declaration
 % may do (`int printf(const char *, ...)`) but a definition may not - the
 % caller checks that once it knows which of the two it has.
-global token idname lvars lvartype lvararr lvarstruct sdefs blkdecl
+global token token_val idname lvars lvartype lvararr lvarstruct sdefs blkdecl lvarstride lvararrsz
 nparams = 0;
 nunnamed = 0;
 names = {};
 types = {};
+pdims = {};      % per-parameter declared dimensions, 0 when there are none
+pelem = {};      % and the size of one element of the row
 sizes = {};
 bvs = {};
 while token ~= 41           % ')'
@@ -2458,17 +2460,28 @@ while token ~= 41           % ')'
     end
     t = pcode(base, depth);
     decayed = 0;
+    dims = [];
     if token == 91          % '[': array parameter decays to a pointer
         while token == 91
             next();
             if token == 128
+                dims(end+1) = double(token_val);
                 next();
+            else
+                dims(end+1) = 0;    % `[]`: the size that decayed away
             end
             expect(93);
         end
         t = padd(t);
         decayed = 1;
     end
+    if isempty(dims)
+        pdims{end+1} = 0;           % no dimensions: a 0, not [] - the Rust
+                                    % engine makes `c{end+1} = []` a no-op
+    else
+        pdims{end+1} = dims;
+    end
+    pelem{end+1} = elem_size(t);    % the size of one element of the row
     types{end+1} = t;
     if is_struct_code(base) && depth == 0 && ~decayed
         sizes{end+1} = ssize_slot(t);   % by-value struct: its storage slot
@@ -2501,6 +2514,19 @@ for k = nparams:-1:1
     lvartype.(nm) = types{k};
     lvararr.(nm) = 0;
     lvarstruct.(nm) = bvs{k};   % a by-value struct copy
+    if numel(pdims{k}) > 1
+        % `int sum(int a[][3])`: the OUTER dimension decayed, the inner ones did
+        % not, so `a` is a pointer to a row - `a[i]` steps a whole row and
+        % `a[i][j]` steps within it. Marked 2 in lvararr, which tells the
+        % variable path to LOAD the slot (the value is the address) instead of
+        % taking the slot's address, and the stride vector does the rest: the
+        % same state a local int[2][3] has after its first index.
+        inner = pdims{k}(2:end);
+        rowbytes = prod(inner) * pelem{k};
+        lvararr.(nm) = 2;
+        lvarstride.(nm) = [rowbytes, cstride_of(inner, pelem{k})];
+        lvararrsz.(nm) = 0;     % sizeof(a) is the pointer's 8, not the row
+    end
     acc = acc + sizes{k};
 end
 psize = zeros(1, nparams);
@@ -4400,7 +4426,13 @@ elseif token == 150         % Id: function call or variable
             t = lvartype.(name);
             isarr = lvararr.(name);
             isst = lvarstruct.(name);
-            em(sprintf('\tleaq\t%d(%%rbp), %%rax', lvars.(name)));
+            if isarr == 2
+                % a decayed array parameter: the slot HOLDS the address of the
+                % first row, so it is loaded rather than addressed
+                em(sprintf('\tmovq\t%d(%%rbp), %%rax', lvars.(name)));
+            else
+                em(sprintf('\tleaq\t%d(%%rbp), %%rax', lvars.(name)));
+            end
         elseif isfield(lstatics, name)
             % a static local: its own symbol, in the data section
             sym = lstatics.(name);
@@ -4460,10 +4492,15 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
       token == 179 || token == 40
     if token == 91          % '[': index by the element size, then load
         t = etype;          % the base's type (the index parse changes etype)
+        sav_stride = bstride;   % and it clobbers the global bstride, which holds
+                                % the BASE's strides: `m[i][j]` on an int[2][3]
+                                % lost the row stride to the parse of `i`, so
+                                % only constant indices ever worked
         next();
         em('\tpushq\t%rax');      % save the base address
         parse_assignment();
         expect(93);
+        bstride = sav_stride;   % the base's strides, not the index's
         if ~isempty(bstride)
             scale = bstride(1);
         elseif is_ptr_code(t)
