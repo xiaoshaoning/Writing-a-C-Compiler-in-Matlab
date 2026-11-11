@@ -1966,13 +1966,15 @@ while i <= nf
         i = j + 1;
         continue;
     end
-    left = 0; zero = 0;
+    left = 0; zero = 0; plus = 0;
     while j <= nf && (fmt(j) == 45 || fmt(j) == 43 || fmt(j) == 48 || ...
           fmt(j) == 35 || fmt(j) == 32)
         if fmt(j) == 45
             left = 1;
         elseif fmt(j) == 48
             zero = 1;
+        elseif fmt(j) == 43
+            plus = 1;           % '+' flag: show the sign of a non-negative
         end
         j = j + 1;
     end
@@ -2056,7 +2058,7 @@ while i <= nf
             end
         end
     elseif conv == 100 || conv == 105    % d i
-        txt = fmt_int(av, w, prec, left, zero);
+        txt = fmt_int(av, w, prec, left, zero, plus);
     elseif conv == 117          % u
         txt = fmt_udec(av, w, prec, left, zero);
     elseif conv == 120 || conv == 88     % x X
@@ -2146,13 +2148,15 @@ if is_signed && v >= 2 ^ (bits - 1)
 end
 end
 
-function t = fmt_int(v, w, prec, left, zero)
+function t = fmt_int(v, w, prec, left, zero, plus)
 v = int64(v);
 s = sim_decstr(v);            % exact, keeps the leading '-' (and INT64_MIN)
 sgn = [];
 if numel(s) >= 1 && s(1) == 45
     sgn = 45;                  % '-'
     s = s(2:end);
+elseif plus
+    sgn = 43;                  % '+': the flag the caller asked for
 end
 if prec >= 0
     while numel(s) < prec

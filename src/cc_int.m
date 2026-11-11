@@ -4961,10 +4961,21 @@ global src si token token_val token_dval token_isflt token_base
         token_isflt = 1;
         return;
     end
-    v = int64(0);
+    % Decimal digits accumulate modulo 2^64, like C, so 18446744073709551615
+    % is the unsigned long long it says it is. int64 * and + SATURATE in
+    % MATLAB (the earlier version of this loop stopped at INT64_MAX and printed
+    % 9223372036854775807), so the value is kept as two 32-bit halves - every
+    % intermediate stays under 2^35 and is exact in a double - and assembled
+    % with bitshift/bitor, which wrap the way the hex path already does.
+    hi = 0;
+    lo = 0;
     for k = sstart:si-1
-        v = v * int64(10) + int64(double(src(k)) - 48);
+        nlo = lo * 10 + (double(src(k)) - 48);
+        carry = floor(nlo / 4294967296);
+        lo = nlo - carry * 4294967296;
+        hi = mod(hi * 10 + carry, 4294967296);
     end
+    v = bitor(bitshift(int64(hi), 32), int64(lo));
     lex_suffix();
     token = 128;                % Num
     token_val = v;

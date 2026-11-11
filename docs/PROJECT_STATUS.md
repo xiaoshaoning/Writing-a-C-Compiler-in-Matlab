@@ -603,6 +603,23 @@ The corpus was swept in full afterwards - 1..80 296/296, 81..160 294/294,
 round owed. instr 142/142 at 20005 (format strings are data, so no instruction
 moved); hello.c 88.
 
+A probe of every modifier against every integer conversion, plus flags and
+widths, found two more divergences that no guard covered:
+
+- **Decimal literals saturated at INT64_MAX.** `int64` `*` and `+` saturate in
+  MATLAB, and the accumulator used both, so `18446744073709551615ULL` became
+  0x7FFF... and printed 9223372036854775807 where gcc prints the full unsigned
+  value. Decimal now accumulates as two 32-bit halves (every intermediate stays
+  under 2^35 and is exact) and assembles with `bitshift`/`bitor`, which wrap mod
+  2^64 the way the hex path always did.
+- **The `+` flag was parsed and thrown away** by the simulator's formatter, so
+  `%+d` of 7 printed `7`. It now takes the slot the `-` already had, which keeps
+  zero padding between the sign and the digits.
+
+With those, the whole matrix - `%d/%u/%x/%X/%o` at plain, `l`, `ll`, `h`, `hh`,
+with negatives, widths, `-`/`0`/`+`/precision flags, `%c`, `%s` with precision -
+prints gcc's bytes through the CRT and through the simulator alike.
+
 **`long` is 4 bytes, `long long` is 8 (2026-11-04).** The value model was
 LP64-flavoured: `long` was 8 bytes on a compiler that emits Win64, where gcc's
 `long` is 4. So `sizeof(long)` was 8, `sizeof(1L)` was 8, struct layout with a
