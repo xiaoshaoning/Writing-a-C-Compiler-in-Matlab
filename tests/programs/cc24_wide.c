@@ -1,5 +1,5 @@
 /* cc24_wide.c - 64-bit decimal integer literals stay exact above 2^53
- * through emission, the immediate parse, the 64-bit store and %ld.
+ * through emission, the immediate parse, the 64-bit store and %lld.
  * Compiler track only: the interpreter and Windows gcc use 32-bit long,
  * so neither can be the oracle. Exit 96. */
 #include <stdio.h>
@@ -12,9 +12,9 @@ int main() {
     if (b - 9223372036854775805 != 1) { return 2; }
     if (c + 9223372036854775807 != -1) { return 3; }
     if (d + 9007199254740993 != 0) { return 4; }
-    printf("%ld\n", a);
-    printf("%ld\n", b);
-    printf("%ld\n", c);
-    printf("%ld\n", d);
+    printf("%lld\n", a);
+    printf("%lld\n", b);
+    printf("%lld\n", c);
+    printf("%lld\n", d);
     return 96;
 }

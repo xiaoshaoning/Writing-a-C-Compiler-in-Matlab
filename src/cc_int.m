@@ -2311,12 +2311,16 @@ strs{end+1} = {lab, norm_codes(double(text))};   % stored as codes
 end
 
 function t = norm_codes(codes)
-% norm_codes — code-vector version of norm_fmt (drop printf length
-% modifiers l ll h hh j z t L before the conversion char).  The CLONE
-% auto-calls a STRING argument that matches a function name ('sin'
-% passed to a local function becomes callable), so format strings must
-% never cross a local-function boundary as raw char arrays — they stay
-% double code vectors here.
+% norm_codes - prepare a format string for the CRT, as a code vector (the
+% CLONE auto-calls a STRING argument that matches a function name, so a format
+% string must never cross a local-function boundary as a char array).
+%
+% An integer or floating conversion KEEPS its length modifier: this dialect and
+% the CRT agree on the widths now (int 4, long 4, long long 8), so %ld reads 32
+% bits and %lld 64, which is what gcc does. Dropping them was a workaround for
+% long being 8 bytes, and it truncated every %lld to 32 bits. A %s or %c still
+% loses one, because there is a single string type here: %ls and %hs mean a
+% narrow string to this compiler while the CRT's %ls wants a wide one.
 t = [];
 i = 1;
 nf = numel(codes);
@@ -2345,43 +2349,11 @@ while i <= nf
         t = [t, codes(i)];     % a lone trailing '%': leave it
         break;
     end
-    t = [t, codes(i), codes(j:p-1), codes(k)];
-    i = k + 1;
-end
-end
-
-function t = norm_fmt(fmt)
-% norm_fmt — drop printf length modifiers (l, ll, h, hh, j, z, t, L) before
-% the conversion char; flags/width/precision and everything else are kept.
-t = '';
-i = 1;
-nf = numel(fmt);
-while i <= nf
-    if fmt(i) ~= 37          % '%'
-        t = [t, fmt(i)];
-        i = i + 1;
-        continue;
+    if isempty(strfind('sc', char(codes(k))))
+        t = [t, codes(i), codes(j:p-1), codes(p:k)];   % keep the modifier
+    else
+        t = [t, codes(i), codes(j:p-1), codes(k)];     % narrow string: drop it
     end
-    j = i + 1;
-    if j <= nf && fmt(j) == 37
-        t = [t, '%%'];       % literal percent: no arg
-        i = j + 1;
-        continue;
-    end
-    p = j;
-    while p <= nf && ~((fmt(p) >= 'A' && fmt(p) <= 'Z') || ...
-                       (fmt(p) >= 'a' && fmt(p) <= 'z'))
-        p = p + 1;
-    end
-    k = p;
-    while k <= nf && ~isempty(strfind('hljztL', fmt(k)))
-        k = k + 1;
-    end
-    if k > nf
-        t = [t, fmt(i)];     % a lone trailing '%': leave it
-        break;
-    end
-    t = [t, fmt(i), fmt(j:p-1), fmt(k)];
     i = k + 1;
 end
 end

@@ -2004,6 +2004,32 @@ while i <= nf
             j = j + 1;
         end
     end
+    % the length modifier, and the width it makes the conversion read: int 4,
+    % long 4 (this target), long long 8, short 2, char 1 - the same rule the
+    % CRT applies, which is what keeps the two backends' output identical
+    nbytes = 4;
+    if j <= nf
+        m = fmt(j);
+        if m == 108                     % 'l'
+            if j + 1 <= nf && fmt(j + 1) == 108
+                nbytes = 8;             % ll
+                j = j + 1;
+            end
+            j = j + 1;
+        elseif m == 104                 % 'h'
+            nbytes = 2;
+            if j + 1 <= nf && fmt(j + 1) == 104
+                nbytes = 1;             % hh
+                j = j + 1;
+            end
+            j = j + 1;
+        elseif m == 122 || m == 106 || m == 116      % z j t: size_t-ish
+            nbytes = 8;
+            j = j + 1;
+        elseif m == 76                  % 'L'
+            j = j + 1;
+        end
+    end
     if j > nf
         out(end+1) = 37;
         break;
@@ -2011,6 +2037,9 @@ while i <= nf
     conv = fmt(j);
     av = printf_arg(argvals, ai);
     ai = ai + 1;
+    if ~isempty(strfind('diuxXo', char(conv)))
+        av = fmt_width(av, nbytes, conv == 100 || conv == 105);
+    end
     if conv == 115             % 's'
         s = mem_strcodes(double(av));
         if prec >= 0 && numel(s) > prec
@@ -2098,6 +2127,22 @@ if ai < 3
 else
     k = ai - 3;
     v = sim_load64(double(regs(5)) + 32 + 8 * k);
+end
+end
+
+function v = fmt_width(v, nbytes, is_signed)
+% fmt_width - the value a conversion of this width reads. %d of a long long
+% prints 32 bits and %llx of the same prints 64, which is what the CRT does.
+% 8 bytes is the width of the register and needs nothing; a narrower value is
+% taken modulo 2^bits and, for a signed conversion, sign-extended again so a
+% negative prints with a minus.
+if nbytes >= 8
+    return;
+end
+bits = 8 * nbytes;
+v = mod(v, 2 ^ bits);
+if is_signed && v >= 2 ^ (bits - 1)
+    v = v - 2 ^ bits;
 end
 end
 

@@ -1083,7 +1083,7 @@ cctests = {
         wcout(wcout == char(13)) = [];
         wcgold = sprintf('9007199254740993\n9223372036854775806\n-9223372036854775808\n-9007199254740993\n');
         [npass nfail] = addcheck(npass, nfail, strcmp(wcout, wcgold), ...
-            'x86sim wide-decimal %ld print exact above 2^53');
+            'x86sim wide-decimal %lld print exact above 2^53');
     catch e
         [npass nfail] = addcheck(npass, nfail, false, ...
             sprintf('x86sim wide-decimal print: %s', e.message));

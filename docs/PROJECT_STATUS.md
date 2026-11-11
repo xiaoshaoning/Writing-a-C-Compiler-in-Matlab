@@ -135,8 +135,9 @@ which mingw ld silently rejects for some values (32/40/48/56/96) — a
 fixed alignment of 16 works for every size; `(void)` params
 double-consumed the `)` (leaving `{` for the caller's expect); and the
 CRT printf got the raw `%ls` (wide-string meaning) instead of the
-interpreter's narrow-string convention — the compiler now normalises the
-same length modifiers as xc.m. Plus non-constant global initializers
+interpreter's narrow-string convention — the compiler normalises `%ls`/`%hs` to
+`%s` for that reason; integer length modifiers pass through since 2026-11-04
+(see the printf entry below). Plus non-constant global initializers
 (`int h = g + 2;`, `int h = f();`) evaluate in main's startup prologue.
 The output-parity group grew from 6 to 53 programs (hello, p6_*, and 47
 of the pp_* corpus); the 4 excluded are the intended-error tests and
@@ -571,6 +572,37 @@ disagreed: x86sim returned 96, the gcc-assembled cctests path returned **5**
 `cc32_byval.c` runs through the cctests path so that class now fails the
 suite. Ceiling 14810.
 
+**printf length modifiers follow the type widths (2026-11-04).** Once `long`
+is 4 bytes the CRT is right by itself: `%ld` reads 32 bits, `%lld` 64, as gcc
+does. But the compiler rewrote every format string first -
+`%ls/%ld/%llu/%lu/%hd/%hs` to `%s/%d/%u/%u/%d/%s` - so a 64-bit argument under
+`%lld` printed its low half, and the two backends were wrong differently:
+
+  `%lld` of 1234567890123     gcc 1234567890123  gcc-assembled 1912276171  sim OK
+  `%llx` of the same          gcc 11f71fb04cb    gcc-assembled 71fb04cb    sim OK
+  `%lu` of (unsigned long)-7  gcc 4294967289     gcc-assembled OK          sim 2^64-7
+
+`norm_codes` (the live normaliser - `norm_fmt` was a dead duplicate of it, with
+no callers, and is deleted) passes integer length modifiers through and only
+collapses `%ls`/`%hs` to `%s`, where the single string type makes the CRT's
+meaning wrong. `sim_printf` learned the same rule: it ignored modifiers and
+printed every integer 64-bit wide, so `%lu` of a negative came out 2^64-7. Its
+width now comes from the modifier - 1 for `hh`, 2 for `h`, 4 for none or `l`,
+8 for `ll` - with the value taken modulo 2^bits and sign-extended only for a
+signed conversion.
+
+Both backends print gcc's answer for the three lines above, and two guards
+stopped being documented exceptions: `cc24_wide.c` prints `%lld`, and
+`cc25_fmt.c` prints `%llx`/`%llu`/`%llo`/`%llX` (a plain `l` would silently
+print the low half and look plausible). Both are byte-identical to gcc from
+source, assembled, and through the simulator. The interpreter's `sys_prtf`
+needs no change: its dialect has no `long`, so it never meets a 64-bit integer.
+
+The corpus was swept in full afterwards - 1..80 296/296, 81..160 294/294,
+161..240 255/255, 241..327 233/233 - which also closed the sweep the `long`
+round owed. instr 142/142 at 20005 (format strings are data, so no instruction
+moved); hello.c 88.
+
 **`long` is 4 bytes, `long long` is 8 (2026-11-04).** The value model was
 LP64-flavoured: `long` was 8 bytes on a compiler that emits Win64, where gcc's
 `long` is 4. So `sizeof(long)` was 8, `sizeof(1L)` was 8, struct layout with a
@@ -893,8 +925,10 @@ and the runtime library are the changelog entries above:
 - `sizeof` on array names (total bytes, stored in the symbol table) and on
   expressions — array-valued operands report their byte size, so
   `sizeof(a[0])` on `int a[2][3]` is 24
-- printf length modifiers normalized away (`%ls`/`%ld`/`%hd`/`%llu` → plain
-  `%s`/`%d`/`%u`/`%d`); `%*` dynamic width/precision; `%n` writes the running
+- printf length modifiers mean the widths they name: `%d`/`%u`/`%x`/`%o` read
+  32 bits, `%ld`/`%lu`/`%lx` the same (long is 4 bytes here), `%lld`/`%llu`/
+  `%llx` 64, `%hd`/`%hhd` 2 and 1; `%ls`/`%hs` collapse to `%s` because there is
+  one string type; `%*` dynamic width/precision; `%n` writes the running
   count to its arg address; `%p` prints a lowercase-hex pointer; string
   literals NUL-terminated in mem (consecutive literals no longer bleed)
 - Pointer-to-(sub)array via `&`: `(&a[0])[1]` indexes rows, `&a` is a pointer
