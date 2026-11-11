@@ -463,6 +463,32 @@ else
 end
 end
 
+function em_divmod(ctype, is_mod)
+% em_divmod - divide %rax by %rbx in type ctype, leaving the quotient in %rax
+% and, when is_mod, the remainder there too.
+%
+% C 6.3.1.8 applies the usual arithmetic conversions BEFORE the operation, so
+% the division is unsigned whenever the COMMON type is unsigned - not only when
+% the dividend is - and it takes place at the common width, so a 32-bit type
+% zero-extends both operands first: -1 / 2u is 4294967295 / 2, not
+% (2^64 - 1) / 2. Both the binary operator and compound assignment ask this
+% because both were wrong in the same way, which is what one owner prevents.
+if is_unsigned_type(ctype)
+    if int_width(ctype) == 4
+        em('\tmovl\t%eax, %eax');
+        em('\tmovl\t%ebx, %ebx');
+    end
+    em('\txorq\t%rdx, %rdx');
+    em('\tdivq\t%rbx');           % unsigned
+else
+    em('\tcqto');
+    em('\tidivq\t%rbx');          % signed, truncating toward zero
+end
+if is_mod
+    em('\tmovq\t%rdx, %rax');
+end
+end
+
 function em_store_lvalue(t, addr, bf)
 % em_store_lvalue - store %rax into the lvalue at `addr`. bf = [bit_off width]
 % describes a bit-field, and [] an ordinary one. A bit-field shares its storage
@@ -3361,9 +3387,14 @@ if token == 63              % '?'
         etype = 6;
         if t1 ~= 6
             % branch 1 was already emitted: put its conversion in front of the
-            % jump it takes, so it runs on that path only
-            out = [out(1:jmpidx - 1), {sprintf('\tcvtsi2sdq\t%%rax, %%xmm0')}, ...
-                   out(jmpidx:end)];
+            % jump it takes, so it runs on that path only. Pure cell indexing:
+            % a [cell, {char}, cell] concatenation returns a DOUBLE on the C
+            % clone - it flattens a cell of chars - so the shape cannot be
+            % rebuilt that way.
+            for mvi = numel(out):-1:jmpidx
+                out{mvi + 1} = out{mvi};
+            end
+            out{jmpidx} = sprintf('\tcvtsi2sdq\t%%rax, %%xmm0');
         end
         if t2 ~= 6
             em('\tcvtsi2sdq\t%rax, %xmm0');
@@ -3496,23 +3527,7 @@ while token == 61 || (token >= 160 && token <= 169)
             elseif op == 162    % *=
                 em('\timulq\t%rbx, %rax');
             elseif op == 163 || op == 164   % /= %%=
-                % the same conversions as the binary operator: unsigned when
-                % the common type is, and at its width
-                ctype = arith_type(sav_ltype, etype);
-                if is_unsigned_type(ctype)
-                    if int_width(ctype) == 4
-                        em('\tmovl\t%eax, %eax');
-                        em('\tmovl\t%ebx, %ebx');
-                    end
-                    em('\txorq\t%rdx, %rdx');
-                    em('\tdivq\t%rbx');
-                else
-                    em('\tcqto');
-                    em('\tidivq\t%rbx');
-                end
-                if op == 164
-                    em('\tmovq\t%rdx, %rax');
-                end
+                em_divmod(arith_type(sav_ltype, etype), op == 164);
             elseif op == 167    % &=
                 em('\tandq\t%rbx, %rax');
             elseif op == 168    % |=
@@ -3942,30 +3957,11 @@ while token == 42 || token == 47 || token == 37   % '*' '/' '%'
     else
         em('\tmovq\t%rax, %rbx');   % rhs
         em('\tpopq\t%rax');   % lhs
-        % C 6.3.1.8: both operands convert to the COMMON type before the
-        % operation, so the division is unsigned when either side is (at the
-        % common width) - not only when the dividend is. It also happens at the
-        % common width: `-1 / 2u` is 4294967295 / 2, not (2^64 - 1) / 2, so a
-        % 32-bit common type zero-extends both operands first.
-        ctype = arith_type(sav_etype, rhs_t);
+        ctype = arith_type(sav_etype, rhs_t);   % em_divmod applies the rest
         if op == 42
             em('\timulq\t%rbx, %rax');
-        elseif is_unsigned_type(ctype)
-            if int_width(ctype) == 4
-                em('\tmovl\t%eax, %eax');
-                em('\tmovl\t%ebx, %ebx');
-            end
-            em('\txorq\t%rdx, %rdx');
-            em('\tdivq\t%rbx');        % unsigned
-            if op == 37
-                em('\tmovq\t%rdx, %rax');
-            end
         else
-            em('\tcqto');
-            em('\tidivq\t%rbx');
-            if op == 37
-                em('\tmovq\t%rdx, %rax');
-            end
+            em_divmod(ctype, op == 37);
         end
         etype = ctype;
         em_narrow(etype);
