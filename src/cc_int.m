@@ -58,7 +58,7 @@ function cc_int(varargin)
 global src si token token_val token_dval token_isflt token_sfx idname strtext out fname lbl lvars lvartype ...
        lvararr fbytes funcs fret called retlbl cfn globals gtype garr glist ...
        strs nstr etype ltype cret loopctx stags sdefs nstid estruc ...
-       lvarstruct gstruct typedefs enums lvarstride gstride bstride glabels sret sretsize sretbase libfns libcalls ginit fptypes libargt libret curarrsz cvoid fparams frettype
+       lvarstruct gstruct typedefs enums lvarstride gstride bstride glabels sret sretsize sretbase libfns libcalls ginit fptypes libargt libret curarrsz cvoid fparams frettype atypes natype
 
 if nargin ~= 2 && nargin ~= 3
     error('USAGE: cc_int in.c out.s');
@@ -1630,7 +1630,6 @@ function c = array_type(elem, dims)
 % `int (*p)[3]`. Codes live in 3000..3999, below the pointer band, and identical
 % shapes are interned so the same array type is one code.
 global atypes natype
-if isempty(atypes), atypes = {}; natype = 0; end
 for k = 1:numel(atypes)
     if atypes{k}{1} == elem && isequal(atypes{k}{2}, dims)
         c = 3000 + k - 1;
@@ -1640,6 +1639,20 @@ end
 atypes{end+1} = {elem, dims};
 natype = natype + 1;
 c = 3000 + numel(atypes) - 1;
+end
+
+function set_array_value(at)
+% set_array_value - make the current expression the ARRAY of type `at`. Its
+% value is the address it already holds, so nothing is loaded; the strides make
+% it indexable, and the type is the DECAYED pointer, which is the convention a
+% named array variable follows (that is what makes a following index take the
+% element path). Two places needed exactly this - `p[i]` on a pointer to a row,
+% and `*p` on one - and they drifted apart when only one was corrected.
+global bstride curarrsz etype estruc
+bstride = cstride_of(arr_dims(at), tsize(arr_elem(at)));
+curarrsz = tsize(at);
+etype = pcode(arr_elem(at), 1);
+estruc = 0;
 end
 
 function b = is_arrtype(t)
@@ -1659,6 +1672,16 @@ global atypes
 d = atypes{t - 3000 + 1}{2};
 end
 
+% Type-code space, one line per band. Every predicate in this file tests one of
+% these; adding a band means adding a line here, because the next reader will
+% look here first.
+%
+%   0..21               value types: int 0, char 1, unsigned int 5, double 6,
+%                       short 7, word 9, unsigned char 12, … long 18/21
+%   1000 + 2*id         struct and union VALUES (the same space, 5th field = align)
+%   2000 + rettype      function pointers
+%   3000 + id           array types (int[3] as a SHAPE, not a value)
+%   4000 + base*64 + d  pointers, whose base may be any band above
 function tsz = tsize(t)
 % tsize — byte size of a VALUE type code: char 1, short 2, int/word 4,
 % long/double/pointer 8, a struct its registered size. The single source of
@@ -4598,10 +4621,7 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
                 % `p[i]` on a pointer to a row: the row's address is the value,
                 % so it is not loaded - the strides do the rest, exactly as they
                 % do for a named 2-D array.
-                etype = pcode(arr_elem(et), 1);   % the row, decayed
-                bstride = cstride_of(arr_dims(et), tsize(arr_elem(et)));
-                curarrsz = tsize(et);
-                estruc = 0;
+                set_array_value(et);     % the row: its address, and its shape
             else
                 etype = et;
                 if et >= 1000 && ~is_ptr_code(et)
@@ -4819,10 +4839,7 @@ for k = numel(ops):-1:1
             if is_arrtype(etype)
                 % `*p` on an int (*)[3]: the ARRAY, whose value is its address,
                 % so nothing is loaded and the strides make it indexable
-                bstride = cstride_of(arr_dims(etype), tsize(arr_elem(etype)));
-                curarrsz = tsize(etype);
-                etype = pcode(arr_elem(etype), 1);   % the array, decayed
-                estruc = 0;
+                set_array_value(etype);   % the array: address and shape
             elseif is_ptr_code(etype) && pdepth(etype) == 1 && pbase(etype) == 1
                 em('\tmovzbl\t(%rax), %eax');
                 estruc = 0;

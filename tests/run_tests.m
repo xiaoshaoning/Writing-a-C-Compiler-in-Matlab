@@ -1453,6 +1453,10 @@ cctests = {
     end
     gsf = 'tmp_globals_selftest.m';
     gf = fopen(gsf, 'w');
+    % the chunk before the first function is the script: an assignment there
+    % makes the name local to the chunk, so this is a violation too - the second
+    % shape the checker has to catch, and the one that hid `atypes` in cc_int.m
+    fprintf(gf, 'gshared = {};\n');
     fprintf(gf, 'function gs_main()\n');
     fprintf(gf, 'global gshared\n');
     fprintf(gf, 'gshared = 1;\n');
@@ -1464,8 +1468,8 @@ cctests = {
     fclose(gf);
     try
         gb = check_globals(gsf);
-        [npass nfail] = addcheck(npass, nfail, numel(gb) == 1, ...
-            'globals audit self-test (synthetic violation caught)');
+        [npass nfail] = addcheck(npass, nfail, numel(gb) == 2, ...
+            'globals audit self-test (both synthetic violations caught)');
     catch e
         [npass nfail] = addcheck(npass, nfail, false, ...
             sprintf('globals audit self-test: %s', e.message));

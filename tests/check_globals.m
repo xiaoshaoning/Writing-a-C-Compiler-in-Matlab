@@ -95,6 +95,16 @@ for i = 1:numel(ra)
             if ~isempty(pos) && ~cg_iswrite(code, nm, pos(1))
                 bad{end+1} = sprintf('%s @%d reads global ''%s'' without declaring it', ...
                     rn{i}, Lno(q), nm);
+            elseif ~isempty(pos) && strcmp(rn{i}, '(main)')
+                % the pre-function chunk is the script itself: an assignment
+                % there makes the name local to the CHUNK, so state the functions
+                % read through `global` has to be declared there too. Inside a
+                % function the opposite holds - a fresh assignment is how you
+                % shadow a global on purpose - which is why only this range is
+                % checked. `atypes = {}` at the top of cc_int.m looked like an
+                % initialisation and was a local for exactly this reason.
+                bad{end+1} = sprintf('%s @%d assigns global ''%s'' without declaring it (stays local to the chunk)', ...
+                    rn{i}, Lno(q), nm);
             end
         end
     end
