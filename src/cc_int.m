@@ -95,6 +95,9 @@ lbl = 0;      % unique-label counter for short-circuit jumps
 cfn = 0;      % function counter (.LFBn/.LFEn/.Lretn)
 loopctx = {};   % stack of {break_label, continue_label} for break/continue
 lvars = struct();    % local/param name -> frame offset (bytes)
+blkdecl = struct();  % names declared in the CURRENT block only: C allows an
+                     % inner block to shadow an enclosing local, so a duplicate
+                     % is a duplicate only within one block
 lvartype = struct(); % local/param name -> type code (0 int, 1 char, 2 int* …)
 lvararr = struct();  % local name -> 1 if an array (name decays to a pointer)
 fbytes = 0;          % current function's frame bytes (locals only)
@@ -1716,7 +1719,7 @@ function parse_function_tail(fname2, ischarfn, rettype)
 % after 'type name': '(' params ')' '{' <statements> return '}' — emit the
 % per-function prologue, backpatch the frame size, and the epilogue.
 global token out idname lvars lvartype lvararr lvarstruct fbytes funcs fret lstatics ...
-       retlbl cfn cret cvoid glabels fparams frettype sret sretsize sretbase ginit fptypes
+       retlbl cfn cret cvoid glabels fparams frettype sret sretsize sretbase ginit fptypes blkdecl
 % ischarfn: 0/1 (char return); rettype: the full return type code (0 int,
 % 1 char, 1000+2*stid struct). A struct return uses a hidden return pointer.
 expect(40);                 % (
@@ -1728,6 +1731,7 @@ save_lstatics = lstatics;
 save_fbytes = fbytes;
 save_glabels = glabels;
 lvars = struct();
+blkdecl = struct();
 lvartype = struct();
 lvararr = struct();
 lvarstruct = struct();
@@ -2397,7 +2401,7 @@ function [nparams, psize, ptypes, nunnamed] = parse_params(returns_struct)
 % nunnamed counts the parameters written without a name, which a declaration
 % may do (`int printf(const char *, ...)`) but a definition may not - the
 % caller checks that once it knows which of the two it has.
-global token idname lvars lvartype lvararr lvarstruct sdefs
+global token idname lvars lvartype lvararr lvarstruct sdefs blkdecl
 nparams = 0;
 nunnamed = 0;
 names = {};
@@ -2472,6 +2476,7 @@ for k = nparams:-1:1
         fail(sprintf('duplicate parameter %s', nm));
     end
     lvars.(nm) = base + acc;
+    blkdecl.(nm) = 1;           % a parameter is declared in the function's block
     lvartype.(nm) = types{k};
     lvararr.(nm) = 0;
     lvarstruct.(nm) = bvs{k};   % a by-value struct copy
@@ -2488,7 +2493,7 @@ end
 function parse_statement()
 % statement := declaration | '{' statement* '}' | if | while | for | do |
 % break | continue | return | expr ';'
-global token token_val idname typedefs src si lvars lvartype lvararr lvarstruct lvarstride lstatics
+global token token_val idname typedefs src si lvars lvartype lvararr lvarstruct lvarstride lstatics blkdecl
 if token == 131 || token == 134 || token == 178 || token == 198 || ...  % int/char/struct/union
    token == 188 || ...                                                % unsigned
    token == 189 || token == 190 || token == 191 || token == 192 || ... % double/const/register/static
@@ -2504,6 +2509,8 @@ elseif token == 123         % '{': block — C scopes block locals: a
     save_blvararr = lvararr;   save_blvarstruct = lvarstruct;
     save_blvarstride = lvarstride;
     save_blstatics = lstatics;
+    save_blblk = blkdecl;      % names may be redeclared in here
+    blkdecl = struct();
     while token ~= 125      % '}'
         parse_statement();
     end
@@ -2512,6 +2519,7 @@ elseif token == 123         % '{': block — C scopes block locals: a
     lvararr = save_blvararr;   lvarstruct = save_blvarstruct;
     lvarstride = save_blvarstride;
     lstatics = save_blstatics;
+    blkdecl = save_blblk;
 elseif token == 151         % if
     parse_if();
 elseif token == 152         % while
@@ -2766,8 +2774,15 @@ deflbl = '';
 while token ~= 125          % '}'
     if token == 180         % case
         next();
+        sgn = 1;
+        if token == 45          % '-' before the value: `case -1:` is C
+            sgn = -1;
+            next();
+        elseif token == 43      % unary '+'
+            next();
+        end
         if token == 128          % numeric constant
-            v = double(token_val);
+            v = sgn * double(token_val);
             next();
         elseif token == 150 && isfield(enums, idname)   % enum constant
             v = double(enums.(idname));
@@ -2902,7 +2917,7 @@ function parse_declarators(base, stdef, tdims, was_static)
 % parse_declarators - the declarator list of a declaration, the type having
 % been parsed already. Split out so that `enum { … } v;` can register the
 % constants and then declare v with the same code.
-global token idname lvars lvartype lvararr lvarstruct lvarstride lvararrsz fbytes token_val strtext lstatics
+global token idname lvars lvartype lvararr lvarstruct lvarstride lvararrsz fbytes token_val strtext lstatics blkdecl
 global globals gtype garr gstruct gvararrsz gstride glist lstatics cfn
 if isa(stdef, 'cell')
     % a local struct definition: register the tag, then either the ';'
@@ -2937,9 +2952,10 @@ while true
         expect(41);             % ')'
         skip_prototype();       % (params): parsed and discarded
     end
-    if isfield(lvars, name)
+    if isfield(blkdecl, name)
         fail(sprintf('duplicate local %s', name));
     end
+    blkdecl.(name) = 1;         % shadows an enclosing local, if there is one
     if is_fptr
         t = 2000 + base + 2 * depth;   % 2000 + the full return type
     else
@@ -3315,8 +3331,8 @@ end
 
 function parse_conditional()
 % conditional := logical_or ('?' assignment ':' conditional)? — the else
-% branch is right-associative; the result is int-typed.
-global token etype
+% branch is right-associative; the branches meet at their common type.
+global token etype out
 parse_logical_or();
 if token == 63              % '?'
     next();
@@ -3331,15 +3347,29 @@ if token == 63              % '?'
     else
         fail('missing colon in conditional');
     end
+    jmpidx = numel(out);    % branch 1's value is in %rax (or %xmm0) here
     em(sprintf('\tjmp\t%s', e));
     em(sprintf('%s:', f));
     parse_conditional();
     t2 = etype;
     em(sprintf('%s:', e));
+    % C 6.5.15: the branches meet at their common type, so the VALUE has to be
+    % converted - the type alone is not enough, and a join shared by both
+    % branches cannot convert afterwards. A double branch makes the result a
+    % double, so the integer branch (whichever it is) widens itself.
     if t1 == 6 || t2 == 6
-        etype = 6;      % a double branch promotes the result
+        etype = 6;
+        if t1 ~= 6
+            % branch 1 was already emitted: put its conversion in front of the
+            % jump it takes, so it runs on that path only
+            out = [out(1:jmpidx - 1), {sprintf('\tcvtsi2sdq\t%%rax, %%xmm0')}, ...
+                   out(jmpidx:end)];
+        end
+        if t2 ~= 6
+            em('\tcvtsi2sdq\t%rax, %xmm0');
+        end
     else
-        etype = 0;
+        etype = arith_type(t1, t2);
     end
 end
 end
@@ -3466,8 +3496,20 @@ while token == 61 || (token >= 160 && token <= 169)
             elseif op == 162    % *=
                 em('\timulq\t%rbx, %rax');
             elseif op == 163 || op == 164   % /= %%=
-                em('\tcqto');
-                em('\tidivq\t%rbx');
+                % the same conversions as the binary operator: unsigned when
+                % the common type is, and at its width
+                ctype = arith_type(sav_ltype, etype);
+                if is_unsigned_type(ctype)
+                    if int_width(ctype) == 4
+                        em('\tmovl\t%eax, %eax');
+                        em('\tmovl\t%ebx, %ebx');
+                    end
+                    em('\txorq\t%rdx, %rdx');
+                    em('\tdivq\t%rbx');
+                else
+                    em('\tcqto');
+                    em('\tidivq\t%rbx');
+                end
                 if op == 164
                     em('\tmovq\t%rdx, %rax');
                 end
@@ -3900,9 +3942,19 @@ while token == 42 || token == 47 || token == 37   % '*' '/' '%'
     else
         em('\tmovq\t%rax, %rbx');   % rhs
         em('\tpopq\t%rax');   % lhs
+        % C 6.3.1.8: both operands convert to the COMMON type before the
+        % operation, so the division is unsigned when either side is (at the
+        % common width) - not only when the dividend is. It also happens at the
+        % common width: `-1 / 2u` is 4294967295 / 2, not (2^64 - 1) / 2, so a
+        % 32-bit common type zero-extends both operands first.
+        ctype = arith_type(sav_etype, rhs_t);
         if op == 42
             em('\timulq\t%rbx, %rax');
-        elseif is_unsigned_type(int_promote(sav_etype))
+        elseif is_unsigned_type(ctype)
+            if int_width(ctype) == 4
+                em('\tmovl\t%eax, %eax');
+                em('\tmovl\t%ebx, %ebx');
+            end
             em('\txorq\t%rdx, %rdx');
             em('\tdivq\t%rbx');        % unsigned
             if op == 37
@@ -3915,7 +3967,7 @@ while token == 42 || token == 47 || token == 37   % '*' '/' '%'
                 em('\tmovq\t%rdx, %rax');
             end
         end
-        etype = arith_type(sav_etype, rhs_t);
+        etype = ctype;
         em_narrow(etype);
     end
 end
@@ -4147,6 +4199,7 @@ elseif token == 183         % sizeof: type or expression
                 token == 188 || token == 189 || token == 193 || token == 194 || ...
                 token == 195 || ...
                 token == 196 || ...     % short/word/long/signed
+                token == 185 || ...     % enum Tag: an int, but it was a parse error
                 (token == 150 && isfield(typedefs, idname))   % a type
             [base, stdef, tdims] = parse_basetype();
             if isa(stdef, 'cell')   % `sizeof(struct { … })`: register it
@@ -4585,6 +4638,10 @@ for k = numel(ops):-1:1
         em('\tmovzbl\t%al, %eax');
     elseif op == 38         % '&': address-of — drop the trailing load
         [is_lv, bf2] = lvalue_addr();
+        % the result is a pointer even when the operand is an array, so the
+        % array size the expression carried must not survive: sizeof(&a) is 8,
+        % not sizeof(a)
+        curarrsz = 0;
         if ~is_lv && etype < 2
             fail('bad address of');
         end

@@ -572,6 +572,48 @@ disagreed: x86sim returned 96, the gcc-assembled cctests path returned **5**
 `cc32_byval.c` runs through the cctests path so that class now fails the
 suite. Ceiling 14810.
 
+**Six semantics bugs from one corner probe (2026-11-04).** A single C file
+(`cc50_corners.c`) of well-defined language corners no existing guard covered -
+shadowing, `sizeof` not evaluating, the comma operator, the conditional's common
+type, enum values, switch fallthrough and negative case labels, goto across
+blocks, do-while with continue, static functions, struct assignment as a value,
+short-circuit evaluation, pointer arithmetic, char signedness, nested break,
+multiple declarators - found six real bugs. Five were gaps that made legal C
+fail to compile or report the wrong size:
+
+- **An inner block could not shadow a local** (`duplicate local x`). The check
+  asked the whole function frame instead of the current block. A `blkdecl` set,
+  saved and cleared with each block, is the question C actually asks.
+- **`case -2:` was a parse error.** A case label may carry a sign.
+- **`sizeof(enum Tag)` was a parse error** - the type list under `sizeof(` did
+  not include `enum`, which is an int.
+- **`sizeof(&a)` for an array `a` reported the array size.** `&` yields a
+  pointer, so the array-ness the expression carried has to be dropped.
+- **A conditional with one double branch reported `double` but left an int.**
+  C 6.5.15 makes the branches meet at their common type, so `1 ? 1 : 2.0` is
+  `1.0`; the integer branch now widens itself before the join (branch 1's
+  conversion is inserted in front of the jump it already emitted).
+
+The sixth was arithmetic, and it is the same root cause in two places: the
+**usual arithmetic conversions were not applied before dividing**. `-1 / 2u`
+was 0 (a signed `idivq` of -1 by 2) where C says 4294967295 / 2 = 2147483647,
+and `-1 % 2u` was 4294967295 where C says 1. Division and modulo now decide
+signedness from the *common* type and zero-extend both operands to its width
+first - 32 bits for `int`/`unsigned`, so the conversion happens where C does it,
+not at 64 bits. Compound `/= %=` had the same bug and the same fix.
+
+Two more gaps were found and are deliberately NOT fixed yet, both also the usual
+arithmetic conversions: **the comparison operators ignore unsigned-ness**
+(`-1 > 0u` answers 0, C says 1) and **only the left operand of `+` decays an
+array** (`*(1 + a)` is wrong). The guard states both in its header rather than
+asserting them.
+
+Guard `cc50_corners.c` (exit 96, identical output under gcc and on both
+engines). Ceiling 20005 -> **20805** (the guard plus the zero-extends the
+unsigned division now emits). Verified: instr 142/142 at 20805, hello.c 88, and
+on the C clone `cctests,gccstdout` for 1..82 **301/301** with stdout 82/82 and
+for 240..327 **235/235** with stdout 85/85.
+
 **printf length modifiers follow the type widths (2026-11-04).** Once `long`
 is 4 bytes the CRT is right by itself: `%ld` reads 32 bits, `%lld` 64, as gcc
 does. But the compiler rewrote every format string first -

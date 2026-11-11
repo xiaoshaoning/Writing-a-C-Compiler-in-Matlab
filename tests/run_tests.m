@@ -773,6 +773,7 @@ cctests = {
         'cc47_proto.c', 96;        % a prototype with no body, unnamed + variadic params (compiler track only)
         'cc48_bitfield_layout.c', 96;  % bit-fields share a unit; layout + values vs gcc (compiler track only)
         'cc49_long.c', 96;         % long is 4 bytes, long long 8; layout + wraparound vs gcc
+        'cc50_corners.c', 96;      % block shadowing, sizeof(enum), ternary, unsigned division
     };
     % The one range every corpus loop iterates. Three loops need it, and the
     % one that spelled the bounds out for itself was silently running the whole
@@ -1312,7 +1313,8 @@ cctests = {
     % the layout and value matrix, so it was 19474; the same-size sharing cases
     % (signed and unsigned in one unit) added 186, so it was 19660; making long
     % 4 bytes and long long 8 moved every long load/store to the 32-bit forms
-    % and added cc49_long.c, so it is 20005. See
+    % and added cc49_long.c, so it was 20005; cc50_corners.c plus the conversions
+    % the unsigned division now emits make it 20805. See
     % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
@@ -1338,8 +1340,8 @@ cctests = {
     if corpus_sliced
         fprintf('SKIP  instr regression: corpus total (sliced run)\n');
     else
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 20005, ...
-        sprintf('instr regression: corpus %d <= 20005', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 20805, ...
+        sprintf('instr regression: corpus %d <= 20805', ic_total));
     end
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 88, ...
         sprintf('instr regression: hello.c %d <= 88', ic_hello));
