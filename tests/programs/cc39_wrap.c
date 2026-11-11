@@ -23,8 +23,10 @@ int main() {
     if (s + s != 60000) { return 10; }              /* short -> int */
     if (c != -56) { return 11; }                    /* plain char is signed */
     if (sizeof(c + c) != 4) { return 12; }          /* char promotes to int */
-    if ((long)(gx * gx) != -1794967296L) { return 13; }  /* narrowed then widened */
-    if (sizeof(1L + 1) != sizeof(long)) { return 14; }   /* long wins */
+    if ((long long)(gx * gx) != -1794967296LL) { return 13; } /* narrowed then widened */
+    if (sizeof(1LL + 1) != sizeof(long long)) { return 14; }  /* long long wins */
+    if (sizeof(1L) != 4 || sizeof(long) != 4) { return 15; }  /* long is 32 bits here */
+    if (sizeof(1LL) != 8 || sizeof(long long) != 8) { return 16; }
     printf("%u %u %u %lu %ld\n", u + 1u, w * w, u * 2u, d / 3u, (long)(gx * gx));
     return 96;
 }

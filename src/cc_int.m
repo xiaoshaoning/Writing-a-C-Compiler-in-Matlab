@@ -418,6 +418,10 @@ elseif t == 9              % signed word (32-bit)
     em('\tmovslq\t(%rax), %rax');
 elseif t == 16             % unsigned word
     em('\tmovl\t(%rax), %eax');
+elseif t == 18             % signed long (32-bit on this target)
+    em('\tmovslq\t(%rax), %rax');
+elseif t == 21             % unsigned long
+    em('\tmovl\t(%rax), %eax');
 elseif t == 6              % double
     em('\tmovsd\t(%rax), %xmm0');
 else
@@ -433,7 +437,7 @@ if t == 1 || t == 12
     em(sprintf('\tmovb\t%%al, %s', addr));
 elseif t == 7 || t == 13
     em(sprintf('\tmovw\t%%ax, %s', addr));
-elseif t == 0 || t == 5 || t == 9 || t == 16
+elseif t == 0 || t == 5 || t == 9 || t == 16 || t == 18 || t == 21
     em(sprintf('\tmovl\t%%eax, %s', addr));
 elseif t == 6
     em(sprintf('\tmovsd\t%%xmm0, %s', addr));
@@ -1084,10 +1088,14 @@ elseif token == 188         % unsigned: 8 bytes unless a narrower base follows
     elseif token == 194     % 'unsigned word': 4 bytes
         base = 16;
         next();
-    elseif token == 195     % 'unsigned long [long] [int]': 8 bytes
-        base = 20;
+    elseif token == 195     % 'unsigned long [long] [int]'
         next();
-        if token == 195, next(); end    % 'long long'
+        if token == 195     % 'unsigned long long': 8 bytes
+            base = 20;
+            next();
+        else                % 'unsigned long': 4 bytes, this target's ABI
+            base = 21;
+        end
         if token == 131, next(); end
     else                    % 'unsigned [int]'
         base = 5;
@@ -1107,9 +1115,13 @@ elseif token == 196         % signed: the default signedness; consume the
         base = 9;
         next();
     elseif token == 195     % 'signed long [long] [int]'
-        base = 17;
         next();
-        if token == 195, next(); end    % 'long long'
+        if token == 195     % 'signed long long': 8 bytes
+            base = 17;
+            next();
+        else                % 'signed long': 4 bytes
+            base = 18;
+        end
         if token == 131, next(); end
     elseif token == 131     % 'signed int'
         next();
@@ -1126,11 +1138,15 @@ elseif token == 193         % short: 2-byte signed integer base
 elseif token == 194         % word: 4-byte signed integer base
     base = 9;
     next();
-elseif token == 195         % long [long]: 8-byte signed integer base
-    base = 17;
+elseif token == 195         % long [long]: 8 bytes only when it is doubled
     next();
-    if token == 131 || token == 195    % 'long int' / 'long long'
+    if token == 195         % 'long long': 8-byte signed integer base
+        base = 17;
         next();
+        if token == 131, next(); end
+    else                    % 'long': 4 bytes, as this target's ABI has it
+        base = 18;
+        if token == 131, next(); end    % 'long int'
     end
 elseif token == 178 || token == 198   % struct / union
     kw = token;
@@ -1500,14 +1516,14 @@ if is_unsigned_type(t)
         em('\tmovzbl\t%al, %eax');
     elseif t == 13
         em('\tmovzwl\t%ax, %eax');
-    elseif t == 5 || t == 16
+    elseif t == 5 || t == 16 || t == 21
         em('\tmovl\t%eax, %eax');
     end
 elseif t == 1
     em('\tmovsbq\t%al, %rax');
 elseif t == 7
     em('\tmovswq\t%ax, %rax');
-elseif t == 0 || t == 9
+elseif t == 0 || t == 9 || t == 18
     em('\tmovslq\t%eax, %rax');
 end
 end
@@ -1515,7 +1531,7 @@ end
 function b = is_unsigned_type(t)
 % is_unsigned_type - t is one of the unsigned base types (for bit-field
 % sign extension and unsigned arithmetic).
-b = (t == 5 || t == 12 || t == 13 || t == 16 || t == 20);
+b = (t == 5 || t == 12 || t == 13 || t == 16 || t == 20 || t == 21);
 end
 
 function c = pcode(base, depth)
@@ -1594,8 +1610,8 @@ if t == 1 || t == 12
     tsz = 1;
 elseif t == 7 || t == 13
     tsz = 2;
-elseif t == 0 || t == 5 || t == 9 || t == 16
-    tsz = 4;
+elseif t == 0 || t == 5 || t == 9 || t == 16 || t == 18 || t == 21
+    tsz = 4;                % int, word, long and their unsigned forms
 elseif t >= 1000 && t < 1002
     tsz = ssize_of(t);
 elseif t >= 1002 && t < 2000
@@ -4828,9 +4844,10 @@ end
 
 function lex_suffix()
 % lex_suffix - consume C integer-suffix letters (u/U/l/L) after a number and
-% record them in token_sfx (bit 1 = unsigned, bit 2 = long) so that the
-% literal's type is not lost: '1L << 40' is a long shift, an int one would be
-% narrowed to 32 bits.
+% record them in token_sfx (bit 1 = unsigned, bit 2 = long, bit 4 = long
+% long) so that the literal's type is not lost: '1LL << 40' is a 64-bit shift,
+% an int one would be narrowed to 32 bits, and '1L' is a 32-bit long on this
+% target just as it is under gcc.
 global src si token_sfx
 token_sfx = 0;
 while si <= numel(src)
@@ -4839,8 +4856,13 @@ while si <= numel(src)
         token_sfx = bitor(token_sfx, 1);
         si = si + 1;
     elseif c == 'l' || c == 'L'
-        token_sfx = bitor(token_sfx, 2);
         si = si + 1;
+        if si <= numel(src) && (src(si) == 'l' || src(si) == 'L')
+            token_sfx = bitor(token_sfx, 4);   % 'LL': long long, 8 bits more
+            si = si + 1;
+        else
+            token_sfx = bitor(token_sfx, 2);   % 'L': long, 32 bits here
+        end
     else
         break;
     end
@@ -4850,18 +4872,39 @@ end
 function t = num_type(v, sfx)
 % num_type - the type of an integer literal: its suffix when it has one,
 % otherwise int, or long when the value does not fit in an int (C 6.4.4.1).
+% C 6.4.4.1: the candidate types for the suffix are tried in order and the
+% first that holds the value wins. With long at 4 bytes here, 'L' no longer
+% implies 64 bits - a value that does not fit a long falls through to long
+% long, which is what gcc does too.
 u = bitand(sfx, 1);
 l = bitand(sfx, 2);
-if l
+ll = bitand(sfx, 4);
+fits_int = (v >= -2147483648 && v <= 2147483647);
+fits_ulong = (v >= 0 && v <= 4294967295);
+if ll
     if u
-        t = 20;             % unsigned long
+        t = 20;             % unsigned long long, 8 bytes
     else
-        t = 17;             % long
+        t = 17;             % long long, 8 bytes
+    end
+elseif l
+    if u
+        if fits_ulong
+            t = 21;         % unsigned long, 4 bytes
+        else
+            t = 20;         % does not fit: unsigned long long
+        end
+    else
+        if fits_int
+            t = 18;         % long, 4 bytes
+        else
+            t = 17;         % does not fit: long long
+        end
     end
 elseif u
     t = 5;                  % unsigned int
-elseif v > 2147483647 || v < -2147483648
-    t = 17;                 % too big for int
+elseif ~fits_int
+    t = 17;                 % does not fit an int: long long
 else
     t = 0;
 end

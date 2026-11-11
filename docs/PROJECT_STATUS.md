@@ -395,7 +395,8 @@ hex/octal wrap to the all-ones pattern; compiler track only, exit 7).
 Ceiling 10938 → 11047; suite **780/780**.
 
 **Width-type locals, casts and sizeof (2026-09-19).** `parse_basetype` had
-long accepted `short` (2-byte), `word` (4-byte) and `long` (8-byte), but
+long accepted `short` (2-byte), `word` (4-byte) and `long` (8-byte then;
+4 since the 2026-11-04 round), but
 the places that decide "is this a type?" — `parse_statement`'s declaration
 dispatch, `parse_for`'s init, `is_cast` and `sizeof(type)` — omitted
 tokens 193/194/195, so `short s = 3;` failed while globals of those types
@@ -521,9 +522,10 @@ positive past 2^31. The operators now apply the usual arithmetic conversions
 (`em_narrow`), so an int result is `movslq`-ed to 32 bits, an unsigned one
 zero-extended, and a `long` left alone. The same pass found that
 **integer-literal suffixes were lexed but discarded** - `1L << 40` was a
-32-bit shift that came out 0 - so `lex_suffix` now records u/l in
-`token_sfx` and `num_type` gives the literal its type (int, or long when it
-does not fit). `volatile` is accepted as a no-op qualifier too. Guard
+32-bit shift that came out 0 - so `lex_suffix` records the suffix in
+`token_sfx` and `num_type` gives the literal its type (int, or long long when
+it does not fit; `LL` was added on 2026-11-04, when `L` became a 32-bit long
+to match the ABI). `volatile` is accepted as a no-op qualifier too. Guard
 `cc39_wrap.c` (exit 96). Suite 811/811; hello.c 84 -> 88 instructions,
 ceiling 15819 -> **16704**.
 
@@ -569,6 +571,37 @@ disagreed: x86sim returned 96, the gcc-assembled cctests path returned **5**
 `cc32_byval.c` runs through the cctests path so that class now fails the
 suite. Ceiling 14810.
 
+**`long` is 4 bytes, `long long` is 8 (2026-11-04).** The value model was
+LP64-flavoured: `long` was 8 bytes on a compiler that emits Win64, where gcc's
+`long` is 4. So `sizeof(long)` was 8, `sizeof(1L)` was 8, struct layout with a
+`long` member was wrong (`{char c; long l}` was 16 here against gcc's 8 with `l`
+at 4), and `long v = 1; v << 40` stayed exact where gcc wraps to 0. Measured
+against gcc, then fixed: `long`/`signed long` get their own 4-byte codes (18/21)
+and `long long` keeps 17/20, so `sizeof(long)` 4, `sizeof(long long)` 8,
+`sizeof(1L)` 4 and `sizeof(1LL)` 8, the structs are 8/16 with members at 4/8,
+`long` arithmetic wraps at 32 bits and `1LL << 40` still works.
+
+Two things had to move with it, and both are the point of the change:
+
+- `num_type` now implements C 6.4.4.1's candidate ladder instead of a flat
+  "L means 64 bits". A suffixed literal tries long, then long long, so
+  `9223372036854775807L` is still a 64-bit value (it cannot fit a 4-byte long)
+  while `1L` is 32-bit. `lex_suffix` distinguishes `L` from `LL`.
+- `mx_preamble.m` built its MEX types on `long` (`typedef long mwSize/mwIndex/
+  mxChar/mxLogical/int64_t`). All five are `long long` now - `mwIndex` in
+  particular must stay 8 bytes or the sparse layout indexes at the wrong
+  stride, which is the bug fixed in 2f66dc6. The mx smoke and mex_run gates
+  (6/6 each) can still see those types; the gcc cross-track gate cannot, because
+  9 of its 20 inputs are missing from the clone's corpus.
+
+Guards that had quietly *depended* on the 8-byte `long` were updated to say
+`long long` where they meant 64 bits: `cc24_wide.c`, `cc25_fmt.c`, `cc26_word.c`
+(widening into a long would truncate what it exists to check) and `cc39_wrap.c`
+(which now also asserts `sizeof(1L) == 4` and `sizeof(1LL) == 8`). New guard
+`cc49_long.c` (exit 96, gcc-comparable): six `sizeof`s, three struct layouts
+with member offsets, 32-bit wraparound for `long` against none for `long long`,
+and 2^40 needing `long long`. Ceiling 19660 -> **20005**; hello.c 88 unchanged.
+
 **Bit-fields pack, and `sizeof` matches gcc (2026-11-04).** Consecutive
 bit-fields share one storage unit - gcc's MS layout, which is what this target
 (x86-64 ucrt64) uses. The key is the declared type's **size**, not its identity:
@@ -580,11 +613,9 @@ the unit's whole size. The first version of this compared declared types and so
 split `int` from `unsigned int`, which is why the same-size cases are in the
 guard now: six of eight shapes were wrong until that was measured.
 
-Shapes involving `long` bit-fields differ from gcc for a separate, documented
-reason: `long` is 8 bytes in this dialect (`word` is the 4-byte type), so
-`{long a:3; unsigned long b:3}` is 8 here against gcc's 4 with its 4-byte
-`long`. That is the width choice, not the packing rule, and the guard avoids
-`long` so it stays comparable with gcc. The shapes that were 2-4x too big are now
+`long` bit-field shapes agree too, since the 2026-11-04 round made `long` 4
+bytes: `{long a:3; unsigned long b:3}` and `{int a:3; long b:3}` are both 4,
+as gcc has them. The shapes that were 2-4x too big are now
 exact, measured against gcc: `{unsigned a:3; b:5}` 4, `{int a:4; b:4; c:4;
 d:4}` 4, `{unsigned char a:3; b:5}` 1, `{char c; unsigned short a:4; b:4}` 4,
 `{unsigned short a:9; b:9}` 4, `{u:3; u:5; int n}` 8 with `n` at 4, an array of

@@ -4,10 +4,10 @@
  * so neither can be the oracle. Exit 96. */
 #include <stdio.h>
 int main() {
-    long a = 9007199254740993;              /* 2^53 + 1 */
-    long b = 9223372036854775806;           /* INT64_MAX - 1 */
-    long c = -9223372036854775807 - 1;      /* INT64_MIN */
-    long d = -9007199254740993;
+    long long a = 9007199254740993;         /* 2^53 + 1 */
+    long long b = 9223372036854775806;      /* INT64_MAX - 1 */
+    long long c = -9223372036854775807LL - 1;   /* INT64_MIN */
+    long long d = -9007199254740993;
     if (a - 9007199254740992 != 1) { return 1; }
     if (b - 9223372036854775805 != 1) { return 2; }
     if (c + 9223372036854775807 != -1) { return 3; }
