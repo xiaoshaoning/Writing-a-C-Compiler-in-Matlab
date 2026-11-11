@@ -87,7 +87,8 @@ token = 0;
 token_val = 0;
 token_dval = 0;      % the double value of a float literal
 token_isflt = 0;     % 1 when the current Num is a float (double) literal
-token_sfx = 0;       % integer-literal suffix bits: 1 = u/U, 2 = l/L
+token_sfx = 0;       % integer-literal suffix bits: 1 = u/U, 2 = l/L, 4 = ll/LL
+token_base = 10;     % and the base a literal was written in: 10, 16 or 8
 strtext = [];   % last string literal as DOUBLE codes (the clone mangles
                 % backslash-bearing char strings crossing globals)
 lbl = 0;      % unique-label counter for short-circuit jumps
@@ -1469,16 +1470,11 @@ end
 end
 
 function w = int_width(t)
-% int_width - byte width of an integer type code, for the conversions.
-if t == 17 || t == 20
-    w = 8;
-elseif t == 7 || t == 13
-    w = 2;
-elseif t == 1 || t == 12
-    w = 1;
-else
-    w = 4;                  % int, unsigned int, promoted narrow types
-end
+% int_width - byte width of an integer type code, for the conversions. The
+% widths are tsize's business - this used to carry a second copy of the table,
+% which would have gone on returning 4 for a wider type added later. Every
+% integer code maps the same way in both.
+w = tsize(t);
 end
 
 function t = arith_type(a, b)
@@ -3960,7 +3956,7 @@ function parse_unary()
 % decay (no load, estruc = 1 for struct values).
 global token token_val token_dval token_isflt token_sfx idname strtext lvars lvartype lvararr lvarstruct ...
        globals gtype garr gstruct funcs fret frettype fparams called ltype libfns libcalls ...
-       etype estruc lvarstride gstride bstride lvararrsz gvararrsz curarrsz si typedefs fbytes fptypes libargt libret enums out lstatics lbf
+       etype estruc lvarstride gstride bstride lvararrsz gvararrsz curarrsz si typedefs fbytes fptypes libargt libret enums out lstatics lbf token_base
 ops = [];
 while token == 45 || token == 126 || token == 33 || token == 43 || ...   % - ~ ! +
       token == 38 || token == 42 || token == 170 || token == 171          % & * ++ --
@@ -4150,7 +4146,7 @@ elseif token == 128         % Num
         etype = 6;
     else
         em(sprintf('\tmovq\t$%d, %%rax', token_val));
-        etype = num_type(token_val, token_sfx);
+        etype = num_type(token_val, token_sfx, token_base);
     end
     estruc = 0;
     next();
@@ -4803,7 +4799,7 @@ function b = lex_hex()
 % returns 0 without consuming anything otherwise. Called from next()'s
 % number branch. The value accumulates with bitshift/bitor so full-width
 % constants wrap mod 2^64 like C rather than saturating like int64 */+.
-global src si token token_val token_isflt
+global src si token token_val token_isflt token_base
 b = 0;
 if si > numel(src) || src(si) ~= '0' || si + 1 > numel(src) || ...
         ~(src(si+1) == 'x' || src(si+1) == 'X')
@@ -4839,6 +4835,7 @@ lex_suffix();
 token = 128;                % Num
 token_val = v;
 token_isflt = 0;
+token_base = 16;            % hex: C also considers the unsigned types
 b = 1;
 end
 
@@ -4869,18 +4866,20 @@ while si <= numel(src)
 end
 end
 
-function t = num_type(v, sfx)
+function t = num_type(v, sfx, base)
 % num_type - the type of an integer literal: its suffix when it has one,
 % otherwise int, or long when the value does not fit in an int (C 6.4.4.1).
-% C 6.4.4.1: the candidate types for the suffix are tried in order and the
-% first that holds the value wins. With long at 4 bytes here, 'L' no longer
-% implies 64 bits - a value that does not fit a long falls through to long
-% long, which is what gcc does too.
+% C 6.4.4.1: the candidate types for the literal and its suffix are tried in
+% order and the first that holds the value wins. Decimal considers only signed
+% types; a hex or octal literal also considers the unsigned ones, which is why
+% 0xFFFFFFFF is an unsigned int (4 bytes) and 2147483648 is a long long (8).
+% With long at 4 bytes here, 'L' no longer implies 64 bits - a value that does
+% not fit a long falls through to long long, as gcc does.
 u = bitand(sfx, 1);
 l = bitand(sfx, 2);
 ll = bitand(sfx, 4);
 fits_int = (v >= -2147483648 && v <= 2147483647);
-fits_ulong = (v >= 0 && v <= 4294967295);
+fits_uint = (v >= 0 && v <= 4294967295);
 if ll
     if u
         t = 20;             % unsigned long long, 8 bytes
@@ -4889,7 +4888,7 @@ if ll
     end
 elseif l
     if u
-        if fits_ulong
+        if fits_uint
             t = 21;         % unsigned long, 4 bytes
         else
             t = 20;         % does not fit: unsigned long long
@@ -4902,11 +4901,22 @@ elseif l
         end
     end
 elseif u
-    t = 5;                  % unsigned int
-elseif ~fits_int
-    t = 17;                 % does not fit an int: long long
+    if fits_uint
+        t = 5;              % unsigned int, 4 bytes
+    else
+        t = 20;             % does not fit: unsigned long long
+    end
+elseif base ~= 10 && v < 0
+    t = 20;                 % a hex/octal pattern with the top bit set is
+                            % >= 2^63: only unsigned long long holds it. The
+                            % int64 pattern alone would say -1 and fit an int.
+elseif fits_int
+    t = 0;                  % int
+elseif base ~= 10 && fits_uint
+    t = 5;                  % hex/octal also consider the unsigned types, and
+                            % unsigned int comes before the wider signed ones
 else
-    t = 0;
+    t = 17;                 % long is 4 bytes, so long long is next
 end
 end
 function lex_number()
@@ -4916,7 +4926,7 @@ function lex_number()
 % fraction/exponent making it a double, and an optional integer suffix
 % (lex_suffix). token is 128, token_val is the integer (or the IEEE bit
 % pattern of a double), and token_dval/token_isflt are set for a float.
-global src si token token_val token_dval token_isflt
+global src si token token_val token_dval token_isflt token_base
     isflt = 0;
     sstart = si;
     if lex_hex()
@@ -4943,6 +4953,7 @@ global src si token token_val token_dval token_isflt
         token = 128;                % Num
         token_val = v;
         token_isflt = 0;
+        token_base = 8;             % octal: unsigned candidates too
         return;
     end
     while si <= numel(src) && src(si) >= '0' && src(si) <= '9'
@@ -4986,4 +4997,5 @@ global src si token token_val token_dval token_isflt
     token = 128;                % Num
     token_val = v;
     token_isflt = 0;
+    token_base = 10;
     return;end

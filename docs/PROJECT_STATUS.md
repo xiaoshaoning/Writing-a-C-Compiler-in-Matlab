@@ -583,10 +583,15 @@ and `long long` keeps 17/20, so `sizeof(long)` 4, `sizeof(long long)` 8,
 
 Two things had to move with it, and both are the point of the change:
 
-- `num_type` now implements C 6.4.4.1's candidate ladder instead of a flat
-  "L means 64 bits". A suffixed literal tries long, then long long, so
-  `9223372036854775807L` is still a 64-bit value (it cannot fit a 4-byte long)
-  while `1L` is 32-bit. `lex_suffix` distinguishes `L` from `LL`.
+- `num_type` implements C 6.4.4.1's candidate list instead of a flat "L means
+  64 bits", and that list needs the literal's **base**: decimal considers only
+  signed types, while a hex or octal literal considers the unsigned ones too.
+  So `0xFFFFFFFF` is an `unsigned int` (4 bytes; it typed as 8 before this was
+  read carefully) and `2147483648` is a `long long` (8). A hex pattern with the
+  top bit set is >= 2^63, so `0xFFFFFFFFFFFFFFFF` is an `unsigned long long`
+  (8; the raw int64 pattern looks like -1 and had typed it as a 4-byte int).
+  `lex_suffix` distinguishes `L` from `LL`, and the lexer records the base as
+  `token_base`, which is the only reason the two lists can differ at all.
 - `mx_preamble.m` built its MEX types on `long` (`typedef long mwSize/mwIndex/
   mxChar/mxLogical/int64_t`). All five are `long long` now - `mwIndex` in
   particular must stay 8 bytes or the sparse layout indexes at the wrong
@@ -601,6 +606,11 @@ Guards that had quietly *depended* on the 8-byte `long` were updated to say
 `cc49_long.c` (exit 96, gcc-comparable): six `sizeof`s, three struct layouts
 with member offsets, 32-bit wraparound for `long` against none for `long long`,
 and 2^40 needing `long long`. Ceiling 19660 -> **20005**; hello.c 88 unchanged.
+
+`int_width` had been carrying a second copy of the width table (its `else` arm
+said 4 for anything unlisted, so the new `long` codes were right by luck). It
+asks `tsize` now - one table, identical mapping, and the corpus total did not
+move.
 
 **Bit-fields pack, and `sizeof` matches gcc (2026-11-04).** Consecutive
 bit-fields share one storage unit - gcc's MS layout, which is what this target
