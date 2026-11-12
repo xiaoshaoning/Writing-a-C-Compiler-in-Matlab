@@ -63,6 +63,12 @@ if ost_slice.sliced
 end
 
 npass = 0;
+% The machine-readable result, written once at the end (see the summary below) and
+% removed here, so its presence means THIS run reached the end. tests/run_all.sh
+% reads it to tell a finished run from one the host killed; parsing the summary
+% line instead meant the wording of a human-facing message was a contract, and a
+% reworded summary turned a green run into a reported failure.
+del('run_tests.verdict');
 nfail = 0;
 
 % --- group 1: runtime primitives gate ---
@@ -1662,6 +1668,11 @@ cctests = {
 
 
 fprintf('run_tests: %d tests, %d passed, %d failed\n', npass + nfail, npass, nfail);
+fid = fopen('run_tests.verdict', 'w');
+if fid > 0
+    fprintf(fid, '%d %d\n', npass, nfail);
+    fclose(fid);
+end
 fid = fopen('run_tests.log', 'a');
 if fid > 0
     fprintf(fid, 'run_tests: %d tests, %d passed, %d failed\n', ...

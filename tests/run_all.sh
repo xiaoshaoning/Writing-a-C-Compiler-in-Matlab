@@ -10,12 +10,18 @@
 # outcomes, not two. This host kills run_tests.m at a random point (its header
 # records deaths at 125..773 of ~817 checks, always with 0 failures), and a killed
 # run returns the same non-zero code a FAILING run returns - so the exit code
-# cannot be trusted to tell them apart. The summary line can: it is printed once,
-# last, by the harness itself.
+# cannot be trusted to tell them apart.
 #
-#   0 passed                      summary says 0 failed
-#   1 failed                      summary present, failures counted
-#   2 cut short                   no summary at all: the process died
+#   VERDICT 0  passed      the harness reached its summary and counted 0 failures
+#   VERDICT 1  failed      the harness reached its summary with failures
+#   VERDICT 2  cut short   it never reached the summary: the process died
+#
+# These are verdicts about the run, not process exit codes. The evidence is the
+# file run_tests.m writes as its very last act, run_tests.verdict ("<passed>
+# <failed>"), which it also removes on startup - so the file existing means this run
+# finished. It used to grep the summary line out of the log, which made the wording
+# of a human-facing message a contract between two files: rewording it turned a
+# green run into a reported failure.
 #
 # A cut-short run is retried once, because the death is random and always leaves 0
 # failures; a second one is reported as cut short rather than retried forever.
@@ -28,16 +34,16 @@ pass=0
 fail=0
 step() { printf '\n=== %s\n' "$1"; }
 
-# suite_verdict LOGPATH - classify a finished run from its log, not from its exit
-# code. Prints 0, 1 or 2 as described above; leaves the log behind for the report.
+# suite_verdict - report 0, 1 or 2 for the main suite from run_tests.verdict.
+# A missing or unreadable file is 2: the harness never got to write it.
 suite_verdict() {
-    if ! grep -q '^run_tests: [0-9]* tests,' "$1"; then
-        return 2
-    fi
-    if grep -q '^run_tests: .* 0 failed$' "$1"; then
-        return 0
-    fi
-    return 1
+    [ -r run_tests.verdict ] || return 2
+    read -r cc_passed cc_failed < run_tests.verdict || return 2
+    case "$cc_failed" in
+        ''|*[!0-9]*) return 2 ;;          # not two numbers: treat as unfinished
+        0) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 step "main suite: tests/run_tests.m"
@@ -46,7 +52,7 @@ attempt=1
 while : ; do
     "$MATLAB" tests/run_tests.m 2>&1 | tee "$cc_log"
     rc=${PIPESTATUS[0]}
-    suite_verdict "$cc_log"; verdict=$?
+    suite_verdict; verdict=$?
     [ "$verdict" -ne 2 ] && break
     if [ "$attempt" -eq 1 ]; then
         echo "run_tests: CUT SHORT - no summary line, so the process died (exit $rc)."

@@ -614,9 +614,14 @@ the identical command was green. Measured: the killed process returns exit **1**
 the same code a failing run returns, and nothing in-process can report it, because
 no MATLAB code runs after the kill (an in-process `try`/`catch` guard was written,
 tested against synthetic suites, and then deleted for that reason). The evidence
-that survives is the summary line the harness prints last, so `run_all.sh` classifies
-from the *log*, not the exit code: summary with 0 failed = pass, summary with
-failures = failed, no summary = cut short, retried once since the death is random.
+that survives is a file: the harness writes `run_tests.verdict` ("<passed> <failed>")
+as its last act and deletes it on startup, so `run_all.sh` reads *that* instead of the
+exit code - file present and 0 failed = pass, present with failures = failed, absent =
+cut short, retried once since the death is random. Parsing the printed summary line
+was the first attempt and it was wrong in a way worth recording: the wording of a
+human-facing message became a contract between two files, and rewording it turned a
+green run into a reported failure. Measured on a reworded log, which the old
+classifier called "failed".
 A boot failure - an unrecognised function before the first check - classifies as cut
 short too, which is why the log path is printed with the verdict.
 
