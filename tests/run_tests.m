@@ -251,7 +251,7 @@ for k = 1:size(stests, 1)
     try
         out = evalc(sprintf('rc = xc(''tests/programs/%s'');', stests{k,1}));
         [npass nfail] = addcheck(npass, nfail, rc == stests{k,2} && ...
-                                 strcmp(out, [stests{k,3}]), ...
+                                 same_text(out, [stests{k,3}]), ...
             sprintf('%s -> exit %d, stdout match', stests{k,1}, stests{k,2}));
     catch e
         [npass nfail] = addcheck(npass, nfail, false, ...
@@ -1135,12 +1135,12 @@ cctests = {
             if ~oc_ok
                 error('could not read the compiler output');
             end
-            if ~strcmp(oc, oo)
+            if ~same_text(oc, oo)
                 % print what the two sides actually produced: on a runtime where
                 % the harness has never run, "they differ" is not enough to act on
                 dump_mismatch(ostests{ok}, 'xc', oo, 'cc_int', oc);
             end
-            [npass nfail] = addcheck(npass, nfail, strcmp(oc, oo), ...
+            [npass nfail] = addcheck(npass, nfail, same_text(oc, oo), ...
                 sprintf('output parity %s (xc == cc_int stdout)', ostests{ok}));
         catch e
             [npass nfail] = addcheck(npass, nfail, false, ...
@@ -1376,7 +1376,7 @@ cctests = {
                 so2x = so2x(1:s2p(end)-1);
             end
             so2 = so2 + 1;
-            if strcmp(so2o, so2x)
+            if same_text(so2o, so2x)
                 [npass nfail] = addcheck(npass, nfail, true, ...
                     sprintf('x86sim output parity %s', ostests{s2k}));
             else
@@ -1726,12 +1726,41 @@ for k = 1:numel(list)
 end
 end
 
+function same = same_text(a, b)
+% same_text - compare two captured stdouts. Both go through as_char first.
+%
+% Why: on R2024b, "0 chars vs 0 chars" compared FALSE. numel() was 0 on both
+% sides, both printed as [] - yet strcmp disagreed, which can only mean the two
+% sides were not the same type. That one fact explains the whole real-MATLAB
+% parity failure list: every FAILING program prints NOTHING (both sides empty)
+% and every PASSING one prints something (both sides char). A comparison that
+% depends on which type an empty capture comes back as is not a comparison.
+same = strcmp(as_char(a), as_char(b));
+end
+
+function s = as_char(t)
+% as_char - anything captured from a run or from evalc, as a 1xN char row.
+if iscell(t)
+    if isempty(t)
+        s = '';
+        return;
+    end
+    t = t{1};
+end
+if ~ischar(t)
+    t = char(t);
+end
+s = t(:).';
+s(s == char(13)) = [];
+end
+
 function dump_mismatch(nm, aname, atext, bname, btext)
 % dump_mismatch - the two sides of a stdout comparison that disagreed: their
 % lengths, the first place they part, and a window around it with whitespace made
 % visible. A failing comparison is unactionable without this: the harness used to
 % record only "they differ", which is no help on a runtime it has never run on.
-fprintf('      %s: %s %d chars, %s %d chars%s', nm, aname, numel(atext), bname, numel(btext), char(10));
+fprintf('      %s: %s %d chars (%s), %s %d chars (%s)%s', nm, aname, numel(atext), ...
+        class(atext), bname, numel(btext), class(btext), char(10));
 n = min(numel(atext), numel(btext));
 d = 0;
 for q = 1:n
@@ -1784,6 +1813,7 @@ if ok
     t(t == char(13)) = [];
 end
 delete(outfile);
+t = as_char(t);
 end
 
 function n = count_instr(fname)

@@ -594,13 +594,18 @@ fixed:
    parity, x86sim and union/typedef checks with them. They are `anonstruct3` and
    `fnstatic1_n` now; the emitted symbols change name, not shape (instruction
    total still 21498).
-3. **About fifty interpreter-vs-compiler stdout mismatches remain.** The exit
-   codes agree; the printed text does not. The failing set is the programs that
-   print NUMBERS - `pp_addrof`, `pp_array*`, `pp_arrinit*`, `pp_sizeof*`,
-   `pp_mdim*`, `pp_init*`, `pp_void*` - while `pp_s`, `pp_prtflen`, `pp_npercent`,
-   `pp_dynwidth`, `stress`, `stress2`, `hello` and `p6_printf*` pass. That is a
-   formatting difference between the interpreter's `sprintf` path and the CRT on
-   that runtime, and it is un-diagnosed: the harness records only "they differ".
+3. **About fifty "stdout mismatches" were not mismatches.** With the harness
+   printing both sides, the failing checks read `xc 0 chars, cc_int 0 chars` and
+   still compared FALSE. Two empty captures, unequal - so the two sides were not
+   the same TYPE, and an empty capture does not come back as the same thing a
+   non-empty one does on that runtime. That accounts for the split exactly: every
+   failing check was a program that prints nothing (`pp_addrof`, `pp_array*`,
+   `pp_arrinit*`, `pp_sizeof*`, `pp_mdim*`, `pp_init*`, `pp_void*`), every passing
+   one printed something (`pp_s`, `pp_prtflen`, `pp_npercent`, `pp_dynwidth`,
+   `stress`, `stress2`, `hello`, `p6_printf*`). `same_text` puts both sides through
+   `char` first, so the comparison no longer depends on which type an empty capture
+   has - which is also why it could never be reproduced on the clones: they return
+   the same type either way.
 
 **The suite runs on real MATLAB too - and the harness was what broke
 (2026-11-04).** `>> addpath('tests'); run_tests` on R2024b got through
