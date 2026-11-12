@@ -973,6 +973,25 @@ and the runtime library are the changelog entries above:
 
 ## Verification
 
+- **`tests/probe_matlab_portability.m` — the one claim this project has never
+  tested (2026-11-04).** Every number here is measured against gcc and two
+  runtimes, none against MathWorks MATLAB, which has no runnable install on the
+  development machine. The probe checks the language rules the compiler leans on
+  and then compiles three corpus programs and compares their x86sim exit codes
+  with the clones' answers. One command on a real MATLAB:
+
+      >> addpath('tests'); probe_matlab_portability
+
+  It checks that a function reading an undeclared global is an ERROR (the premise
+  `check_globals` is built on), that `c{end+1} = []` grows the cell, that
+  `bitshift` on int64 wraps while `int64` `+` saturates (the literal paths depend
+  on both), and that text-mode `fopen` strips CRs (`run_out` depends on it).
+  Run against the two runtimes it settles them: the C clone passes **8/8**; on
+  `cli-v13` the only failure is the filed `c{end+1} = []` bug, which this
+  reproduces from a second direction. `sprintf('%d', int64)` past 53 bits is
+  reported as INFO: both clones round through a double (2^53+1 prints as 2^53),
+  real MATLAB is exact, and the compiler does not depend on it because wide
+  literals are emitted in hex.
 - **Run the compile-heavy sections on the C clone; keep `cli-v13` for engine
   compatibility (measured 2026-11-04).** The same `src/` code is far cheaper to
   run on the clone: `CC_SECTIONS=instr` (all 327 corpus programs compiled and
