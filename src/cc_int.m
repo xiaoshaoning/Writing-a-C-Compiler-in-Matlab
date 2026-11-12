@@ -4437,7 +4437,11 @@ elseif token == 150         % Id: function call or variable
                     em('\tcvttsd2siq\t%xmm0, %rax');
                 end
                 pushed = 0;
-                if at == 6 || dt == 6
+                % dt is [] when the callee's argument type is unknown, and
+                % `[] == 6` is EMPTY - real MATLAB rejects an empty operand of
+                % `||` ("must be convertible to logical scalar") while the clones
+                % read it as false. Guarded like the two tests above it.
+                if at == 6 || (~isempty(dt) && dt == 6)
                     % a double-typed argument: its VALUE lives in %xmm0
                     % and is pushed onto the stack directly
                     em('\tsubq\t$8, %rsp');

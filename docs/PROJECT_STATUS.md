@@ -1005,11 +1005,15 @@ b
     reads back as 6 chars, where both clones give 4). `run_out` had stopped
     stripping CRs on the clones' behaviour; it strips them itself again, which is
     a no-op on the clones and correct on real MATLAB.
-  - **the compiler does not run there yet**: every compile stops with "Operands
-    to the logical AND (&&) and OR (||) operators must be convertible to logical
-    scalar values", so some condition in `cc_int.m` has a vector operand that
-    both clones accept element-wise. The probe now prints the failing stack, and
-    that is the next item - the project's central claim, untested until now.
+  - **the compiler did not run there**: every compile stopped with "Operands to
+    the logical AND (&&) and OR (||) operators must be convertible to logical
+    scalar values". The stack named `parse_unary`'s `if at == 6 || dt == 6`: `dt`
+    is `[]` whenever a call's argument type is unknown - which is every variadic
+    argument, i.e. every `printf` - and `[] == 6` is EMPTY, which real MATLAB
+    rejects inside `||` while the clones read it as false. Guarded like the two
+    tests above it. A sweep of every `src/` file for that whole class (a variable
+    that can be `[]`, compared without `isempty` inside a logical chain) now finds
+    none, and no `(end+1) = []` null-assignment growth remains either.
 - **Run the compile-heavy sections on the C clone; keep `cli-v13` for engine
   compatibility (measured 2026-11-04).** The same `src/` code is far cheaper to
   run on the clone: `CC_SECTIONS=instr` (all 327 corpus programs compiled and
