@@ -1229,7 +1229,6 @@ elseif token == 178 || token == 198   % struct / union
             nstid = nstid + 1;
             stags.(tag) = nstid;
         end
-        stdef = [];
         stdef.tag = tag;
         stdef.body = parse_struct_members(isunion);
     else
@@ -1453,13 +1452,18 @@ sdefs{nstid} = def;
 sid = nstid;
 end
 
-function def = sdef_of(stid)
-% sdef_of — the definition registered under stid, or a clear error.
+function def = sdef_of(t)
+% sdef_of — the definition behind struct VALUE type code t, or a clear error.
+%
+% Takes the TYPE CODE, not the id, so `(t - 1000) / 2` is written here and nowhere
+% else. The payload is parse_struct_members' tuple:
+%   {size, membermap, names, isunion, alignment}
 % An id can exist with no body: a tag is registered when first seen, so a member
 % may point at the type being defined, and `struct B *p;` may precede B's body.
 % A pointer to an incomplete type is legal C; needing its LAYOUT is not.
 global sdefs
-if stid > numel(sdefs) || isempty(sdefs{stid})
+stid = (t - 1000) / 2;
+if stid < 1 || stid > numel(sdefs) || isempty(sdefs{stid})
     fail('incomplete struct type: the tag was declared but never defined');
 end
 def = sdefs{stid};
@@ -1487,14 +1491,12 @@ end
 
 function sz = ssize_of(t)
 % ssize_of — byte size of a struct VALUE type (1000+2*stid).
-stid = (t - 1000) / 2;
-sz = sdef_of(stid){1};
+sz = sdef_of(t){1};
 end
 
 function m = member_lookup(t, name)
 % member_lookup — {offset, type} of member `name` in struct VALUE type t.
-stid = (t - 1000) / 2;
-mm = sdef_of(stid){2};
+mm = sdef_of(t){2};
 if isfield(mm, name)
     m = mm.(name);
 else
@@ -2261,12 +2263,11 @@ end
 function a = align_of(t)
 % align_of - the alignment a value of type t needs. A scalar aligns to its own
 % width, capped at 8, which is the widest alignment any type here has; a struct
-% value aligns to its own member-wise maximum (sdefs{stid}{5}). This is the one
+% value aligns to its own member-wise maximum (sdef_of(t){5}). This is the one
 % owner of that decision: member offsets and the struct's own alignment both
 % ask it. It is C's alignment, not the storage width - ssize_slot handles that.
-global sdefs
 if is_struct_code(t)
-    a = sdefs{(t - 1000) / 2}{5};
+    a = sdef_of(t){5};
 elseif is_ptr_code(t)
     a = 8;
 else

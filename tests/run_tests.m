@@ -45,20 +45,21 @@ run_gccstdout = sec_want('gccstdout');   % stdout vs the same source under gcc
 % CC_CORPUS=first:count slices the corpus itself (1-based). The corpus is the
 % biggest single unit (~6 minutes for 324 programs) so a section slice is not
 % always enough on a host that kills long runs; a program range is.
-[corpus_first, corpus_count] = slice_spec('CC_CORPUS');
-corpus_last = @(n) min(n, corpus_first + corpus_count - 1);
+corpus_slice = slice_spec('CC_CORPUS');
+corpus_last = @(n) slice_last(corpus_slice, n);
 % CC_OSTESTS=first:count slices the interpreter-vs-compiler parity lists, which is
 % how to make a diagnostic run small on a machine where the suite has never
 % finished (they are not covered by CC_CORPUS).
-[ost_first, ost_count] = slice_spec('CC_OSTESTS');
-ost_last = @(n) min(n, ost_first + ost_count - 1);
-corpus_sliced = ~isempty(getenv('CC_CORPUS'));
+ost_slice = slice_spec('CC_OSTESTS');
+ost_last = @(n) slice_last(ost_slice, n);
+corpus_sliced = corpus_slice.sliced;
 if corpus_sliced
-    fprintf('corpus slice: programs %d..%d%s', corpus_first, ...
-            corpus_first + corpus_count - 1, char(10));
+    fprintf('corpus slice: programs %d..%d%s', corpus_slice.first, ...
+            slice_last(corpus_slice, Inf), char(10));
 end
-if ~isempty(getenv('CC_OSTESTS'))
-    fprintf('ostests slice: %d..%d%s', ost_first, ost_first + ost_count - 1, char(10));
+if ost_slice.sliced
+    fprintf('ostests slice: %d..%d%s', ost_slice.first, ...
+            slice_last(ost_slice, Inf), char(10));
 end
 
 npass = 0;
@@ -780,7 +781,7 @@ cctests = {
     % one that spelled the bounds out for itself was silently running the whole
     % corpus on every sliced run - so it is computed once, here, and no loop
     % writes its own.
-    corpus_range = corpus_first:corpus_last(size(cctests, 1));
+    corpus_range = corpus_slice.first:corpus_last(size(cctests, 1));
     % cross-track parity: corpus programs the interpreter (xc) and the
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
     % Divergences are the known dialect gaps (structs, switch, typedef,
@@ -1089,7 +1090,7 @@ cctests = {
     % cross-track output parity: programs that print (via the compiler's
     % runtime shims) must produce the SAME stdout through both tracks (the
     % interpreter's trailing 'exit(N)' trace is stripped first).
-    for ok = ost_first:ost_last(numel(ostests))
+    for ok = ost_slice.first:ost_last(numel(ostests))
         % print the program BEFORE working on it: this loop is silent until a
         % check completes, so a hang leaves no trace of where it stopped
         fprintf('... output parity %s\n', ostests{ok});
@@ -1340,7 +1341,7 @@ cctests = {
     % stdout through the gcc-free simulator as through the interpreter.
     so2 = 0;
     if run_ostests
-    for s2k = ost_first:ost_last(numel(ostests))
+    for s2k = ost_slice.first:ost_last(numel(ostests))
         try
             del('tmp_cc.s');
             cc_int(['tests/programs/' ostests{s2k}], 'tmp_cc.s');
@@ -1705,29 +1706,40 @@ for k = 1:numel(list)
 end
 end
 
-function [first, count] = slice_spec(name)
+function spec = slice_spec(name)
 % slice_spec - read a "first:count" slice bound from environment variable `name`.
 %
-% Unset gives first = 1, count = Inf, so a caller can always compute
-% `last = min(n, first + count - 1)` and the whole range falls out without knowing
-% whether a slice was asked for.
+% Returns a structure:
+%   .first   the first index (1 when unset)
+%   .count   how many (Inf when unset)
+%   .sliced  whether the variable was set at all, so a caller that has to report or
+%            skip something never re-reads the environment to find out
 %
-% One parser for every slice: the convention is a single piece of knowledge, and
-% it had two copies (CC_CORPUS, CC_OSTESTS) which already disagreed - one clamped
-% through a function handle, the other through a closure, and only one printed.
+% slice_last() turns a spec plus a length into the last index. Both live here, so
+% the "first + count - 1, clamped" formula exists once: it had two copies, and the
+% "was a slice asked for?" question had two more.
 first = 1;
 count = Inf;
 raw = getenv(name);
-if isempty(raw)
-    return;
+spec.sliced = ~isempty(raw);
+if spec.sliced
+    colon = strfind(raw, ':');
+    if isempty(colon)
+        first = str2double(raw);
+    else
+        first = str2double(raw(1:colon(1) - 1));
+        count = str2double(raw(colon(1) + 1:end));
+    end
 end
-colon = strfind(raw, ':');
-if isempty(colon)
-    first = str2double(raw);
-else
-    first = str2double(raw(1:colon(1) - 1));
-    count = str2double(raw(colon(1) + 1:end));
+spec.first = first;
+spec.count = count;
 end
+
+function last = slice_last(spec, n)
+% slice_last - the last index of `spec` within a list of length n.
+% Pass n = Inf for the end the caller ASKED for rather than the end the list has,
+% which is what the range report prints.
+last = min(n, spec.first + spec.count - 1);
 end
 
 function del(f)
