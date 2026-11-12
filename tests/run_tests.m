@@ -785,45 +785,202 @@ cctests = {
     % compiler (cc_int) both support and agree on (mod 256 exit codes).
     % Divergences are the known dialect gaps (structs, switch, typedef,
     % for/do/break/continue, +=, &&/|| value semantics, declaration order).
+    % ONE NAME PER LINE. A newline inside a cell literal ends the ROW, so a
+    % line carrying several names makes rows of different widths - the clones
+    % pad them, real MATLAB rejects the whole literal with a vertcat error.
+    % A column is what the one reader (isin, which walks numel) expects.
     pshared = {
-        'stress.c',
-        'stress2.c',
-        'cc10_charcmp.c', 'cc10_charinit.c', 'cc10_charlit.c', 'cc10_charloc.c', 'cc10_charparam.c', 'cc10_charparamtrunc.c',
-        'cc10_chartrunc.c', 'cc10_global.c', 'cc10_globalchar.c', 'cc10_globalfn.c', 'cc10_globalinit.c', 'cc10_globalrw.c',
-        'cc10_mix.c', 'cc11_arr.c', 'cc11_arrchar.c', 'cc11_arrglobal.c', 'cc11_arrloop.c', 'cc11_chptr.c',
-        'cc11_comment.c', 'cc11_dec.c', 'cc11_incptr.c', 'cc11_incval.c', 'cc11_postinc.c', 'cc11_pp.c',
-        'cc11_preinc.c', 'cc11_preval.c', 'cc11_ptr.c', 'cc11_ptr2.c', 'cc11_ptr3.c', 'cc11_ptrarith.c',
-        'cc11_ptrparam.c', 'cc11_ptrsub.c', 'cc11_strlen.c', 'cc11_strlit.c', 'cc11_swap.c', 'cc11_tern.c',
-        'cc11_tern2.c', 'cc11_tern3.c', 'cc13_enum.c', 'cc13_enum2.c', 'cc13_ginit.c', 'cc13_init.c',
-        'cc19_hex.c',
-        'cc20_litforms.c',
-        'cc22_escapes.c',
-        'cc23_suffix.c',
-        'cc13_mdim.c', 'cc13_mdim2.c', 'cc13_mdim3.c', 'cc13_si2.c', 'cc13_si3.c',
-        'cc13_sinit.c', 'cc2_lnat.c', 'cc2_lnat0.c', 'cc2_lnatneg.c', 'cc2_neg.c',
-        'cc2_neg0.c', 'cc2_negnot.c', 'cc2_nested.c', 'cc2_not.c', 'cc2_not0.c', 'cc2_pos.c',
-        'cc3_and.c', 'cc3_mixed.c', 'cc3_or.c', 'cc3_prec1.c', 'cc3_prec2.c', 'cc3_prec3.c',
-        'cc3_prec4.c', 'cc3_shl.c', 'cc3_shr.c', 'cc3_shrall.c', 'cc3_shrneg.c', 'cc3_xor.c',
-        'cc4_and00.c', 'cc4_and01.c', 'cc4_and10.c', 'cc4_and11.c', 'cc4_assoc.c', 'cc4_assoc2.c',
-        'cc4_mix.c', 'cc4_notmix.c', 'cc4_or00.c', 'cc4_or01.c', 'cc4_or10.c', 'cc4_or11.c',
-        'cc4_prec1.c', 'cc4_prec2.c', 'cc5_chain.c', 'cc5_chain2.c', 'cc5_eq.c', 'cc5_eq0.c',
-        'cc5_ge.c', 'cc5_ge0.c', 'cc5_gt.c', 'cc5_gt0.c', 'cc5_le.c', 'cc5_le0.c',
-        'cc5_lt.c', 'cc5_lt0.c', 'cc5_mix.c', 'cc5_ne.c', 'cc5_ne0.c', 'cc5_negcmp.c',
-        'cc5_prec1.c', 'cc5_prec2.c', 'cc5_prec3.c', 'cc5_prec4.c', 'cc5_prec5.c', 'cc5_signed.c',
-        'cc5_signed0.c', 'cc6_add.c', 'cc6_assoc1.c', 'cc6_assoc2.c', 'cc6_assoc3.c', 'cc6_assoc4.c',
-        'cc6_div.c', 'cc6_divneg.c', 'cc6_divneg2.c', 'cc6_mix1.c', 'cc6_mod.c', 'cc6_modneg.c',
-        'cc6_modneg2.c', 'cc6_mul.c', 'cc6_negparen.c', 'cc6_negparen2.c', 'cc6_overflow.c', 'cc6_overflow2.c',
-        'cc6_paren.c', 'cc6_paren2.c', 'cc6_prec1.c', 'cc6_prec2.c', 'cc6_prec3.c', 'cc6_prec4.c',
-        'cc6_prec5.c', 'cc6_sub.c', 'cc7_arith.c', 'cc7_assignval.c', 'cc7_basic.c', 'cc7_chain.c',
-        'cc7_cmp.c', 'cc7_copy.c', 'cc7_div.c', 'cc7_init.c', 'cc7_initref.c', 'cc7_logic.c',
-        'cc7_mod.c', 'cc7_neg.c', 'cc7_negdiv.c', 'cc7_rmw.c', 'cc7_shl.c', 'cc7_stmt.c',
-        'cc7_sub.c', 'cc7_three.c', 'cc7_two.c', 'cc8_condassign.c', 'cc8_count.c', 'cc8_double.c',
-        'cc8_elif.c', 'cc8_else.c', 'cc8_else0.c', 'cc8_elsenobrace.c', 'cc8_if.c', 'cc8_if0.c',
-        'cc8_ifnobrace.c', 'cc8_nested.c', 'cc8_nestedif.c', 'cc8_retif.c', 'cc8_retwhile.c', 'cc8_sum.c',
-        'cc8_whilcmp.c', 'cc8_while.c', 'cc8_while0.c', 'cc8_while2.c', 'cc8_whileif.c', 'cc9_args.c',
-        'cc9_arith.c', 'cc9_assign.c', 'cc9_call.c', 'cc9_callee.c', 'cc9_chain.c', 'cc9_deep.c',
-        'cc9_exprargs.c', 'cc9_fact.c', 'cc9_fib.c', 'cc9_loop.c', 'cc9_multicall.c', 'cc9_nested.c',
-        'cc9_three.c',
+        'stress.c'
+        'stress2.c'
+        'cc10_charcmp.c'
+        'cc10_charinit.c'
+        'cc10_charlit.c'
+        'cc10_charloc.c'
+        'cc10_charparam.c'
+        'cc10_charparamtrunc.c'
+        'cc10_chartrunc.c'
+        'cc10_global.c'
+        'cc10_globalchar.c'
+        'cc10_globalfn.c'
+        'cc10_globalinit.c'
+        'cc10_globalrw.c'
+        'cc10_mix.c'
+        'cc11_arr.c'
+        'cc11_arrchar.c'
+        'cc11_arrglobal.c'
+        'cc11_arrloop.c'
+        'cc11_chptr.c'
+        'cc11_comment.c'
+        'cc11_dec.c'
+        'cc11_incptr.c'
+        'cc11_incval.c'
+        'cc11_postinc.c'
+        'cc11_pp.c'
+        'cc11_preinc.c'
+        'cc11_preval.c'
+        'cc11_ptr.c'
+        'cc11_ptr2.c'
+        'cc11_ptr3.c'
+        'cc11_ptrarith.c'
+        'cc11_ptrparam.c'
+        'cc11_ptrsub.c'
+        'cc11_strlen.c'
+        'cc11_strlit.c'
+        'cc11_swap.c'
+        'cc11_tern.c'
+        'cc11_tern2.c'
+        'cc11_tern3.c'
+        'cc13_enum.c'
+        'cc13_enum2.c'
+        'cc13_ginit.c'
+        'cc13_init.c'
+        'cc19_hex.c'
+        'cc20_litforms.c'
+        'cc22_escapes.c'
+        'cc23_suffix.c'
+        'cc13_mdim.c'
+        'cc13_mdim2.c'
+        'cc13_mdim3.c'
+        'cc13_si2.c'
+        'cc13_si3.c'
+        'cc13_sinit.c'
+        'cc2_lnat.c'
+        'cc2_lnat0.c'
+        'cc2_lnatneg.c'
+        'cc2_neg.c'
+        'cc2_neg0.c'
+        'cc2_negnot.c'
+        'cc2_nested.c'
+        'cc2_not.c'
+        'cc2_not0.c'
+        'cc2_pos.c'
+        'cc3_and.c'
+        'cc3_mixed.c'
+        'cc3_or.c'
+        'cc3_prec1.c'
+        'cc3_prec2.c'
+        'cc3_prec3.c'
+        'cc3_prec4.c'
+        'cc3_shl.c'
+        'cc3_shr.c'
+        'cc3_shrall.c'
+        'cc3_shrneg.c'
+        'cc3_xor.c'
+        'cc4_and00.c'
+        'cc4_and01.c'
+        'cc4_and10.c'
+        'cc4_and11.c'
+        'cc4_assoc.c'
+        'cc4_assoc2.c'
+        'cc4_mix.c'
+        'cc4_notmix.c'
+        'cc4_or00.c'
+        'cc4_or01.c'
+        'cc4_or10.c'
+        'cc4_or11.c'
+        'cc4_prec1.c'
+        'cc4_prec2.c'
+        'cc5_chain.c'
+        'cc5_chain2.c'
+        'cc5_eq.c'
+        'cc5_eq0.c'
+        'cc5_ge.c'
+        'cc5_ge0.c'
+        'cc5_gt.c'
+        'cc5_gt0.c'
+        'cc5_le.c'
+        'cc5_le0.c'
+        'cc5_lt.c'
+        'cc5_lt0.c'
+        'cc5_mix.c'
+        'cc5_ne.c'
+        'cc5_ne0.c'
+        'cc5_negcmp.c'
+        'cc5_prec1.c'
+        'cc5_prec2.c'
+        'cc5_prec3.c'
+        'cc5_prec4.c'
+        'cc5_prec5.c'
+        'cc5_signed.c'
+        'cc5_signed0.c'
+        'cc6_add.c'
+        'cc6_assoc1.c'
+        'cc6_assoc2.c'
+        'cc6_assoc3.c'
+        'cc6_assoc4.c'
+        'cc6_div.c'
+        'cc6_divneg.c'
+        'cc6_divneg2.c'
+        'cc6_mix1.c'
+        'cc6_mod.c'
+        'cc6_modneg.c'
+        'cc6_modneg2.c'
+        'cc6_mul.c'
+        'cc6_negparen.c'
+        'cc6_negparen2.c'
+        'cc6_overflow.c'
+        'cc6_overflow2.c'
+        'cc6_paren.c'
+        'cc6_paren2.c'
+        'cc6_prec1.c'
+        'cc6_prec2.c'
+        'cc6_prec3.c'
+        'cc6_prec4.c'
+        'cc6_prec5.c'
+        'cc6_sub.c'
+        'cc7_arith.c'
+        'cc7_assignval.c'
+        'cc7_basic.c'
+        'cc7_chain.c'
+        'cc7_cmp.c'
+        'cc7_copy.c'
+        'cc7_div.c'
+        'cc7_init.c'
+        'cc7_initref.c'
+        'cc7_logic.c'
+        'cc7_mod.c'
+        'cc7_neg.c'
+        'cc7_negdiv.c'
+        'cc7_rmw.c'
+        'cc7_shl.c'
+        'cc7_stmt.c'
+        'cc7_sub.c'
+        'cc7_three.c'
+        'cc7_two.c'
+        'cc8_condassign.c'
+        'cc8_count.c'
+        'cc8_double.c'
+        'cc8_elif.c'
+        'cc8_else.c'
+        'cc8_else0.c'
+        'cc8_elsenobrace.c'
+        'cc8_if.c'
+        'cc8_if0.c'
+        'cc8_ifnobrace.c'
+        'cc8_nested.c'
+        'cc8_nestedif.c'
+        'cc8_retif.c'
+        'cc8_retwhile.c'
+        'cc8_sum.c'
+        'cc8_whilcmp.c'
+        'cc8_while.c'
+        'cc8_while0.c'
+        'cc8_while2.c'
+        'cc8_whileif.c'
+        'cc9_args.c'
+        'cc9_arith.c'
+        'cc9_assign.c'
+        'cc9_call.c'
+        'cc9_callee.c'
+        'cc9_chain.c'
+        'cc9_deep.c'
+        'cc9_exprargs.c'
+        'cc9_fact.c'
+        'cc9_fib.c'
+        'cc9_loop.c'
+        'cc9_multicall.c'
+        'cc9_nested.c'
+        'cc9_three.c'
     };
     % programs whose stdout both tracks must agree on (used by the
     % gcc-gated output parity AND the gcc-free x86sim output parity)

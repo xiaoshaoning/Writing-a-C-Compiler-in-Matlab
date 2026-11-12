@@ -572,6 +572,29 @@ disagreed: x86sim returned 96, the gcc-assembled cctests path returned **5**
 `cc32_byval.c` runs through the cctests path so that class now fails the
 suite. Ceiling 14810.
 
+**The suite runs on real MATLAB too - and the harness was what broke
+(2026-11-04).** `>> addpath('tests'); run_tests` on R2024b got through
+`probe_primitives` 38/38, both selftests (30 VM cases, 9 lexer cases), and every
+p3/p4/p5/p6/pp corpus check - several hundred PASS lines - and then stopped in
+the HARNESS itself:
+
+    vertcat: Dimensions of arrays being concatenated are not consistent
+    run_tests, line 788:  pshared = {
+
+The cause is a MATLAB rule the clones do not enforce: **a newline inside a cell
+literal ends the ROW**. `pshared` listed five or six names per line, so it built a
+ragged matrix instead of a list - 38 rows of 5-6 entries, with shorter rows at the
+end - and MATLAB refuses to concatenate rows of different widths. The Rust engine
+pads the rows instead (it builds a 38x6 cell and carries on), which is why nothing
+here had ever noticed. Every OTHER literal in the harness is rectangular by
+construction (`cctests` two columns, `stests` three, `ostests` one), so this was
+the only one that could fail, and a static count of entries per row confirmed it.
+
+`pshared` is now one name per line - a column, which is what its only reader
+(`isin`, which walks `numel`) expects anyway. `tests/probe_literals.m` builds that
+literal on its own and prints its shape, so the failing machine can confirm the
+fix without `eval`: 191x1 here on both runtimes.
+
 **It runs on real MATLAB (2026-11-04).** First execution of this compiler on
 MathWorks MATLAB - R2024b 24.2.0.2806996, PCWIN64, on another machine - and
 `tests/probe_matlab_portability.m` passes **7/7**:
