@@ -607,6 +607,19 @@ fixed:
    has - which is also why it could never be reproduced on the clones: they return
    the same type either way.
 
+**A cut-short run is now distinguishable from a failing one (2026-11-05).** This
+host kills `run_tests.m` at a random point - three deaths were observed in one
+session, at check 216, after `cc29_union`, and after `stress2` - and every rerun of
+the identical command was green. Measured: the killed process returns exit **1**,
+the same code a failing run returns, and nothing in-process can report it, because
+no MATLAB code runs after the kill (an in-process `try`/`catch` guard was written,
+tested against synthetic suites, and then deleted for that reason). The evidence
+that survives is the summary line the harness prints last, so `run_all.sh` classifies
+from the *log*, not the exit code: summary with 0 failed = pass, summary with
+failures = failed, no summary = cut short, retried once since the death is random.
+A boot failure - an unrecognised function before the first check - classifies as cut
+short too, which is why the log path is printed with the verdict.
+
 **Green on real MATLAB (2026-11-04): 824 tests, 824 passed, 0 failed.** After those
 three fixes a full `run_tests` on R2024b reports no failures at all: both selftests, the p3-p6 interpreter track, every
 `pp_*` program, the compiler corpus through cc51, the x86sim corpus **329/329**,
