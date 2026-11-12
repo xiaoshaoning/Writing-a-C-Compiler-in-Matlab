@@ -607,6 +607,14 @@ fixed:
    has - which is also why it could never be reproduced on the clones: they return
    the same type either way.
 
+**Green on real MATLAB (2026-11-04).** After those three fixes a full `run_tests`
+on R2024b reports no failures: both selftests, the p3-p6 interpreter track, every
+`pp_*` program, the compiler corpus through cc51, the x86sim corpus **329/329**,
+and all 56 checks in *each* of the two stdout-parity groups. The scratch-file
+warnings that used to bury the summary line are gone too: a bare `delete()` warns
+when the file was never created, so it fired on every iteration wherever a step
+had failed - `del()` checks `exist` first and all 31 call sites use it.
+
 **The suite runs on real MATLAB too - and the harness was what broke
 (2026-11-04).** `>> addpath('tests'); run_tests` on R2024b got through
 `probe_primitives` 38/38, both selftests (30 VM cases, 9 lexer cases), and every

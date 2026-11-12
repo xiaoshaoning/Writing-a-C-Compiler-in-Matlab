@@ -1070,8 +1070,8 @@ cctests = {
         try
             got = -999;
             for attempt = 1:5   % retry: a lingering process can hold tmp_cc.exe so gcc cannot write it (a real assembler error still fails every attempt)
-                delete('tmp_cc.s');
-                delete('tmp_cc.exe');   % no stale exe can leak into this test
+                del('tmp_cc.s');
+                del('tmp_cc.exe');   % no stale exe can leak into this test
                 cc_int(['tests/programs/' cctests{k,1}], 'tmp_cc.s');
                 [st_gcc, ~] = system([gcc, ' tmp_cc.s -o tmp_cc.exe']);
                 if st_gcc == 0 && exist('tmp_cc.exe', 'file') == 2
@@ -1102,8 +1102,8 @@ cctests = {
         end
     end
     end                     % CC_SECTIONS=cctests
-    delete('tmp_cc.s');
-    delete('tmp_cc.exe');
+    del('tmp_cc.s');
+    del('tmp_cc.exe');
     % cross-track output parity: programs that print (via the compiler's
     % runtime shims) must produce the SAME stdout through both tracks (the
     % interpreter's trailing 'exit(N)' trace is stripped first).
@@ -1117,12 +1117,12 @@ cctests = {
             if ~isempty(op)
                 oo = oo(1:op(end)-1);   % strip the interpreter's exit trace
             end
-            delete('tmp_cc.s');
-            delete('tmp_cc.exe');
+            del('tmp_cc.s');
+            del('tmp_cc.exe');
             cc_int(['tests/programs/' ostests{ok}], 'tmp_cc.s');
             st_gcc = -1;
             for attempt = 1:5   % retry: a lingering process can hold tmp_cc.exe so gcc cannot write it (a real assembler error still fails every attempt)
-                delete('tmp_cc.exe');
+                del('tmp_cc.exe');
                 st_gcc = system([gcc, ' tmp_cc.s -o tmp_cc.exe']);
                 if st_gcc == 0 && exist('tmp_cc.exe', 'file') == 2
                     break;
@@ -1155,7 +1155,7 @@ cctests = {
     simtot = 0;
     for sk = corpus_range
         try
-            delete('tmp_cc.s');
+            del('tmp_cc.s');
             cc_int(['tests/programs/' cctests{sk,1}], 'tmp_cc.s');
             got = mod(x86sim('tmp_cc.s'), 256);
             simtot = simtot + 1;
@@ -1177,7 +1177,7 @@ cctests = {
     % x86sim printf edge cases (no interpreter counterpart): %X must be
     % uppercase, and %05d of a negative puts zeros between sign and digits.
     try
-        delete('tmp_cc.s');
+        del('tmp_cc.s');
         cc_int('tests/programs/cc18_printfX.c', 'tmp_cc.s');
         pxo = evalc('pxr = x86sim(''tmp_cc.s'');');
         [npass nfail] = addcheck(npass, nfail, strcmp(pxo, 'FF'), ...
@@ -1187,7 +1187,7 @@ cctests = {
             sprintf('x86sim %%X: %s', e.message));
     end
     try
-        delete('tmp_cc.s');
+        del('tmp_cc.s');
         cc_int('tests/programs/cc18_printf05.c', 'tmp_cc.s');
         p5o = evalc('p5r = x86sim(''tmp_cc.s'');');
         [npass nfail] = addcheck(npass, nfail, strcmp(p5o, '-0007'), ...
@@ -1200,7 +1200,7 @@ cctests = {
     % a cc_int extension, so gcc cannot be the oracle and the interpreter
     % has no short/word/long at all (see tests/programs/cc21_wordloc.c)
     try
-        delete('tmp_cc.s');
+        del('tmp_cc.s');
         cc_int('tests/programs/cc21_wordloc.c', 'tmp_cc.s');
         wloc = x86sim('tmp_cc.s');
         [npass nfail] = addcheck(npass, nfail, wloc == 0, ...
@@ -1212,7 +1212,7 @@ cctests = {
 
     % 'word' / 'unsigned word' widening: a cc_int extension, so sim only.
     try
-        delete('tmp_cc.s');
+        del('tmp_cc.s');
         cc_int('tests/programs/cc26_word.c', 'tmp_cc.s');
         wrd = x86sim('tmp_cc.s');
         [npass nfail] = addcheck(npass, nfail, wrd == 0, ...
@@ -1227,13 +1227,13 @@ cctests = {
     % expectation is gcc's own stdout of the same source, so there is no
     % hand-copied gold to drift (the stored string is the gcc-less fallback).
     try
-        delete('tmp_cc.s');
+        del('tmp_cc.s');
         cc_int('tests/programs/dreg_denseprint.c', 'tmp_cc.s');
         dd = evalc('ddr = x86sim(''tmp_cc.s'');');
         dd(dd == char(13)) = [];
         gold = sprintf('a=0.10000000000000001\nc=3.1415926535897931\nd=0.33333333333333331\n');
         if gcc_ok == 0
-            delete('tmp_gccd.exe');
+            del('tmp_gccd.exe');
             if system([gcc, ' tests/programs/dreg_denseprint.c -o tmp_gccd.exe']) == 0 ...
                     && exist('tmp_gccd.exe', 'file') == 2
                 [ggold, ggok] = run_out('tmp_gccd.exe', 'tmp_gccd_out.txt');
@@ -1241,7 +1241,7 @@ cctests = {
                     gold = ggold;
                 end
             end
-            delete('tmp_gccd.exe');
+            del('tmp_gccd.exe');
         end
         [npass nfail] = addcheck(npass, nfail, strcmp(dd, gold), ...
             'x86sim dense-double %.17g print matches gcc');
@@ -1254,7 +1254,7 @@ cctests = {
     % (double-domain emission/parse/store/print rounded them). No gcc
     % oracle - Windows gcc's long is 32-bit - so the gold is stored here.
     try
-        delete('tmp_cc.s');
+        del('tmp_cc.s');
         cc_int('tests/programs/cc24_wide.c', 'tmp_cc.s');
         wcout = evalc('wcr = x86sim(''tmp_cc.s'');');
         wcout(wcout == char(13)) = [];
@@ -1270,7 +1270,7 @@ cctests = {
     % print, not a double-rounded value. No gcc oracle (Windows long is
     % 32-bit).
     try
-        delete('tmp_cc.s');
+        del('tmp_cc.s');
         cc_int('tests/programs/cc25_fmt.c', 'tmp_cc.s');
         fxout = evalc('fxr = x86sim(''tmp_cc.s'');');
         fxout(fxout == char(13)) = [];
@@ -1287,7 +1287,7 @@ cctests = {
     % the unsigned forms. No gcc gold needed - gcc agrees (checked), but the
     % stored string keeps the check gcc-free.
     try
-        delete('tmp_cc.s');
+        del('tmp_cc.s');
         cc_int('tests/programs/cc26_signed.c', 'tmp_cc.s');
         sgout = evalc('sgr = x86sim(''tmp_cc.s'');');
         sgout(sgout == char(13)) = [];
@@ -1303,7 +1303,7 @@ cctests = {
     % stride must match C. gcc agrees (checked); the stored gold keeps the
     % check gcc-free.
     try
-        delete('tmp_cc.s');
+        del('tmp_cc.s');
         cc_int('tests/programs/cc27_int.c', 'tmp_cc.s');
         iaout = evalc('iar = x86sim(''tmp_cc.s'');');
         iaout(iaout == char(13)) = [];
@@ -1318,7 +1318,7 @@ cctests = {
     % returns anywhere (several, with labels/dead code after one) and
     % `extern` as a no-op: cc28_flow.c must print 6 like gcc.
     try
-        delete('tmp_cc.s');
+        del('tmp_cc.s');
         cc_int('tests/programs/cc28_flow.c', 'tmp_cc.s');
         flout = evalc('flr = x86sim(''tmp_cc.s'');');
         flout(flout == char(13)) = [];
@@ -1333,7 +1333,7 @@ cctests = {
     % unions (members share offset 0) and anonymous struct/union types:
     % cc29_union.c must print 68 8 9 like gcc.
     try
-        delete('tmp_cc.s');
+        del('tmp_cc.s');
         cc_int('tests/programs/cc29_union.c', 'tmp_cc.s');
         unout = evalc('unr = x86sim(''tmp_cc.s'');');
         unout(unout == char(13)) = [];
@@ -1348,7 +1348,7 @@ cctests = {
     % typedef of struct/union/pointer/array types: cc30_typedef.c must print
     % 7 65 7 like gcc.
     try
-        delete('tmp_cc.s');
+        del('tmp_cc.s');
         cc_int('tests/programs/cc30_typedef.c', 'tmp_cc.s');
         ttout = evalc('ttr = x86sim(''tmp_cc.s'');');
         ttout(ttout == char(13)) = [];
@@ -1367,7 +1367,7 @@ cctests = {
     if run_ostests
     for s2k = ost_first:ost_last(numel(ostests))
         try
-            delete('tmp_cc.s');
+            del('tmp_cc.s');
             cc_int(['tests/programs/' ostests{s2k}], 'tmp_cc.s');
             so2o = evalc('s2r = x86sim(''tmp_cc.s'');');
             so2x = evalc(sprintf('s2x = xc(''tests/programs/%s'');', ostests{s2k}));
@@ -1407,8 +1407,8 @@ cctests = {
         gok = 0;
         for gk = corpus_range
             gnm = cctests{gk,1};
-            delete('tmp_gcc.exe');
-            delete('tmp_gcc_out.txt');
+            del('tmp_gcc.exe');
+            del('tmp_gcc_out.txt');
             % -std=gnu89: the corpus declares nothing (printf, malloc and its own
             % functions come from the port's libfns table), which is legal C89 and an
             % error in C23, so the reference build must be asked for the older
@@ -1424,9 +1424,9 @@ cctests = {
                 continue;
             end
             gatt = gatt + 1;
-            delete('tmp_cc.s');
-            delete('tmp_cc.exe');
-            delete('tmp_cc_out.txt');
+            del('tmp_cc.s');
+            del('tmp_cc.exe');
+            del('tmp_cc_out.txt');
             try
                 cc_int(['tests/programs/' gnm], 'tmp_cc.s');
                 if system([gcc ' tmp_cc.s -o tmp_cc.exe']) ~= 0
@@ -1510,7 +1510,7 @@ cctests = {
     if run_instr
     for ick = corpus_range
         try
-            delete('tmp_cc.s');
+            del('tmp_cc.s');
             cc_int(['tests/programs/' cctests{ick,1}], 'tmp_cc.s');
             ic_total = ic_total + count_instr('tmp_cc.s');
         catch e
@@ -1519,7 +1519,7 @@ cctests = {
         end
     end
     try
-        delete('tmp_cc.s');
+        del('tmp_cc.s');
         cc_int('tests/programs/hello.c', 'tmp_cc.s');
         ic_hello = count_instr('tmp_cc.s');
     catch e
@@ -1656,7 +1656,7 @@ cctests = {
         [npass nfail] = addcheck(npass, nfail, false, ...
             sprintf('globals audit self-test: %s', e.message));
     end
-    delete(gsf);
+    del(gsf);
 
     % function called with the wrong number of arguments errors
     try
@@ -1723,6 +1723,15 @@ for k = 1:numel(list)
         b = 1;
         return;
     end
+end
+end
+
+function del(f)
+% del - delete a scratch file, silently. A bare delete() WARNS when the file was
+% never created, and that is every iteration wherever a step failed: on R2024b
+% that was ~100 lines of noise burying the one summary line you want to read.
+if exist(f, 'file') == 2
+    delete(f);
 end
 end
 
@@ -1812,7 +1821,7 @@ if ok
     fclose(fid);
     t(t == char(13)) = [];
 end
-delete(outfile);
+del(outfile);
 t = as_char(t);
 end
 
