@@ -45,41 +45,20 @@ run_gccstdout = sec_want('gccstdout');   % stdout vs the same source under gcc
 % CC_CORPUS=first:count slices the corpus itself (1-based). The corpus is the
 % biggest single unit (~6 minutes for 324 programs) so a section slice is not
 % always enough on a host that kills long runs; a program range is.
-cc_corpus = getenv('CC_CORPUS');
-corpus_first = 1;
-corpus_count = Inf;
-if ~isempty(cc_corpus)
-    cc_colon = strfind(cc_corpus, ':');
-    if isempty(cc_colon)
-        corpus_first = str2double(cc_corpus);
-    else
-        corpus_first = str2double(cc_corpus(1:cc_colon(1) - 1));
-        corpus_count = str2double(cc_corpus(cc_colon(1) + 1:end));
-    end
-end
+[corpus_first, corpus_count] = slice_spec('CC_CORPUS');
 corpus_last = @(n) min(n, corpus_first + corpus_count - 1);
-% CC_OSTESTS=first:count slices the interpreter-vs-compiler parity lists, which
-% is how to make a diagnostic run small on a machine where the suite has never
+% CC_OSTESTS=first:count slices the interpreter-vs-compiler parity lists, which is
+% how to make a diagnostic run small on a machine where the suite has never
 % finished (they are not covered by CC_CORPUS).
-cc_ost = getenv('CC_OSTESTS');
-ost_first = 1;
-ost_count = Inf;
-ost_last = @(n) n;
-if ~isempty(cc_ost)
-    cc_colon = strfind(cc_ost, ':');
-    if isempty(cc_colon)
-        ost_first = str2double(cc_ost);
-    else
-        ost_first = str2double(cc_ost(1:cc_colon(1) - 1));
-        ost_count = str2double(cc_ost(cc_colon(1) + 1:end));
-        ost_last = @(n) min(n, ost_first + ost_count - 1);
-    end
-    fprintf('ostests slice: %d..%d%s', ost_first, ost_first + ost_count - 1, char(10));
-end
-corpus_sliced = ~isempty(cc_corpus);
+[ost_first, ost_count] = slice_spec('CC_OSTESTS');
+ost_last = @(n) min(n, ost_first + ost_count - 1);
+corpus_sliced = ~isempty(getenv('CC_CORPUS'));
 if corpus_sliced
-    fprintf('corpus slice: programs %d..%d\n', corpus_first, ...
-            corpus_first + corpus_count - 1);
+    fprintf('corpus slice: programs %d..%d%s', corpus_first, ...
+            corpus_first + corpus_count - 1, char(10));
+end
+if ~isempty(getenv('CC_OSTESTS'))
+    fprintf('ostests slice: %d..%d%s', ost_first, ost_first + ost_count - 1, char(10));
 end
 
 npass = 0;
@@ -1723,6 +1702,31 @@ for k = 1:numel(list)
         b = 1;
         return;
     end
+end
+end
+
+function [first, count] = slice_spec(name)
+% slice_spec - read a "first:count" slice bound from environment variable `name`.
+%
+% Unset gives first = 1, count = Inf, so a caller can always compute
+% `last = min(n, first + count - 1)` and the whole range falls out without knowing
+% whether a slice was asked for.
+%
+% One parser for every slice: the convention is a single piece of knowledge, and
+% it had two copies (CC_CORPUS, CC_OSTESTS) which already disagreed - one clamped
+% through a function handle, the other through a closure, and only one printed.
+first = 1;
+count = Inf;
+raw = getenv(name);
+if isempty(raw)
+    return;
+end
+colon = strfind(raw, ':');
+if isempty(colon)
+    first = str2double(raw);
+else
+    first = str2double(raw(1:colon(1) - 1));
+    count = str2double(raw(colon(1) + 1:end));
 end
 end
 
