@@ -911,8 +911,8 @@ global token idname typedefs enums token_val
 if token == 184         % typedef
     next();
     [base, stdef, tdim0] = parse_basetype();
-    if isa(stdef, 'cell')   % `typedef struct { … } P;`
-        base = 1000 + 2 * register_struct(stdef{1}, stdef{2});
+    if ~isempty(stdef)   % `typedef struct { … } P;`
+        base = 1000 + 2 * register_struct(stdef.tag, stdef.body);
     end
     depth = 0;
     while token == 42       % '*': `typedef int *ip;`
@@ -953,15 +953,15 @@ if token == 185 && enum_defines()   % enum { … }: register the constants
         return;                 % `enum { … };` - just the constants
     end
     base = 0;                   % `enum { … } v;` - the constants are ints
-    stdef = 0;
+    stdef = [];
     tdims = [];
 else
     [base, stdef, tdims] = parse_basetype();
 end
-if isa(stdef, 'cell')
+if ~isempty(stdef)
     % a struct type definition: register the tag, then either the ';'
     % or a variable list of the new type (`struct Q { … } q;`)
-    base = 1000 + 2 * register_struct(stdef{1}, stdef{2});
+    base = 1000 + 2 * register_struct(stdef.tag, stdef.body);
     if token == 59
         next();
         return;
@@ -1103,12 +1103,21 @@ si = save_si; token = save_tok; token_val = save_tv; idname = save_id;
 end
 
 function [base, stdef, tdims] = parse_basetype()
+% parse_basetype - the type code, plus the struct/union DEFINITION when the type
+% just parsed defined one (otherwise []).
+%
+% stdef is [] or a structure with two fields:
+%   .tag   the tag, synthetic for an anonymous definition
+%   .body  {size, membermap, names, isunion, alignment} from parse_struct_members
+%
+% It used to be 0 or a two-cell, so every caller asked isa(stdef,'cell') to mean
+% "is this a definition?" and then read stdef{1}/stdef{2} by position.
 % parse_basetype — parse int/char/struct tag; returns the base type code
 % (0 int, 1 char, 1000+2*stid struct) and, for a struct type DEFINITION at
-% file scope, a cell {tag, members} for the caller to register.
+% file scope, a structure {tag, body} for the caller to register
 global token idname stags enums typedefs nstid
 base = 0;
-stdef = 0;
+stdef = [];
 tdims = [];
 while token == 190 || token == 191 || token == 192 || token == 197 || ...
         token == 199    % const/register/static/extern/volatile
@@ -1220,7 +1229,9 @@ elseif token == 178 || token == 198   % struct / union
             nstid = nstid + 1;
             stags.(tag) = nstid;
         end
-        stdef = {tag, parse_struct_members(isunion)};
+        stdef = [];
+        stdef.tag = tag;
+        stdef.body = parse_struct_members(isunion);
     else
         if isempty(tag)
             if kw == 178
@@ -1308,8 +1319,8 @@ run_used = 0;               % bits of it already taken
 run_st = 0;                 % and its size in bytes - the only key: see below
 while token ~= 125          % '}'
     [mbase, mdef] = parse_basetype();
-    if isa(mdef, 'cell')
-        mbase = 1000 + 2 * register_struct(mdef{1}, mdef{2});
+    if ~isempty(mdef)
+        mbase = 1000 + 2 * register_struct(mdef.tag, mdef.body);
     end
     depth = 0;
     while token == 42       % '*'
@@ -2540,7 +2551,7 @@ while token ~= 41           % ')'
         break;
     end
     [base, stdef] = parse_basetype();
-    if isa(stdef, 'cell')
+    if ~isempty(stdef)
         fail('struct definitions are not allowed in parameter lists');
     end
     h = parse_declarator_head();
@@ -2698,7 +2709,7 @@ elseif token == 185         % enum: a definition registers the constants,
         if token == 59
             next();                 % `enum { … };`: just the constants
         else
-            parse_declarators(0, 0, [], 0);   % `enum { … } v;`: ints
+            parse_declarators(0, [], [], 0);   % `enum { … } v;`: ints (no definition)
         end
     else
         parse_declaration();
@@ -3099,10 +3110,10 @@ function parse_declarators(base, stdef, tdims, was_static)
 % constants and then declare v with the same code.
 global token idname lvars lvartype lvararr lvarstruct lvarstride lvararrsz fbytes token_val strtext lstatics blkdecl
 global globals gtype garr gstruct gvararrsz gstride glist lstatics cfn
-if isa(stdef, 'cell')
+if ~isempty(stdef)
     % a local struct definition: register the tag, then either the ';'
     % or a variable list of the new type (`struct Q { … } q;`)
-    base = 1000 + 2 * register_struct(stdef{1}, stdef{2});
+    base = 1000 + 2 * register_struct(stdef.tag, stdef.body);
     if token == 59
         next();
         return;
@@ -4193,7 +4204,7 @@ if token == 40              % '(': a cast (type)unary or parenthesised expr
     if is_cast
         next();             % '('
         [cbase, cstdef] = parse_basetype();
-        if isa(cstdef, 'cell')
+        if ~isempty(cstdef)
             fail('struct definitions are not allowed in casts');
         end
         cdepth = 0;
@@ -4393,8 +4404,8 @@ elseif token == 183         % sizeof: type or expression
                 token == 185 || ...     % enum Tag: an int, but it was a parse error
                 (token == 150 && isfield(typedefs, idname))   % a type
             [base, stdef, tdims] = parse_basetype();
-            if isa(stdef, 'cell')   % `sizeof(struct { … })`: register it
-                base = 1000 + 2 * register_struct(stdef{1}, stdef{2});
+            if ~isempty(stdef)   % `sizeof(struct { … })`: register it
+                base = 1000 + 2 * register_struct(stdef.tag, stdef.body);
             end
             depth = 0;
             while token == 42       % '*'
