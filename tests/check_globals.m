@@ -3,20 +3,33 @@ function bad = check_globals(fname)
 %
 %   bad = check_globals('src/cc_int.m')
 %
-% Returns a cell array of human-readable violations, empty when the file
-% is clean. A violation is a function that reads a name which is declared
-% `global` somewhere in the file but not in that function, *before* it
-% assigns the name locally. On real MATLAB (isolated function scopes) that
-% read is an "Unrecognized function or variable" error; on the lenient
-% clones it resolves through the caller chain and hides. See
-% docs/2026-09-07-x86sim-peephole-divergences.md for the 19 instances this
-% found in cc_int.m (fixed in 7db5dfe / 5ed841d).
+% A VIOLATION is either:
 %
-% A first touch that is an assignment is NOT reported: it makes the name a
-% function-local on real MATLAB (function outputs named like globals, local
-% computations), which is legal. Name-based and conservative by design --
-% it can miss a shadowing local, but it does not fire on legal code, so a
-% clean result is meaningful.
+%  - inside a function, a READ of a name that is declared `global` somewhere in
+%    the file but not in that function, before it assigns the name locally. On
+%    real MATLAB (isolated function scopes) that read is "Unrecognized function
+%    or variable"; on the lenient clones it resolves through the caller chain and
+%    hides. See docs/2026-09-07-x86sim-peephole-divergences.md for the 19
+%    instances this found in cc_int.m (fixed in 7db5dfe / 5ed841d).
+%
+%  - in the chunk BEFORE the first function - the script that runs once - a
+%    WRITE to such a name. There the rule inverts: an assignment makes the name
+%    local to the chunk, so shared state the functions read through `global` has
+%    to be declared in the chunk too. `atypes = {}` at the top of cc_int.m looked
+%    like an initialisation and was a chunk-local, which is how the array-type
+%    registry stayed empty for every function.
+%
+% A first touch that is an assignment is NOT reported inside a function: it makes
+% the name a function-local on real MATLAB (function outputs named like globals,
+% local computations), which is legal. Name-based and conservative by design --
+% it can miss a shadowing local, but it does not fire on legal code, so a clean
+% result is meaningful.
+%
+% KNOWN LIMIT: a field or element write, `x.f = v` / `x{i} = v`, on a name meant
+% as a global is treated as a plain assignment and so is not reported - on real
+% MATLAB it silently creates a local struct/cell. That is the shape that hid
+% `lvarstride.(nm)` in parse_params: the write worked, the read later failed.
+%
 %
 % Flat representation and per-line word extraction: nested-cell growth
 % (`c{i}{end+1}`) silently no-ops on the clones, and scanning every global

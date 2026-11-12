@@ -401,6 +401,20 @@ out{end+1} = strrep(line, '\t', char(9));
 idx = numel(out);
 end
 
+function set_array_value(at)
+% set_array_value - make the current expression the ARRAY of type `at`. Its
+% value is the address it already holds, so nothing is loaded; the strides make
+% it indexable, and the type is the DECAYED pointer, which is the convention a
+% named array variable follows (that is what makes a following index take the
+% element path). Two places needed exactly this - `p[i]` on a pointer to a row,
+% and `*p` on one - and they drifted apart when only one was corrected.
+global bstride curarrsz etype estruc
+bstride = cstride_of(arr_dims(at), tsize(arr_elem(at)));
+curarrsz = tsize(at);
+etype = pcode(arr_elem(at), 1);
+estruc = 0;
+end
+
 function em_val(t)
 % em_val — load a value of type t from the address in %rax, widening it to
 % the VM's 64-bit integer with the sign the type calls for: the signed
@@ -1639,20 +1653,6 @@ end
 atypes{end+1} = {elem, dims};
 natype = natype + 1;
 c = 3000 + numel(atypes) - 1;
-end
-
-function set_array_value(at)
-% set_array_value - make the current expression the ARRAY of type `at`. Its
-% value is the address it already holds, so nothing is loaded; the strides make
-% it indexable, and the type is the DECAYED pointer, which is the convention a
-% named array variable follows (that is what makes a following index take the
-% element path). Two places needed exactly this - `p[i]` on a pointer to a row,
-% and `*p` on one - and they drifted apart when only one was corrected.
-global bstride curarrsz etype estruc
-bstride = cstride_of(arr_dims(at), tsize(arr_elem(at)));
-curarrsz = tsize(at);
-etype = pcode(arr_elem(at), 1);
-estruc = 0;
 end
 
 function b = is_arrtype(t)
