@@ -572,6 +572,36 @@ disagreed: x86sim returned 96, the gcc-assembled cctests path returned **5**
 `cc32_byval.c` runs through the cctests path so that class now fails the
 suite. Ceiling 14810.
 
+**It runs on real MATLAB (2026-11-04).** First execution of this compiler on
+MathWorks MATLAB - R2024b 24.2.0.2806996, PCWIN64, on another machine - and
+`tests/probe_matlab_portability.m` passes **7/7**:
+
+- the four language rules the code leans on: a function reading an undeclared
+  global IS an error (so `check_globals` guards something real), empty cell
+  appends grow, `bitshift` on int64 wraps while `int64` addition saturates;
+- three corpus programs compiled by `cc_int` and *executed* under `x86sim` to the
+  clones' exit codes: `hello.c` (122 lines of assembly), `cc39_wrap.c` and
+  `cc51_mdimparam.c` - the last being the newest code in the tree, array types
+  and two-dimensional parameters.
+
+Two INFO lines are runtime properties rather than faults: `fopen 'r'` does not
+translate CRLF there (so `run_out` strips CRs itself), and `sprintf('%d', int64)`
+is exact there where both clones round past 2^53.
+
+Getting there took two real bugs, both invisible to gcc and to both clones:
+
+- `run_out` had stopped stripping CRs because the clones translate text-mode
+  reads; real MATLAB does not, so the harness would have compared CR-terminated
+  text against clean text there.
+- `parse_unary`'s `if at == 6 || dt == 6` had an EMPTY operand. `dt` holds a call
+  argument's declared type and is `[]` for every variadic argument - i.e. every
+  printf - and `[] == 6` is empty, which MATLAB rejects inside `||` and the clones
+  read as false. It stopped every compile on the target.
+
+The previous thirty-odd rounds were measured against gcc and two clones: a second
+implementation of C, which is a good oracle for the dialect and no oracle at all
+for MATLAB-host behaviour. One run on the real thing found what neither could.
+
 **Pointers to arrays: the last known limitation (2026-11-04).** `&a` on an
 `int[3]` is an `int (*)[3]`, and the type model had no way to say that - a
 pointer was `pcode(elem, depth)` and nothing else - so `&a + 1` stepped 4 bytes
@@ -1104,10 +1134,17 @@ b
   minutes with 179/179 instead of timing out. If a sliced run seems to stall,
   check whether the section loop it is in honours `corpus_last` before blaming
   the host.
-- **Real-MATLAB validation.** No runnable MathWorks MATLAB is installed
-  here (the R2023b install is a stub with no `matlab.exe`), so the
-  suite's "green oracle" is unverified on it. The instruction-count
-  ceiling is a clone-lineage baseline, not a real-MATLAB number.
+- **Real-MATLAB validation: the compiler runs there; the SUITE has not.** The
+  probe passes 7/7 on R2024b (see the entry above), so the target runtime is no
+  longer unverified for "does it work". What is still unmeasured on it: the
+  ~800-check suite. `bash tests/run_all.sh` cannot run on that machine (no bash,
+  no gcc), but the suite itself can and skips its gcc-gated groups when gcc is
+  absent:
+
+      >> addpath('tests'); run_tests
+
+  The instruction-count ceiling remains a clone-lineage baseline, not a
+  real-MATLAB number, until that run happens.
 - **matlab_in_rust engine now on `cli-v13` (2026-11-04).** Tagged at the
   repo's `083452f`; `dist/matlab-cli/matlab.exe` is 20,533,155 bytes and
   md5-identical to `target/release/matlab.exe`, so the cut is the build it
