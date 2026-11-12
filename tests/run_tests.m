@@ -1551,9 +1551,12 @@ function [t, ok] = run_out(exe, outfile)
 %
 % stdin comes from NUL: the syscall tests read stdin, and without this they
 % block forever - which reads as a hang with no output rather than an error,
-% and cost an hour once. fopen 'r' is TEXT mode, so the CRs the CRT writes are
-% already gone and no stripping is needed; every caller that did it by hand was
-% doing nothing.
+% and cost an hour once.
+%
+% The CRs a text-mode write produces are stripped HERE rather than assumed away:
+% real MATLAB's fopen 'r' does NOT translate CRLF (measured on R2023b - a 6-byte
+% "a\r\nb\r\n" comes back as 6 chars), while both clones do, so relying on the
+% translation works only on the clones. Stripping is a no-op on the clones.
 t = '';
 system(sprintf('.\\%s < NUL > %s', exe, outfile));
 fid = fopen(outfile, 'r');
@@ -1561,6 +1564,7 @@ ok = (fid >= 0);
 if ok
     t = char(fread(fid, inf, 'uint8')');
     fclose(fid);
+    t(t == char(13)) = [];
 end
 delete(outfile);
 end

@@ -992,6 +992,24 @@ and the runtime library are the changelog entries above:
   reported as INFO: both clones round through a double (2^53+1 prints as 2^53),
   real MATLAB is exact, and the compiler does not depend on it because wide
   literals are emitted in hex.
+
+  **First real-MATLAB run (R2023b 23.2.0, PCWIN64, 2026-11-04).** Four of the
+  language rules hold there exactly as assumed - a function reading an undeclared
+  global IS an error (so `check_globals` protects against something real), empty
+  cell appends grow, `bitshift` wraps, `int64` addition saturates - and
+  `sprintf('%d', int64)` is exact. Two things did not:
+
+  - text-mode `fopen` does **not** translate CRLF there (a 6-byte `a
+b
+`
+    reads back as 6 chars, where both clones give 4). `run_out` had stopped
+    stripping CRs on the clones' behaviour; it strips them itself again, which is
+    a no-op on the clones and correct on real MATLAB.
+  - **the compiler does not run there yet**: every compile stops with "Operands
+    to the logical AND (&&) and OR (||) operators must be convertible to logical
+    scalar values", so some condition in `cc_int.m` has a vector operand that
+    both clones accept element-wise. The probe now prints the failing stack, and
+    that is the next item - the project's central claim, untested until now.
 - **Run the compile-heavy sections on the C clone; keep `cli-v13` for engine
   compatibility (measured 2026-11-04).** The same `src/` code is far cheaper to
   run on the clone: `CC_SECTIONS=instr` (all 327 corpus programs compiled and

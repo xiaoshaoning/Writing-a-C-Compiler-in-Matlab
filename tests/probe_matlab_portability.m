@@ -58,14 +58,17 @@ v = bitshift(int64(4294967295), 32);
 [npass, nfail] = chk(npass, nfail, int64(9223372036854775807) + int64(1), ...
     'int64 addition saturates at INT64_MAX', int64(9223372036854775807));
 
-% 1e. text-mode fopen drops the CRs the CRT writes (run_out relies on it).
-% Written in BINARY mode: fprintf in text mode translates the \n of an explicit
-% \r\n again, which measures the write side instead of the read.
+% 1e. text-mode fopen and CRs. MEASURED ON REAL MATLAB (R2023b): it does NOT
+% translate CRLF, so a 6-byte "a\r\nb\r\n" reads back as 6 chars; both clones
+% translate and give 4. run_out strips CRs itself now, so either behaviour is
+% fine - reported, not counted, because a difference here is a property of the
+% runtime rather than a fault.
 tmp = [tempname() '.txt'];
 fid = fopen(tmp, 'wb'); fwrite(fid, uint8([97 13 10 98 13 10])); fclose(fid);
 fid = fopen(tmp, 'r'); got = char(fread(fid, inf, 'uint8')'); fclose(fid);
 delete(tmp);
-[npass, nfail] = chk(npass, nfail, numel(got), 'fopen ''r'' strips CRs (4 chars, not 6)', 4);
+fprintf('INFO  fopen ''r'' of a\r\nb\r\n returns %d chars (real MATLAB 6, clones 4); run_out strips them\n', ...
+    numel(got));
 
 % 1f. sprintf('%d', int64) is EXACT on real MATLAB; both clones round through a
 % double past 53 bits (2^53+1 prints as 2^53, INT64_MIN+1 as INT64_MIN). The
@@ -82,6 +85,7 @@ fprintf('INFO  sprintf %%d of int64(2^53+1) = %s (real MATLAB: 9007199254740993)
 % fourth claim compiles the one that exercises the newest code (array types).
 cases = {'hello.c', [], 'cc39_wrap.c', 96, 'cc51_mdimparam.c', 96};
 fprintf('\n-- compiling corpus programs --\n');
+first_fail = nfail;             % index of the first failure, for the stack
 for k = 1:2:numel(cases)
     nm = cases{k};
     want = cases{k+1};
@@ -99,6 +103,17 @@ for k = 1:2:numel(cases)
         end
     catch e
         fprintf('FAIL  %s: %s\n', nm, e.message);
+        % the first failure is the one worth a stack: every later program runs
+        % the same compiler code, so they will name the same line
+        if nfail == first_fail
+            try
+                st = e.stack;
+                for q = 1:numel(st)
+                    fprintf('      at %s, line %d\n', st(q).name, st(q).line);
+                end
+            catch
+            end
+        end
         nfail = nfail + 1;
     end
     delete(sfile);
