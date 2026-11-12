@@ -1206,6 +1206,9 @@ elseif token == 178 || token == 198   % struct / union
     if token == 123         % '{': a type definition (tag optional)
         next();             % consume '{'
         if isempty(tag)     % anonymous: give it a synthetic, unreferenced tag
+            % not '@anon': this tag is used as a STRUCT FIELD name in membermap,
+            % and MATLAB requires a field name to start with a letter (R2024b
+            % rejects '@anon3' outright, while both clones accept it).
             tag = sprintf('anonstruct%d', nstid + 1);
         end
         % The tag is in scope from the moment it is seen (C 6.7.2.3p8), not from
@@ -1473,14 +1476,12 @@ end
 
 function sz = ssize_of(t)
 % ssize_of — byte size of a struct VALUE type (1000+2*stid).
-global sdefs
 stid = (t - 1000) / 2;
 sz = sdef_of(stid){1};
 end
 
 function m = member_lookup(t, name)
 % member_lookup — {offset, type} of member `name` in struct VALUE type t.
-global sdefs
 stid = (t - 1000) / 2;
 mm = sdef_of(stid){2};
 if isfield(mm, name)
@@ -3219,6 +3220,9 @@ while true
         if isfield(lvars, name) || isfield(lstatics, name)
             fail(sprintf('static local %s clashes with another local', name));
         end
+        % Mangled rather than prefixed with '__': this symbol is used as a field
+        % name in globals/gtype/garr, and a MATLAB field name must begin with a
+        % letter - '__st1_n' is rejected on R2024b but accepted by both clones.
         sym = sprintf('fnstatic%d_%s', cfn, name);
         lstatics.(name) = sym;
         globals.(sym) = 1;

@@ -1138,12 +1138,13 @@ cctests = {
             if ~oc_ok
                 error('could not read the compiler output');
             end
-            if ~same_text(oc, oo)
+            matched = same_text(oc, oo);
+            if ~matched
                 % print what the two sides actually produced: on a runtime where
                 % the harness has never run, "they differ" is not enough to act on
                 dump_mismatch(ostests{ok}, 'xc', oo, 'cc_int', oc);
             end
-            [npass nfail] = addcheck(npass, nfail, same_text(oc, oo), ...
+            [npass nfail] = addcheck(npass, nfail, matched, ...
                 sprintf('output parity %s (xc == cc_int stdout)', ostests{ok}));
         catch e
             [npass nfail] = addcheck(npass, nfail, false, ...
@@ -1233,7 +1234,6 @@ cctests = {
         del('tmp_cc.s');
         cc_int('tests/programs/dreg_denseprint.c', 'tmp_cc.s');
         dd = evalc('ddr = x86sim(''tmp_cc.s'');');
-        dd(dd == char(13)) = [];
         gold = sprintf('a=0.10000000000000001\nc=3.1415926535897931\nd=0.33333333333333331\n');
         if gcc_ok == 0
             del('tmp_gccd.exe');
@@ -1246,7 +1246,7 @@ cctests = {
             end
             del('tmp_gccd.exe');
         end
-        [npass nfail] = addcheck(npass, nfail, strcmp(dd, gold), ...
+        [npass nfail] = addcheck(npass, nfail, same_text(dd, gold), ...
             'x86sim dense-double %.17g print matches gcc');
     catch e
         [npass nfail] = addcheck(npass, nfail, false, ...
@@ -1260,9 +1260,8 @@ cctests = {
         del('tmp_cc.s');
         cc_int('tests/programs/cc24_wide.c', 'tmp_cc.s');
         wcout = evalc('wcr = x86sim(''tmp_cc.s'');');
-        wcout(wcout == char(13)) = [];
         wcgold = sprintf('9007199254740993\n9223372036854775806\n-9223372036854775808\n-9007199254740993\n');
-        [npass nfail] = addcheck(npass, nfail, strcmp(wcout, wcgold), ...
+        [npass nfail] = addcheck(npass, nfail, same_text(wcout, wcgold), ...
             'x86sim wide-decimal %lld print exact above 2^53');
     catch e
         [npass nfail] = addcheck(npass, nfail, false, ...
@@ -1276,9 +1275,8 @@ cctests = {
         del('tmp_cc.s');
         cc_int('tests/programs/cc25_fmt.c', 'tmp_cc.s');
         fxout = evalc('fxr = x86sim(''tmp_cc.s'');');
-        fxout(fxout == char(13)) = [];
         fxgold = sprintf('7fffffffffffffff\nffffffffffffffff\n18446744073709551615\n0020000000000001\n1777777777777777777777\nFFFFFFFFFFFFFFFF\n');
-        [npass nfail] = addcheck(npass, nfail, strcmp(fxout, fxgold), ...
+        [npass nfail] = addcheck(npass, nfail, same_text(fxout, fxgold), ...
             'x86sim wide %u/%x/%o print exact above 2^53');
     catch e
         [npass nfail] = addcheck(npass, nfail, false, ...
@@ -1293,9 +1291,8 @@ cctests = {
         del('tmp_cc.s');
         cc_int('tests/programs/cc26_signed.c', 'tmp_cc.s');
         sgout = evalc('sgr = x86sim(''tmp_cc.s'');');
-        sgout(sgout == char(13)) = [];
         sggold = sprintf('-1 -1 65535 200 -1 -2\n');
-        [npass nfail] = addcheck(npass, nfail, strcmp(sgout, sggold), ...
+        [npass nfail] = addcheck(npass, nfail, same_text(sgout, sggold), ...
             'signed/unsigned narrow widening matches gcc');
     catch e
         [npass nfail] = addcheck(npass, nfail, false, ...
@@ -1309,9 +1306,8 @@ cctests = {
         del('tmp_cc.s');
         cc_int('tests/programs/cc27_int.c', 'tmp_cc.s');
         iaout = evalc('iar = x86sim(''tmp_cc.s'');');
-        iaout(iaout == char(13)) = [];
         iagold = sprintf('4 -2147483648 2\n');
-        [npass nfail] = addcheck(npass, nfail, strcmp(iaout, iagold), ...
+        [npass nfail] = addcheck(npass, nfail, same_text(iaout, iagold), ...
             'int is 32-bit: sizeof/wrap/stride match gcc');
     catch e
         [npass nfail] = addcheck(npass, nfail, false, ...
@@ -1324,9 +1320,8 @@ cctests = {
         del('tmp_cc.s');
         cc_int('tests/programs/cc28_flow.c', 'tmp_cc.s');
         flout = evalc('flr = x86sim(''tmp_cc.s'');');
-        flout(flout == char(13)) = [];
         flgold = sprintf('6\n');
-        [npass nfail] = addcheck(npass, nfail, strcmp(flout, flgold), ...
+        [npass nfail] = addcheck(npass, nfail, same_text(flout, flgold), ...
             'returns anywhere + extern match gcc');
     catch e
         [npass nfail] = addcheck(npass, nfail, false, ...
@@ -1339,9 +1334,8 @@ cctests = {
         del('tmp_cc.s');
         cc_int('tests/programs/cc29_union.c', 'tmp_cc.s');
         unout = evalc('unr = x86sim(''tmp_cc.s'');');
-        unout(unout == char(13)) = [];
         ungold = sprintf('68 8 9\n');
-        [npass nfail] = addcheck(npass, nfail, strcmp(unout, ungold), ...
+        [npass nfail] = addcheck(npass, nfail, same_text(unout, ungold), ...
             'unions + anonymous struct/union match gcc');
     catch e
         [npass nfail] = addcheck(npass, nfail, false, ...
@@ -1354,9 +1348,8 @@ cctests = {
         del('tmp_cc.s');
         cc_int('tests/programs/cc30_typedef.c', 'tmp_cc.s');
         ttout = evalc('ttr = x86sim(''tmp_cc.s'');');
-        ttout(ttout == char(13)) = [];
         ttgold = sprintf('7 65 7\n');
-        [npass nfail] = addcheck(npass, nfail, strcmp(ttout, ttgold), ...
+        [npass nfail] = addcheck(npass, nfail, same_text(ttout, ttgold), ...
             'typedef of struct/union/pointer/array matches gcc');
     catch e
         [npass nfail] = addcheck(npass, nfail, false, ...
@@ -1756,6 +1749,11 @@ end
 
 function s = as_char(t)
 % as_char - anything captured from a run or from evalc, as a 1xN char row.
+%
+% The CRs a text-mode write produces are stripped HERE rather than assumed away:
+% real MATLAB's fopen 'r' does NOT translate CRLF (measured on R2023b - a 6-byte
+% "a\r\nb\r\n" comes back as 6 chars), while both clones do, so relying on the
+% translation works only on the clones. Stripping is a no-op on the clones.
 if iscell(t)
     if isempty(t)
         s = '';
@@ -1815,10 +1813,8 @@ function [t, ok] = run_out(exe, outfile)
 % block forever - which reads as a hang with no output rather than an error,
 % and cost an hour once.
 %
-% The CRs a text-mode write produces are stripped HERE rather than assumed away:
-% real MATLAB's fopen 'r' does NOT translate CRLF (measured on R2023b - a 6-byte
-% "a\r\nb\r\n" comes back as 6 chars), while both clones do, so relying on the
-% translation works only on the clones. Stripping is a no-op on the clones.
+% The captured text goes through as_char() before it is returned, so every caller
+% gets the same 1xN char row whatever the runtime hands back.
 t = '';
 system(sprintf('.\\%s < NUL > %s', exe, outfile));
 fid = fopen(outfile, 'r');
@@ -1826,7 +1822,6 @@ ok = (fid >= 0);
 if ok
     t = char(fread(fid, inf, 'uint8')');
     fclose(fid);
-    t(t == char(13)) = [];
 end
 del(outfile);
 t = as_char(t);
