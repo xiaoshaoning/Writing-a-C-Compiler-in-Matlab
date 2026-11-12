@@ -1206,7 +1206,7 @@ elseif token == 178 || token == 198   % struct / union
     if token == 123         % '{': a type definition (tag optional)
         next();             % consume '{'
         if isempty(tag)     % anonymous: give it a synthetic, unreferenced tag
-            tag = sprintf('@anon%d', nstid + 1);
+            tag = sprintf('anonstruct%d', nstid + 1);
         end
         stdef = {tag, parse_struct_members(isunion)};
     else
@@ -3185,7 +3185,7 @@ while true
         if isfield(lvars, name) || isfield(lstatics, name)
             fail(sprintf('static local %s clashes with another local', name));
         end
-        sym = sprintf('__st%d_%s', cfn, name);
+        sym = sprintf('fnstatic%d_%s', cfn, name);
         lstatics.(name) = sym;
         globals.(sym) = 1;
         gtype.(sym) = t;

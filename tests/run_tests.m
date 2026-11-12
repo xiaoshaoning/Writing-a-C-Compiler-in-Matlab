@@ -1058,10 +1058,11 @@ cctests = {
                 [st_gcc, ~] = system([gcc, ' tmp_cc.s -o tmp_cc.exe']);
                 if st_gcc == 0 && exist('tmp_cc.exe', 'file') == 2
                     [st_run, ~] = system('.\tmp_cc.exe');
-                    if st_run < 0
-                        st_run = st_run + 256;   % return -1 (0xFFFFFFFF)
-                    end
-                    got = st_run;
+                    % the OS reports only the low byte, and real MATLAB hands back
+                    % the FULL status - 300 for exit(300), 5467 for exit(5467) -
+                    % while the clones truncate. mod is what both mean, and it
+                    % maps -1 (exit 255) to 255 the same way the old +256 did.
+                    got = mod(st_run, 256);
                     break;
                 end
             end

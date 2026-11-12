@@ -572,6 +572,36 @@ disagreed: x86sim returned 96, the gcc-assembled cctests path returned **5**
 `cc32_byval.c` runs through the cctests path so that class now fails the
 suite. Ceiling 14810.
 
+**The suite runs on real MATLAB: what failed there, and why (2026-11-04).** A
+full `run_tests` on R2024b passes the interpreter track wholesale - both
+selftests, every p3/p4/p5/p6 and pp_* program - and about three hundred compiler
+corpus programs, the gcc-free x86sim corpus **325/325**, and every guard from
+cc31 to cc51. The failures it does report fall into three classes, and two are
+fixed:
+
+1. **Exit statuses were not reduced mod 256** (about ten checks). The OS reports
+   only the low byte; real MATLAB's `system()` hands back the FULL status - 300
+   for `exit(300)`, 5467 for `exit(5467)`, 988156804 for stress2 - while both
+   clones truncate. Every "wrong" value was the expected one plus a multiple of
+   256 (5467 mod 256 = 91, 988156804 mod 256 = 132, 321 mod 256 = 65). The
+   harness takes `mod(got, 256)` now, which also maps -1 (exit 255) to 255 the
+   way the old `+256` did.
+2. **Synthetic names were not valid MATLAB field names.** Anonymous structs were
+   tagged `@anon3` and per-function statics `__st1_n`, and both are used as
+   STRUCT FIELD names (`membermap.('@anon3')`, `globals.('__st1_n')`). MATLAB
+   requires a field name to begin with a letter, so `cc29_union`, `cc30_typedef`,
+   `cc37_static` and `cc44_enumstatic` failed outright on the target - and their
+   parity, x86sim and union/typedef checks with them. They are `anonstruct3` and
+   `fnstatic1_n` now; the emitted symbols change name, not shape (instruction
+   total still 21498).
+3. **About fifty interpreter-vs-compiler stdout mismatches remain.** The exit
+   codes agree; the printed text does not. The failing set is the programs that
+   print NUMBERS - `pp_addrof`, `pp_array*`, `pp_arrinit*`, `pp_sizeof*`,
+   `pp_mdim*`, `pp_init*`, `pp_void*` - while `pp_s`, `pp_prtflen`, `pp_npercent`,
+   `pp_dynwidth`, `stress`, `stress2`, `hello` and `p6_printf*` pass. That is a
+   formatting difference between the interpreter's `sprintf` path and the CRT on
+   that runtime, and it is un-diagnosed: the harness records only "they differ".
+
 **The suite runs on real MATLAB too - and the harness was what broke
 (2026-11-04).** `>> addpath('tests'); run_tests` on R2024b got through
 `probe_primitives` 38/38, both selftests (30 VM cases, 9 lexer cases), and every
