@@ -793,6 +793,8 @@ cctests = {
         'cc49_long.c', 96;         % long is 4 bytes, long long 8; layout + wraparound vs gcc
         'cc50_corners.c', 96;      % block shadowing, sizeof(enum), ternary, unsigned division
         'cc51_mdimparam.c', 96;    % a 2-D array parameter, and 2-D indexing by variables
+        'cc52_ptrrow.c', 96;       % int (*p)[3]: the declarator, and p + 1 stepping a row
+        'cc53_ptrrow2.c', 96;      % the same row pointer built by &a[0] + 1, no declarator
     };
     % The one range every corpus loop iterates. Three loops need it, and the
     % one that spelled the bounds out for itself was silently running the whole
@@ -1503,7 +1505,9 @@ cctests = {
     % that made m[i][j] work with variable indices add cc51 and its own code, so it
     % is 21290; the pointer-to-a-row type (array types, &a carrying its shape, and
     % int (*p)[3]) makes it 21404; the same shape as a parameter, and the
-    % declarator head parsed once for both, makes it 21498. See
+    % declarator head parsed once for both, makes it 21498; cc52 and cc53 pin the
+    % pointer-to-a-row forms that were already working (int (*p)[3], and &a[0] + 1
+    % built by address-of) and add their own code, so it is 21854. See
     % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
@@ -1529,8 +1533,8 @@ cctests = {
     if corpus_sliced
         fprintf('SKIP  instr regression: corpus total (sliced run)\n');
     else
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 21498, ...
-        sprintf('instr regression: corpus %d <= 21498', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 21854, ...
+        sprintf('instr regression: corpus %d <= 21854', ic_total));
     end
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 88, ...
         sprintf('instr regression: hello.c %d <= 88', ic_hello));

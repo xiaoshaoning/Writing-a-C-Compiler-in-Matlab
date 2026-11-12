@@ -668,7 +668,7 @@ The previous thirty-odd rounds were measured against gcc and two clones: a secon
 implementation of C, which is a good oracle for the dialect and no oracle at all
 for MATLAB-host behaviour. One run on the real thing found what neither could.
 
-**Pointers to arrays: the last known limitation (2026-11-04).** `&a` on an
+**Pointers to arrays: the last limitation, and how it was closed (2026-11-04).** `&a` on an
 `int[3]` is an `int (*)[3]`, and the type model had no way to say that - a
 pointer was `pcode(elem, depth)` and nothing else - so `&a + 1` stepped 4 bytes
 where C steps 12, and `int (*p)[3]` did not parse.
@@ -743,9 +743,24 @@ value gave the dimension list a phantom first element. There is also an engine
 bug behind that: on `cli-v13`, `c{end+1} = []` is a no-op, so appending an empty
 cell element silently does nothing (filed in `matlab_in_rust/docs/`).
 
-Still a limitation, and now the only one known: a pointer to a ROW - `&a[0] + 1`,
-which C steps by a whole row, and `int (*p)[3]` declarations. Neither parses or
-steps correctly; both are recorded in the guard's header.
+**The "last limitation" was already closed - and nothing tested it (2026-11-05).**
+The paragraph above used to end by calling a pointer to a ROW (`&a[0] + 1`, and
+`int (*p)[3]`) the one known limitation. It is not: measured against gcc, both
+forms compile and step correctly, which the array-type work described earlier in
+this file had already made true. What was missing was coverage - the `int (*`
+matches in the corpus are all *function* pointers, and `&a[0] +` appeared in no
+program at all - so a regression would have been silent while the prose claimed
+breakage.
+
+- Guard `cc52_ptrrow.c` (exit 96): `int (*p)[3]` in globals and in a frame,
+  `sizeof(p)` = 8 and `sizeof(*p)` = 12, `(*p)[i]`, `p[i][j]`, `p[-1][2]` after
+  `p + 1`, and a local array built through `&b[0]`.
+- Guard `cc53_ptrrow2.c` (exit 96): the same row pointer with no declarator at
+  all - `(*(&a[0] + 1))[1]`, `*(*(&a[0] + 1))`, `sizeof(&a[0])` = 8 and
+  `sizeof(a[0])` = 12 - which exercises the address-of path instead of the parser.
+
+Both are gcc-identical (exit 96 on gcc, the clone and the Rust engine, with the
+two engines emitting the same 193 instructions each). Ceiling 21498 -> **21854**.
 
 **The last measured gap closed, and the address-of type (2026-11-04).** The two
 open items from the corner-probe round are both gone, and the second one found a
