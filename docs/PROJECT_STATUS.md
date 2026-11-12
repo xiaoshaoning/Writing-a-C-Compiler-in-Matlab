@@ -601,9 +601,19 @@ indexing spellings, and a `q = m` row pointer). Ceiling 21290 -> **21404**.
 Corpus swept in full on the clone: 1..164 **455/455** and 165..327 **345/345**,
 stdout byte-identical to gcc (164/164, 160/160); instr 142/142, hello.c 88.
 
-One spelling still does not parse: `int (*p)[3]` as a PARAMETER. `int a[][3]` is
-the idiom for that and works, so this is a corner - noted in the guard's header
-rather than silently.
+`int (*p)[3]` parses in **both** places now, because the head of a declarator -
+its `*`s and the `(*` that makes the name itself the pointer - is parsed once, by
+`parse_declarator_head`, and asked for by both the local-declaration path and the
+parameter path. They had grown separate copies of the same shape, which is how
+the parameter spelling came to be missing while the local one worked. A parameter
+of that type is a plain pointer whose pointee is the array, so `p[i][j]` indexes
+it with no extra state. Ceiling 21404 -> **21498**; corpus 165..327 **345/345**
+with stdout **160/160**; instr 142/142, hello.c 88.
+
+Nothing is left on the list this project keeps: every divergence from gcc it has
+been able to measure, and every dialect gap its own probes have found, is closed
+or written down as a deliberate extension (the `word` type, char-array
+assignment, implicit declarations).
 
 **Two-dimensional array parameters, and `m[i][j]` with variable indices
 (2026-11-04).** The parameter case is done, and it uncovered a worse bug than the

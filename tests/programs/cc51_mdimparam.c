@@ -6,9 +6,8 @@
  *
  * Also here: a pointer to a ROW. `&a` on an int[3] has type int (*)[3], so
  * `&a + 1` steps a whole array; `int (*p)[3]` is a declarator and `p[i]`/`(*p)`
- * yield the row. Not asserted: the same shape written as a PARAMETER
- * (`int (*p)[3]`), which does not parse - `int a[][3]` is the idiom and works.
- * See PROJECT_STATUS. */
+ * yield the row - and the same shape works as a PARAMETER, because a
+ * declarator's head (its stars and the `(*`) is parsed once for both. */
 int printf(const char *, ...);
 
 int rowsum(int a[][3], int rows) {
@@ -23,6 +22,16 @@ int rowsum(int a[][3], int rows) {
 
 int col2(int a[][3], int row) {
     return a[row][2];
+}
+
+int rowsum2(int (*p)[3], int rows) { /* the same thing, spelled as a pointer */
+    int i, j, s = 0;
+    for (i = 0; i < rows; i = i + 1) {
+        for (j = 0; j < 3; j = j + 1) {
+            s = s + p[i][j];
+        }
+    }
+    return s;
 }
 
 int flat(int a[], int n) {          /* the 1-D form still means int * */
@@ -59,6 +68,7 @@ int main() {
 
     /* the same array through both spellings */
     if (rowsum(m, 1) != 6) { return 6; }
+    if (rowsum2(m, 2) != 21) { return 15; }   /* int (*p)[3] as a parameter */
     if (flat(v, 1) != 0) { return 7; }
 
     /* a pointer to a row: &a steps a whole array, and int (*p)[3] indexes it */

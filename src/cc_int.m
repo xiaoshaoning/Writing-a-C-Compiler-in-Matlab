@@ -2508,11 +2508,8 @@ while token ~= 41           % ')'
     if isa(stdef, 'cell')
         fail('struct definitions are not allowed in parameter lists');
     end
-    depth = 0;
-    while token == 42       % '*'
-        depth = depth + 1;
-        next();
-    end
+    h = parse_declarator_head();
+    depth = h.depth;
     if token == 150
         names{end+1} = idname;
         next();             % consume the name
@@ -2525,7 +2522,19 @@ while token ~= 41           % ')'
     t = pcode(base, depth);
     decayed = 0;
     dims = [];
-    if token == 91          % '[': array parameter decays to a pointer
+    if h.paren
+        % `int (*p)[3]`: the same shape a local declaration has - a pointer
+        % whose pointee is an array, so p[i] is a row and p[i][j] an element.
+        expect(41);                 % ')'
+        adims = [];
+        while token == 91
+            next();
+            adims(end+1) = double(token_val);
+            next();
+            expect(93);
+        end
+        t = pcode(array_type(pcode(base, depth), adims), 1);
+    elseif token == 91          % '[': array parameter decays to a pointer
         while token == 91
             next();
             if token == 128
@@ -3024,6 +3033,31 @@ was_static = (token == 192);    % a `static` local keeps its value
 parse_declarators(base, stdef, tdims, was_static);
 end
 
+function d = parse_declarator_head()
+% parse_declarator_head - the part of a declarator that comes BEFORE the name:
+% the `*`s bound to the type, and an optional `(*` that makes the name itself the
+% pointer. `int *p`, `int **p`, `int (*p)[3]` and `int (*fp)(int)` all start this
+% way, and a parameter can be written the same as a local, so both parsers ask
+% here instead of each carrying its own copy of the shape.
+%
+% d.paren says the declarator was parenthesised; what follows the name (`(` or
+% `[`) then decides between a function pointer and a pointer to an array.
+global token
+d = struct('depth', 0, 'paren', 0);
+while token == 42           % '*'s bound to the type
+    d.depth = d.depth + 1;
+    next();
+end
+if token == 40              % '(': the pointer belongs to the NAME
+    next();
+    if token ~= 42
+        fail('expected * in a declarator');
+    end
+    next();
+    d.paren = 1;
+end
+end
+
 function parse_declarators(base, stdef, tdims, was_static)
 % parse_declarators - the declarator list of a declaration, the type having
 % been parsed already. Split out so that `enum { … } v;` can register the
@@ -3040,20 +3074,9 @@ if isa(stdef, 'cell')
     end
 end
 while true
-    depth = 0;
-    is_fptr = 0;
-    while token == 42       % '*': return-type pointers (`int *(*fp)…`)
-        depth = depth + 1;
-        next();
-    end
-    if token == 40          % '(': function pointer `(*name)(params)`
-        next();
-        if token ~= 42
-            fail('expected * for a function pointer');
-        end
-        next();
-        is_fptr = 1;
-    end
+    h = parse_declarator_head();
+    depth = h.depth;
+    is_fptr = h.paren;      % what follows the name decides fptr vs array
     if token ~= 150
         fail('expected a variable name');
     end
