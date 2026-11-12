@@ -1208,6 +1208,15 @@ elseif token == 178 || token == 198   % struct / union
         if isempty(tag)     % anonymous: give it a synthetic, unreferenced tag
             tag = sprintf('anonstruct%d', nstid + 1);
         end
+        % The tag is in scope from the moment it is seen (C 6.7.2.3p8), not from
+        % the closing brace, so a member may point back at the type being defined
+        % - the linked-list idiom `struct Node { struct Node *next; }`. Register
+        % the id before the members are parsed; register_struct() fills the body
+        % in afterwards instead of allocating a second id.
+        if ~isfield(stags, tag)
+            nstid = nstid + 1;
+            stags.(tag) = nstid;
+        end
         stdef = {tag, parse_struct_members(isunion)};
     else
         if isempty(tag)
@@ -1218,7 +1227,13 @@ elseif token == 178 || token == 198   % struct / union
             end
         end
         if ~isfield(stags, tag)
-            fail(sprintf('unknown tag %s', tag));
+            % `struct B *p;` before B is defined: C declares the tag HERE and
+            % completes it later, so record it as an incomplete type rather than
+            % failing. Only a use that needs the LAYOUT has to fail, and sdef_of
+            % says so there. Previously this was a hard "unknown tag" error, which
+            % made a forward pointer - ordinary C - impossible to write.
+            nstid = nstid + 1;
+            stags.(tag) = nstid;
         end
         base = 1000 + 2 * stags.(tag);
     end
@@ -1406,15 +1421,34 @@ def = {sz, membermap, mnames, isunion, algn};
 end
 
 function sid = register_struct(tag, def)
-% register_struct — assign a stid to a struct type definition.
+% register_struct — assign a stid to a struct type definition, or complete the
+% id the tag already holds (it is registered when the tag is first seen, so that
+% the body can refer to itself).
 global stags sdefs nstid
 if isfield(stags, tag)
-    fail(sprintf('duplicate struct %s', tag));
+    sid = stags.(tag);
+    if sid <= numel(sdefs) && ~isempty(sdefs{sid})
+        fail(sprintf('duplicate struct %s', tag));
+    end
+    sdefs{sid} = def;
+    return;
 end
 nstid = nstid + 1;
 stags.(tag) = nstid;
 sdefs{nstid} = def;
 sid = nstid;
+end
+
+function def = sdef_of(stid)
+% sdef_of — the definition registered under stid, or a clear error.
+% An id can exist with no body: a tag is registered when first seen, so a member
+% may point at the type being defined, and `struct B *p;` may precede B's body.
+% A pointer to an incomplete type is legal C; needing its LAYOUT is not.
+global sdefs
+if stid > numel(sdefs) || isempty(sdefs{stid})
+    fail('incomplete struct type: the tag was declared but never defined');
+end
+def = sdefs{stid};
 end
 
 function n = frame_slot(bytes)
@@ -1441,14 +1475,14 @@ function sz = ssize_of(t)
 % ssize_of — byte size of a struct VALUE type (1000+2*stid).
 global sdefs
 stid = (t - 1000) / 2;
-sz = sdefs{stid}{1};
+sz = sdef_of(stid){1};
 end
 
 function m = member_lookup(t, name)
 % member_lookup — {offset, type} of member `name` in struct VALUE type t.
 global sdefs
 stid = (t - 1000) / 2;
-mm = sdefs{stid}{2};
+mm = sdef_of(stid){2};
 if isfield(mm, name)
     m = mm.(name);
 else

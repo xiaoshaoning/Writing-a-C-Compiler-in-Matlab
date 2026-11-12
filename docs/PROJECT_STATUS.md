@@ -1036,9 +1036,33 @@ type as int — and **member types go through `parse_basetype`**, so
 int/char/double/struct only). Guard `cc29_union.c` (exit 96, gcc-comparable);
 ceiling 14150 → **14303**.
 
-Still unsupported: a struct/union *definition inside a typedef*
-(`typedef struct { … } P;`), array members (`struct S { char c[4]; }`), and
-local aggregate initializers (`struct S s = {1,2};`) — all pre-existing.
+Three things on that list were stale by 2026-11-05, and the fourth was not what
+it said (measured against gcc):
+
+- a struct/union *definition inside a typedef* (`typedef struct { … } P;`) works -
+  `td.c`, six members through four typedef'd definitions, exit 21 as gcc says;
+- array members (`struct S { char c[4]; }`) work - guard `cc35_memberarr.c`;
+- local aggregate initializers (`struct S s = {1,2};`) work - exit 3 as gcc says;
+- but a **tag used inside its own body** did not parse at all, with or without a
+  typedef: `struct Node { struct Node *next; }` failed with "unknown tag Node",
+  because the tag was registered only after the closing brace. That is the
+  linked-list idiom, and it was not merely a typedef gap.
+
+Fixed by taking C 6.7.2.3p8 literally: the tag is in scope from the moment it is
+seen. `parse_basetype` registers the id before the members are parsed and
+`register_struct` completes it (failing only on a real duplicate), and a tag that
+is *mentioned* before its body - `struct A { struct B *b; };` above B's definition
+- is registered as an incomplete type, which is what C does; only a use that needs
+the layout fails, through `sdef_of`, with "incomplete struct type". Pointer to an
+incomplete type is legal C and now compiles. Guard `cc54_tagscope.c` (exit 96):
+self-reference with and without a typedef, a forward tag, a union, nested
+anonymous structs, and a local list built through a self-pointer. Ceiling
+21854 -> **22086**.
+
+Still unsupported, and now the only typedef gap measured: **two declarators in one
+typedef** - `typedef struct { … } T, *PT;` fails with "expected token 59, got 44".
+One declarator per `typedef` works (`typedef struct { … } P;` above), so it is the
+comma and the second declarator that the branch does not loop over.
 
 **Returns anywhere + `extern` (2026-09-29).** `parse_body` stopped at the
 *first* top-level `return` (a tutorial simplification), so a label after a
