@@ -607,6 +607,36 @@ fixed:
    has - which is also why it could never be reproduced on the clones: they return
    the same type either way.
 
+**The runtime is matlab_in_rust's engine (2026-11-05).** `tests/env.sh` resolves to
+`matlab_in_rust/dist/matlab-cli/matlab.exe` - currently `cli-v18`, 20,756,060 bytes,
+2026-11-12 15:37 - when `MATLAB` is not exported. The three runtimes have three roles
+and it matters which is which:
+
+- **the engine** (`cli-v18`) is the runtime this project runs on. It is MATLAB
+  *enough*: every check in this suite passes on it, at the cost of compile throughput
+  ~270x the C clone and superlinear in source size, which is why the suite is sliced
+  by section and by program range rather than run whole.
+- **real MATLAB (R2024b)** is the authority when the two disagree, and it has
+  disagreed: the full-precision exit status, the invalid struct field names
+  (`@anon3`, `__st1_n`) and the empty-capture type were all invisible on both copies.
+- **the C clone** (`MATLAB_in_C/release/v1.3.86`) is the ORACLE for cross-checks - it
+  is what most engine bug reports were measured against - not a runtime to run the
+  suite on.
+
+`env.sh` now probes whatever it resolved (`getenv`, plus running a script file) and
+fails at startup naming the path. Before that it silently fell back to a 1.86 MB
+build in `MATLAB_in_C`'s root that has no `getenv`, so a clone with nothing exported
+died inside the harness with `Unrecognized function or variable 'getenv'` - and, with
+the new verdict classifier, was then reported as "the host kills it at a random
+point". `run_all.sh` prints the runtime and its size/date before the suite, because a
+log that does not say which engine produced it cannot be compared with another.
+
+Five engine defects were found from here and all are fixed in `cli-v18`: `%0NX` hex
+padding, `sprintf` repeating its format for string args, `x(:)` on a char row,
+`strcmp(cell,char)` returning a scalar 0, `sprintf('%s', ["ab","cd"])` throwing, and
+`c{end+1} = []` being a silent no-op - the last one the one that would have corrupted
+a compiler table. Their reports live in `matlab_in_rust/docs/`.
+
 **A cut-short run is now distinguishable from a failing one (2026-11-05).** This
 host kills `run_tests.m` at a random point - three deaths were observed in one
 session, at check 216, after `cc29_union`, and after `stress2` - and every rerun of

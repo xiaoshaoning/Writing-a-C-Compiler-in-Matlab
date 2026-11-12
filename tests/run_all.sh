@@ -47,6 +47,12 @@ suite_verdict() {
 }
 
 step "main suite: tests/run_tests.m"
+# Name the runtime: this project's results are runtime-specific, and a log that does
+# not say which engine produced it cannot be compared with another.
+echo "runtime: $MATLAB"
+if [ -r "$MATLAB" ]; then
+    echo "         $(wc -c < "$MATLAB" | tr -d ' ') bytes, $(date -r "$MATLAB" '+%Y-%m-%d %H:%M' 2>/dev/null)"
+fi
 cc_log=${TMPDIR:-/tmp}/cc_run_tests.log
 attempt=1
 while : ; do
