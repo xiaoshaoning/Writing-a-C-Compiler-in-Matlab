@@ -58,6 +58,24 @@ if ~isempty(cc_corpus)
     end
 end
 corpus_last = @(n) min(n, corpus_first + corpus_count - 1);
+% CC_OSTESTS=first:count slices the interpreter-vs-compiler parity lists, which
+% is how to make a diagnostic run small on a machine where the suite has never
+% finished (they are not covered by CC_CORPUS).
+cc_ost = getenv('CC_OSTESTS');
+ost_first = 1;
+ost_count = Inf;
+ost_last = @(n) n;
+if ~isempty(cc_ost)
+    cc_colon = strfind(cc_ost, ':');
+    if isempty(cc_colon)
+        ost_first = str2double(cc_ost);
+    else
+        ost_first = str2double(cc_ost(1:cc_colon(1) - 1));
+        ost_count = str2double(cc_ost(cc_colon(1) + 1:end));
+        ost_last = @(n) min(n, ost_first + ost_count - 1);
+    end
+    fprintf('ostests slice: %d..%d%s', ost_first, ost_first + ost_count - 1, char(10));
+end
 corpus_sliced = ~isempty(cc_corpus);
 if corpus_sliced
     fprintf('corpus slice: programs %d..%d\n', corpus_first, ...
@@ -1089,7 +1107,7 @@ cctests = {
     % cross-track output parity: programs that print (via the compiler's
     % runtime shims) must produce the SAME stdout through both tracks (the
     % interpreter's trailing 'exit(N)' trace is stripped first).
-    for ok = 1:numel(ostests)
+    for ok = ost_first:ost_last(numel(ostests))
         % print the program BEFORE working on it: this loop is silent until a
         % check completes, so a hang leaves no trace of where it stopped
         fprintf('... output parity %s\n', ostests{ok});
@@ -1116,6 +1134,11 @@ cctests = {
             [oc, oc_ok] = run_out('tmp_cc.exe', 'tmp_cc_out.txt');
             if ~oc_ok
                 error('could not read the compiler output');
+            end
+            if ~strcmp(oc, oo)
+                % print what the two sides actually produced: on a runtime where
+                % the harness has never run, "they differ" is not enough to act on
+                dump_mismatch(ostests{ok}, 'xc', oo, 'cc_int', oc);
             end
             [npass nfail] = addcheck(npass, nfail, strcmp(oc, oo), ...
                 sprintf('output parity %s (xc == cc_int stdout)', ostests{ok}));
@@ -1342,7 +1365,7 @@ cctests = {
     % stdout through the gcc-free simulator as through the interpreter.
     so2 = 0;
     if run_ostests
-    for s2k = 1:numel(ostests)
+    for s2k = ost_first:ost_last(numel(ostests))
         try
             delete('tmp_cc.s');
             cc_int(['tests/programs/' ostests{s2k}], 'tmp_cc.s');
@@ -1701,6 +1724,42 @@ for k = 1:numel(list)
         return;
     end
 end
+end
+
+function dump_mismatch(nm, aname, atext, bname, btext)
+% dump_mismatch - the two sides of a stdout comparison that disagreed: their
+% lengths, the first place they part, and a window around it with whitespace made
+% visible. A failing comparison is unactionable without this: the harness used to
+% record only "they differ", which is no help on a runtime it has never run on.
+fprintf('      %s: %s %d chars, %s %d chars%s', nm, aname, numel(atext), bname, numel(btext), char(10));
+n = min(numel(atext), numel(btext));
+d = 0;
+for q = 1:n
+    if atext(q) ~= btext(q)
+        d = q;
+        break;
+    end
+end
+if d == 0
+    d = n + 1;             % they agree up to the shorter one, then it runs out
+end
+dt = dump_window(atext, d);
+db = dump_window(btext, d);
+fprintf('      first difference at char %d%s        %-7s [%s]%s        %-7s [%s]%s', ...
+        d, char(10), aname, dt, char(10), bname, db, char(10));
+end
+
+function s = dump_window(t, d)
+lo = max(1, d - 12);
+hi = min(numel(t), d + 20);
+if lo > hi
+    s = '';
+    return;
+end
+s = t(lo:hi);
+s = strrep(s, char(9), '<TAB>');
+s = strrep(s, char(10), '<NL>');
+s = strrep(s, char(13), '<CR>');
 end
 
 function [t, ok] = run_out(exe, outfile)
