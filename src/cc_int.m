@@ -111,6 +111,8 @@ cret = 0;            % current function returns char
 cvoid = 0;           % current function returns void
 etype = 0;           % type code of the current expression
 ltype = 0;           % type of the last parsed lvalue (store width)
+laddr_expr = 0;      % the last unary expression computed an ADDRESS with '&', so it
+                     % is not storage: lvalue_addr refuses it (see its header)
 globals = struct();  % defined global names
 gtype = struct();    % global name -> type code
 garr = struct();     % global name -> 1 if an array
@@ -4247,8 +4249,9 @@ function parse_unary()
 % decay (no load, estruc = 1 for struct values).
 global token token_val token_dval token_isflt token_sfx idname strtext lvars lvartype lvararr lvarstruct ...
        globals gtype garr gstruct funcs fret frettype fparams called ltype libfns libcalls ...
-       etype estruc lvarstride gstride bstride lvararrsz gvararrsz curarrsz si typedefs fbytes fptypes libargt libret enums out lstatics lbf token_base
+       etype estruc lvarstride gstride bstride lvararrsz gvararrsz curarrsz si typedefs fbytes fptypes libargt libret enums out lstatics lbf token_base laddr_expr
 ops = [];
+laddr_expr = 0;      % cleared per unary expression; '&' sets it after its operand
 while token == 45 || token == 126 || token == 33 || token == 43 || ...   % - ~ ! +
       token == 38 || token == 42 || token == 170 || token == 171          % & * ++ --
     ops = [ops, token];
@@ -4927,6 +4930,7 @@ for k = numel(ops):-1:1
         em('\tmovzbl\t%al, %eax');
     elseif op == 38         % '&': address-of — drop the trailing load
         [is_lv, bf2] = lvalue_addr();
+        laddr_expr = 1;     % this expression IS an address, so it is not storage
         % the value's own array shape, taken BEFORE it is dropped below: `&a` on
         % an int[3] is an int (*)[3], so the shape is what types the result
         sav_arrsz = curarrsz;
@@ -5017,10 +5021,20 @@ function [ok, bf] = lvalue_addr()
 % is the bit-field it addressed - [bit_offset width], empty for an ordinary
 % one - because a store into a bit-field has to re-mask and rewrite the whole
 % storage unit instead of writing the field's own bytes.
-global out lbf
+%
+% An '&' expression is refused outright: it produces an address, which the load
+% and leaq tests below would otherwise accept, and `&x = 5` would store through
+% the computed address. Callers clear laddr_expr before parsing an operand.
+global out lbf ltype laddr_expr
 % a bit-field member: the load is followed by its shlq + sarq/shrq extraction
 % (em_bf_extract), and lbf holds where the field sits in its unit. Drop all
 % three so rax holds the unit's address and hand the description to the caller.
+if laddr_expr
+    ok = 0;                 % an address we computed is not storage
+    bf = [];
+    lbf = [];
+    return;
+end
 bf = lbf;
 lbf = [];                   % consumed here, so nothing can go stale
 if numel(out) >= 3 && ...
@@ -5046,7 +5060,13 @@ if numel(out) >= 1 && ...
     out(end) = [];
     ok = 1;
 elseif numel(out) >= 1 && ~isempty(strfind(out{end}, 'leaq'))
-    ok = 1;                 % a struct value or address: already in rax
+    % A struct value, or an array being assigned a string, is stored in place: the
+    % destination's address is already in rax and there is no load to drop. What is
+    % NOT an lvalue is an address the '&' operator just computed, and that is
+    % refused a few lines above by the laddr_expr test rather than by the type -
+    % an array identifier has already decayed to a pointer type by the time this
+    % runs, so the type cannot tell the two apart.
+    ok = 1;                 % a struct value: already in rax
 elseif numel(out) >= 1 && ~isempty(strfind(out{end}, sprintf('\taddq\t%%rbx, %%rax')))
     ok = 1;                 % an indexed row: its address is already in rax
 else

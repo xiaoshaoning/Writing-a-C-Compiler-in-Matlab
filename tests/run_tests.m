@@ -1660,6 +1660,20 @@ cctests = {
             'cc9_badargs.c arg-count error');
     end
 
+    % an '&' expression is not a modifiable lvalue (gcc: "lvalue required as left
+    % operand of assignment"). lvalue_addr used to accept any expression whose last
+    % instruction was a leaq, which is exactly what '&x' emits.
+    try
+        del('tmp_cc.s');
+        cc_int('tests/programs/cc_bad_addrassign.c', 'tmp_cc.s');
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            '&x = 5 should be refused');
+    catch e
+        [npass nfail] = addcheck(npass, nfail, ...
+            ~isempty(strfind(e.message, 'bad lvalue in assignment')), ...
+            '& on an lvalue is still not an lvalue');
+    end
+
     % a FORWARD call with the wrong arg count errors once the parse
     % completes (the at-call check only fires for already-parsed callees)
     try
