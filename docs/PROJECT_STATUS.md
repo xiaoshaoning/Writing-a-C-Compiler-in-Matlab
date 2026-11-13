@@ -1,6 +1,14 @@
-# Project Status — last updated 2026-09-19
+# Project Status — last updated 2026-11-05
 
 ## Summary
+
+**Current state (2026-11-05).** `832 tests, 832 passed, 0 failed` on real MATLAB
+R2024b; every one of those checks also passes on the engine
+(`matlab_in_rust/dist/matlab-cli`, the runtime this project is developed on) and on the
+C clone used as an oracle. `instr` 22884 (a ceiling, not a target: it caught its own
+update four times today), x86sim 336/336 exit codes, gcc stdout 333/333 byte-identical.
+Two tracks, both complete for their dialect: `xc.m` the interpreter, `cc_int.m` the
+compiler. What is deliberately not done is listed at the end of the recent notes.
 
 **Function-pointer members work, and the cause was not where I said (2026-11-05).**
 Earlier notes blamed `lvalue_addr` for the member miscompile. Measuring proved that
@@ -1293,6 +1301,7 @@ and the runtime library are the changelog entries above:
 | cc21 | local short/word/long declarations, casts, sizeof | `dd7fb97` |
 | cc22 | escape sequences (both tracks) | `0dc3320` |
 | cc23 | integer constant suffixes (both tracks) | `f06ee02` |
+| cc24-cc58 | doubles, bit-fields, aggregates and elision, unions, `long` widths, corner cases, pointer-to-row in all three declarator positions, tag scope, typedef declarator lists, function-pointer aliases and members | see the dated notes above |
 | double | SSE value model in `cc_int` + `x86sim` + gcc-parity corpus | `e2b4c8d` |
 | mex | in-memory `mxArray` ABI, `mex_run` driver, gcc reference track | `e502237`…`6276c06` |
 | parity | cross-track exit-code parity (187) + output parity (53, 47/47 matchable `pp_*`) | `04da1b7` `57e2fae` |
@@ -1355,7 +1364,7 @@ b
   should not pay for it: use the clone for sweeps, and run one section on
   `cli-v13` when an engine-compat claim is what is being checked.
 - **Every corpus program's stdout is compared with gcc's own build of the same
-  source (2026-11-04, `CC_SECTIONS=gccstdout`).** 324 of the 327 programs are
+  source (2026-11-04, `CC_SECTIONS=gccstdout`).** 333 of the 336 programs are
   byte-identical; the three skipped are `cc16_strarray{,2,3}.c`, which assign to
   a `char` array - the port's extension, invalid C in every dialect. Two things
   make it work: the reference build asks for `-std=gnu89`, because the corpus
@@ -1388,8 +1397,11 @@ b
   exe lookup under `NoDefaultCurrentDirectoryInExePath`). Every check is
   appended to `run_tests.log` as it runs, so a killed run still leaves a
   record.
-- **Hosts** (2026-09-29): the suite runs on the custom C clone and on the
-  matlab_in_rust engine. The C clone (v1.3.76 tag and the Sep 27 build) =
+- **Hosts** (2026-09-29; **superseded - see the 2026-11-05 notes at the top of this
+  file**): the suite runs on the custom C clone and on the matlab_in_rust engine. The
+  numbers below are that day's, kept because the root cause they record is worth
+  knowing; the engine has since had that quadratic store fixed and now runs the whole
+  suite, and a runnable real MATLAB is available and has verified 832/832. The C clone (v1.3.76 tag and the Sep 27 build) =
   **802/802** plus the four gates. The Rust engine (2026-09-29 build)
   reaches 588 checks with 0 failures and then hangs on
   `xc('tests/programs/stress2.c')` — the *compiler* track runs that same
@@ -1404,9 +1416,11 @@ b
   assembly is byte-identical across the two engines for all 308 corpus
   programs — a verified second oracle for the compiler track. Earlier runs — v1.3.72
   = 775/774/1, v1.3.53 and v1.3.68 = 584 / 183 failed, v1.3.47 = 577 / 191.
-  No runnable MathWorks MATLAB is installed on the development machine
-  (the R2023b install is a stub with no `matlab.exe`), so the suite's
-  "green oracle" is still unverified on it.
+  No runnable MathWorks MATLAB was installed on the development machine that day (the
+  R2023b install was a stub with no `matlab.exe`), so the suite's "green oracle" was
+  unverified on it then. **That is no longer true**: R2024b is installed and has now
+  verified **832/832** twice, and it is the runtime that found the three defects the
+  clones could not (2026-11-05 notes at the top of this file).
 - **Reference cross-check**: the reference `xc.c` built with gcc 15.2.0
   (`C:\msys64\ucrt64\bin\gcc.exe`). Every corpus program's exit code is
   identical to the reference; `-s` instruction dumps are byte-identical

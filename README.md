@@ -70,7 +70,7 @@ src/
 LICENSE, README.md
 
 tests/
-  run_tests.m         test harness (789 checks: probe gate, VM, lexer,
+  run_tests.m         test harness (832 checks: probe gate, VM, lexer,
                       program corpus, syscall/acceptance, cc_int/gcc,
                       x86sim, cross-track parity, instruction-count
                       regression, peephole-pass unit fixtures)
@@ -158,7 +158,7 @@ feature; `cc17_shim.c` shows `malloc`/`memset`/`memcmp`/`exit` together,
 and `cc18_*.c` covers pointer-returning fptrs, compound literals, and
 `unsigned`; `cc19_hex.c`–`cc20_litforms.c` cover the literal bases and
 `cc21_width.c` the narrow widths. The
-full 789-check
+full 832-check
 suite (both tracks, cross-track parity,
 stdout parity, instruction-count regression, optimizer unit fixtures, and
 the static globals audit):
@@ -176,11 +176,17 @@ to the working directory.
 
 ## Running
 
-MATLAB code runs on the custom MATLAB clone:
+MATLAB code runs on a MATLAB-compatible runtime, and which one matters, because this
+project's results are runtime-specific:
 
-```
-D:\Projects\codes\MATLAB_in_c\release\v1.3.21\matlab.bat
-```
+| Runtime | Role |
+|---|---|
+| **the engine** — `matlab_in_rust/dist/matlab-cli/matlab.exe` | where this project is developed, and where every check passes |
+| **real MATLAB** (R2024b) | the authority when the two disagree — and they have |
+| **the C clone** — `MATLAB_in_C/release/` | the oracle for cross-checks, not a runtime the suite runs on |
+
+`tests/env.sh` resolves it (`$MATLAB`, else the engine, else `matlab` on PATH) and
+refuses a runtime that cannot run the harness. The suite is green on all three.
 
 ### Assembly track (cc_int.m)
 
@@ -280,7 +286,7 @@ otherwise bleed into each other). The dialect is feature-complete against its
 documented scope; remaining C features (structs, unions, `switch`,
 `for`/`do-while`, …) are outside both the port and the reference dialect.
 
-Tests (789 checks — probe gate, VM selftest, lexer selftest, the program
+Tests (832 checks — probe gate, VM selftest, lexer selftest, the program
 corpus whose exit codes/outputs are cross-verified against the reference
 build, a gcc-gated group that compiles and runs the assembly-track
 programs, a cross-track parity group that runs the shared corpus through
@@ -301,16 +307,16 @@ The whole verification — the suite plus the four MEX/double gates
 bash tests/run_all.sh
 ```
 
-It resolves the runtime from `$MATLAB` (else `matlab` on PATH, else the
-clone build), derives the repo path from its own location, and exits
-non-zero if any part fails.
+It resolves the runtime from `$MATLAB`, else the engine, else `matlab` on PATH,
+derives the repo path from its own location, and exits non-zero if any part fails —
+distinguishing "some checks failed" from "the run was cut short", because a host that
+kills the suite leaves no summary line and used to read as a failure.
 
-The Rust engine is a supported runtime and a verified second oracle for the
-compiler track: all 308 corpus programs emit **byte-identical** assembly
-through `cc_int` + `peephole_pass` on both engines. Its interpreter is still
-too slow for one call-heavy program (`stress2.c`), so the suite stops at 588
-checks there; the three engine gaps and their repros are filed in the engine
-repo and summarised in `docs/2026-09-06-rust-engine-compat.md`.
+The engine is slow (compile throughput is far below the C clone's), so the suite is
+normally run in sections or program slices: `CC_SECTIONS`, `CC_CORPUS`, `CC_OSTESTS`.
+`docs/2026-09-06-rust-engine-compat.md` records the engine-compatibility work,
+including the five engine defects found from this project and fixed in the engine's
+`cli-v18`.
 
 Or in `-batch` mode:
 
@@ -335,5 +341,7 @@ matlab.bat -batch "run('tests/run_tests.m');"
   `docs/2026-08-16-reference-cross-check.md`).
 - Known bugs in the MATLAB clone (v1.2.37, fixed across v1.2.38-v1.3.21) are
   tracked in an internal bug report (`docs/2026-08-10-matlab-clone-bug-report.md`,
-  gitignored — not shipped with the repo); the port targets v1.3.21, follows
-  real MATLAB semantics, and avoids the remaining quirks defensively.
+  gitignored — not shipped with the repo). The port follows real MATLAB semantics and
+  avoids the clone's remaining quirks defensively; the C clone is used as the **oracle**
+  at `release/v1.3.86`, and the runtime this project is developed on is the Rust engine
+  (`matlab_in_rust/dist/matlab-cli`).
