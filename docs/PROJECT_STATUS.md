@@ -715,6 +715,19 @@ classifier called "failed".
 A boot failure - an unrecognised function before the first check - classifies as cut
 short too, which is why the log path is printed with the verdict.
 
+**Green on real MATLAB (2026-11-05, final): 832 tests, 832 passed, 0 failed, no
+warnings.** The run that measures the last two features: `cc58_ptrrow_forms.c` passes at
+exit 96, so a pointer to a row is right in all three declarator positions (local,
+typedef, member) on the authority runtime, and `&x = 5` is still refused there.
+x86sim **336/336**, gcc stdout **333/333 byte-identical**, instr **22884**. 831 -> 832 is
+cc58, which is what the count should do.
+
+That closes the queue: every check the suite contains has now passed on the runtime this
+project is developed against, and the three runtimes agree on all of it. What is left is
+deliberate, and written down where the next session will read it - `lvalue_addr`'s
+instruction matching (maintainability, no defect behind it), and four "not supported"
+messages that were each measured and are accurate.
+
 **Green on real MATLAB again (2026-11-05): 831 tests, 831 passed, 0 failed, no
 warnings.** This is the run that measures the day's last three changes on the
 authority runtime, and each one had a specific thing to prove:
