@@ -2,6 +2,38 @@
 
 ## Summary
 
+**`lvalue_addr` measured, and why it was not converted (2026-11-05).** It decides
+"is this an lvalue?" by matching the instructions just emitted against a list of load
+forms, and that is why a function-pointer member read produced the struct's address
+instead of the member's value: the load was not in the list, so the expression silently
+became an address. The fix is to record the fact where the expression is parsed.
+
+Measured before editing, by instrumenting a shadow copy of `cc_int.m` (counters in each
+branch of `lvalue_addr`, loaded ahead of `src` on the path) and compiling all 472 corpus
+programs - 452 compile, 20 refused as intended:
+
+    load=969   bitfield=37   address=31   row=14   none=3
+
+`none` is the three intended lvalue errors. So four shapes are real, each needs
+recording, and the split is dominated by the plain load while the other three are common
+enough that any of them going unrecorded would be a real regression.
+
+The conversion stops here, for a reason the measurement made concrete: there is no choke
+point to record them at. `address` is recognised today as "the last instruction contained
+`leaq`", and `leaq` is emitted at nine-plus separate sites (`&x`, struct values, string
+literals, local and global addresses). A shape flag set at "the leaq emitter" has no
+single place to live. What is needed is a small vocabulary: each producer of a value says
+how it is currently represented in rax - a load, an address, an indexed row, a bit-field
+extraction - and `lvalue_addr` reads that instead of guessing. The producers are
+`em_val` (loads), the address forms, the index/row path, and `em_bf_extract`, which
+already records its own description in `lbf`. Four producers, one consumer: a session's
+work, not an afternoon's.
+
+**The histogram is the acceptance test.** Rerun the same probe after the conversion; if
+the four counts are unchanged and `instr` is still 22493, the conversion is
+behaviour-neutral on 452 programs - a better promise than any assertion, and the reason
+to do it properly rather than quickly.
+
 **Interpreter track (`xc.m`): complete.** A single-file MATLAB port of
 lotabout's [write-a-C-interpreter](https://github.com/lotabout/write-a-C-interpreter)
 (`xc.c`, itself derived from c4): lexer → recursive-descent parser with
