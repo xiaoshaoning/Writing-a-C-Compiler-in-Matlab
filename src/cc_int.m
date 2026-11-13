@@ -1,5 +1,14 @@
 function cc_int(varargin)
 % cc_int — x86-64 assembly compiler (Norasandqer "Writing a C Compiler").
+%
+% The name: `cc` for C compiler, `_int` because part 1 of that tutorial compiles
+% `int` and nothing else. It passed that point about forty rounds ago (char, short,
+% long, unsigned, double, structs, unions, bit-fields, function pointers, arrays of
+% all of them, and aggregate initialisers), so read the `_int` as history, not as a
+% description. Renaming was considered and rejected: `mcc` collides with MathWorks'
+% MATLAB Compiler command, and every other candidate costs a 194-occurrence sweep
+% across 37 files for a name that already has a paragraph here.
+%
 %   Part 1: `return <int>;`
 %   Part 2: unary operators — `return -42;`, `return ~42;`, `return !42;`,
 %           unary plus, arbitrarily nested (`return -~!5;`).

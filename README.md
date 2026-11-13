@@ -181,12 +181,16 @@ project's results are runtime-specific:
 
 | Runtime | Role |
 |---|---|
-| **the engine** — `matlab_in_rust/dist/matlab-cli/matlab.exe` | where this project is developed, and where every check passes |
+| **the engine** — `matlab_in_rust/dist/matlab-cli/matlab.exe` (pinned at `cli-v18`, 2026-11-12) | where this project is developed, and where every check passes |
 | **real MATLAB** (R2024b) | the authority when the two disagree — and they have |
 | **the C clone** — `MATLAB_in_C/release/` | the oracle for cross-checks, not a runtime the suite runs on |
 
 `tests/env.sh` resolves it (`$MATLAB`, else the engine, else `matlab` on PATH) and
 refuses a runtime that cannot run the harness. The suite is green on all three.
+
+**Policy: a tag requires a real-MATLAB run.** Both tags so far were cut without one, and
+the two runs that did happen found the three defects no clone could show. A release that
+has not been through R2024b is a claim, not a verification.
 
 ### Assembly track (cc_int.m)
 
