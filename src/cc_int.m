@@ -1316,10 +1316,10 @@ end
 function def = parse_struct_members(isunion)
 % members := (type ('*')* name? (('[' size ']')? | ':' width) ';')* '}' — returns
 % a definition structure: .size bytes, .members the membermap, .names in
-% declaration order, .isunion, .align. membermap maps a member name ->
-% {offset, type, bit_width, element_count, dims, bit_offset}: a bit-field's
-% offset is its storage unit's and bit_offset is where the field starts inside
-% it, so the two together are the field's address. names lists the named
+% declaration order, .isunion, .align. membermap maps a member name to the
+% structure make_member builds: .off, .type, .bits, .count, .dims, .bit_off. A
+% bit-field's offset is its storage unit's and .bit_off is where the field starts
+% inside it, so the two together are the field's address. names lists the named
 % members in declaration order (for initializers).
 %
 % A union lays every member at offset 0 and is as large as its largest member
@@ -1425,7 +1425,7 @@ while token ~= 125          % '}'
         % every member shares offset 0; the union is as large as its
         % largest member (C 6.7.2.1)
         if ~anonymous
-            membermap.(name) = {0, mt, bw, asz, adims, 0};
+            membermap.(name) = make_member(0, mt, bw, asz, adims, 0);
         end
         if nbytes > off
             off = nbytes;
@@ -1449,14 +1449,14 @@ while token ~= 125          % '}'
                 off = off + st;         % the unit takes its whole size
             end
             if ~anonymous
-                membermap.(name) = {run_off, mt, bw, asz, adims, run_used};
+                membermap.(name) = make_member(run_off, mt, bw, asz, adims, run_used);
             end
             run_used = run_used + bw;
         end
     else
         run_off = -1;                   % a plain member ends the unit
         off = off + mod(-off, mal);     % align to the member's own width
-        membermap.(name) = {off, mt, bw, asz, adims, 0};
+        membermap.(name) = make_member(off, mt, bw, asz, adims, 0);
         off = off + nbytes;
     end
     if ~anonymous
@@ -1538,6 +1538,29 @@ end
 function sz = ssize_of(t)
 % ssize_of — byte size of a struct VALUE type (1000+2*stid).
 sz = sdef_of(t).size;
+end
+
+function m = make_member(off, mtype, bits, count, dims, bit_off)
+% make_member - one member's description.
+%
+% A named structure rather than the six-cell it used to be: every reader wrote out
+% `numel(minfo) >= k` to ask whether an optional field was there, and one of them
+% carried a comment apologising that the guard "keeps entries built before bit-fields
+% existed readable". The fields are always present - zero or empty when they do not
+% apply - so those guards and that apology are gone.
+%
+%   .off      byte offset inside the struct
+%   .type     the member's type code
+%   .bits     bit-field width, 0 when the member is not one
+%   .count    elements, 1 for a scalar member
+%   .dims     the array dimensions, [] for a scalar member
+%   .bit_off  where a bit-field starts inside its storage unit
+m.off = off;
+m.type = mtype;
+m.bits = bits;
+m.count = count;
+m.dims = dims;
+m.bit_off = bit_off;
 end
 
 function m = member_lookup(t, name)
@@ -2326,7 +2349,7 @@ function esz = member_elem_size(minfo)
 % scalar, an array or a struct, so an element is pointer-sized, a struct
 % value's size, or the scalar width. This decision used to be spelled out at
 % every use site, and the copies disagreed about struct elements.
-mt = minfo{2};
+mt = minfo.type;
 if is_ptr_code(mt)
     esz = 8;
 elseif is_struct_code(mt)
@@ -2340,15 +2363,10 @@ function bf = member_bitfield(minfo)
 % member_bitfield - [bit_offset width] for a bit-field member, [] for any other.
 % The only reader of the membermap's bit-field fields: the load site and the
 % initializer image both ask this, so the layout's answer cannot be interpreted
-% two ways. The guard on numel keeps entries built before bit-fields existed
-% readable.
+% two ways. `.bits` is 0 for any other member, so there is no case to guard.
 bf = [];
-if numel(minfo) >= 3 && minfo{3} > 0
-    bof = 0;
-    if numel(minfo) >= 6
-        bof = minfo{6};
-    end
-    bf = [bof minfo{3}];
+if minfo.bits > 0
+    bf = [minfo.bit_off minfo.bits];
 end
 end
 
@@ -2357,8 +2375,8 @@ function n = member_leaves(minfo)
 % struct contributes its own members' leaves (recursively), an array its
 % element count, anything else one. An array OF struct value contributes the
 % struct's leaves per element.
-mt = minfo{2};
-isarr = numel(minfo) >= 4 && minfo{4} > 1;
+mt = minfo.type;
+isarr = minfo.count > 1;
 if is_sval(mt)
     def = sdef_of(mt);
     nm = def.names;
@@ -2368,10 +2386,10 @@ if is_sval(mt)
         n = n + member_leaves(mm.(nm{q}));
     end
     if isarr
-        n = n * minfo{4};
+        n = n * minfo.count;
     end
 elseif isarr
-    n = minfo{4};
+    n = minfo.count;
 else
     n = 1;
 end
@@ -2410,9 +2428,9 @@ names = def.names;
 mm = def.members;
 for k = 1:numel(names)
     minfo = mm.(names{k});
-    off = boff + minfo{1};
-    mt = minfo{2};
-    isarr = numel(minfo) >= 4 && minfo{4} > 1;
+    off = boff + minfo.off;
+    mt = minfo.type;
+    isarr = minfo.count > 1;
     first = lbase + member_leaf_offset(names, mm, k) - 1;
     if is_sval(mt) && ~isarr
         bytes = place_members(bytes, (mt - 1000) / 2, vals, first, off);
@@ -2420,8 +2438,8 @@ for k = 1:numel(names)
         % an array member: one leaf per element, an element's width apart, or
         % the values would all land on the member's first slot
         esz = member_elem_size(minfo);
-        per = member_leaves(minfo) / minfo{4};   % leaves in one element
-        for q = 1:minfo{4}
+        per = member_leaves(minfo) / minfo.count;   % leaves in one element
+        for q = 1:minfo.count
             if is_struct_code(mt)
                 bytes = place_members(bytes, (mt - 1000) / 2, vals, ...
                                       first + (q - 1) * per, off + (q - 1) * esz);
@@ -3500,8 +3518,8 @@ function got = member_values(minfo)
 % values may use a group per element or elide those groups too. Anything else
 % is one constant.
 global token
-mt = minfo{2};
-isarr = numel(minfo) >= 4 && minfo{4} > 1;
+mt = minfo.type;
+isarr = minfo.count > 1;
 got = [];
 if is_sval(mt) && ~isarr
     got = aggregate_values(mt, (token == 123));   % braces if given, else flat
@@ -3509,14 +3527,14 @@ if is_sval(mt) && ~isarr
 end
 n = 1;
 if isarr
-    n = minfo{4};
+    n = minfo.count;
 end
 braced = (token == 123);
 if braced && ~is_sval(mt)
     % a braced array member (possibly multi-dimensional): parse_arr_init knows
     % the nested and flat forms and returns the flattened elements
-    if numel(minfo) >= 5 && numel(minfo{5}) > 1
-        got = parse_arr_init(minfo{5}, 1);
+    if numel(minfo.dims) > 1
+        got = parse_arr_init(minfo.dims, 1);
     else
         got = parse_arr_init(n, 1);
     end
@@ -4838,21 +4856,21 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
             base_t = pderef(etype);   % the pointed-to struct value type
         end
         mem = member_lookup(base_t, mname);
-        em(sprintf('\taddq\t$%d, %%rax', mem{1}));
-        etype = mem{2};
-        if numel(mem) >= 4 && mem{4} > 1
+        em(sprintf('\taddq\t$%d, %%rax', mem.off));
+        etype = mem.type;
+        if mem.count > 1
             % an array member: it decays to a pointer to its first element
             % (the address is already in rax), and keeps its byte size so
             % that sizeof sees the whole array.
             estruc = 0;
-            etype = padd(mem{2});
+            etype = padd(mem.type);
             esz = member_elem_size(mem);
-            if numel(mem) >= 5 && numel(mem{5}) > 1
-                bstride = cstride_of(mem{5}, esz);   % a[i][j] needs the strides
+            if numel(mem.dims) > 1
+                bstride = cstride_of(mem.dims, esz);   % a[i][j] needs the strides
             else
                 bstride = [];
             end
-            curarrsz = mem{4} * esz;
+            curarrsz = mem.count * esz;
         elseif is_struct_code(etype)
             estruc = 1;               % a struct member: address, no load
         else
