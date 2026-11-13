@@ -1344,6 +1344,7 @@ while token ~= 125          % '}'
     h = parse_declarator_head();   % the `*`s, and `(*` for a parenthesised name
     depth = h.depth;
     anonymous = (token == 58);   % ':' straight after the type: no member name
+    is_fptr = 0;
     if anonymous
         name = '';
     else
@@ -1353,17 +1354,26 @@ while token ~= 125          % '}'
         name = idname;
         next();
         if h.paren
-            % `int (*f)(int)`: a function-pointer member. The shared head parses the
-            % shape now, but the VALUE path does not carry it. Measured: reading such
-            % a member emits the struct's address where the member's value is due
-            % (`p = s.f;` becomes `movq &s, p` - a silent miscompile), and assigning
-            % to one dies in lvalue_addr, which recognises lvalues by matching the
-            % instructions already emitted. A wrong answer is worse than a refusal,
-            % so the declaration is refused until both paths exist.
-            fail('function-pointer members are not supported yet');
+            % `int (*f)(int)`: a function-pointer member. The shape parses (the shared
+            % declarator head) and the value path carries it, which it did not when
+            % this was first written: the member access chose the struct branch for
+            % anything >= 1000 that was not a pointer code, and a function-pointer
+            % type is exactly that, so reading the member emitted the struct's address
+            % where its value was due. is_struct_code() is the predicate that knows
+            % the difference, and every copy of it that spelled the test out by hand
+            % had the same hole.
+            expect(41);             % ')'
+            if token ~= 40
+                fail('a pointer-to-array member is not supported');
+            end
+            skip_prototype();       % the parameter types are not represented
+            is_fptr = 1;
         end
     end
     mt = pcode(mbase, depth);
+    if is_fptr
+        mt = 2000 + mbase + 2 * depth;   % the code the variable path uses
+    end
     adims = [];
     asz = 1;
     while token == 91       % '[': member array, any number of dimensions
@@ -1383,7 +1393,7 @@ while token ~= 125          % '}'
     end
     if is_struct_code(mbase) && depth == 0
         st = ssize_of(mbase);
-    elseif depth > 0
+    elseif depth > 0 || is_fptr
         st = 8;                 % a pointer member
     else
         st = tsize(mbase);      % the member's element width
@@ -1907,7 +1917,7 @@ lvarstruct = struct();
 lstatics = struct();
 glabels = struct();
 fbytes = 0;
-[nparams, psize, ptypes, nunnamed] = parse_params(rettype >= 1000 && ~is_ptr_code(rettype));
+[nparams, psize, ptypes, nunnamed] = parse_params(is_struct_code(rettype));
 expect(41);                 % )
 if token == 59              % ';' - a declaration, not a definition
     % A prototype needs no registration: a call records its own arity in
@@ -1936,7 +1946,7 @@ fret.(fname2) = rettype;    % full return type for call sites
 frettype.(fname2) = rettype;
 cret = ischarfn;
 cvoid = (rettype == 4);     % void-returning (no value in rax)
-sret = (rettype >= 1000 && ~is_ptr_code(rettype));   % struct-returning
+sret = is_struct_code(rettype);   % struct-returning
 if sret
     sretsize = ssize_slot(rettype);   % the callee's return slot is storage
     sretbase = 16 + 8 * nparams;
@@ -2232,7 +2242,7 @@ for k = 1:numel(glist)
         elseif isarr
             % array initializer: values comma-separated (byte for char
             % elements, quad otherwise)
-            if t >= 1000 && ~is_ptr_code(t)
+            if is_struct_code(t)
                 line = '	.quad	';
             else
                 line = dir_of(elem_size(t));
@@ -4721,7 +4731,7 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
                 curarrsz = 0;
                 et = pderef(t);
                 etype = et;
-                if et >= 1000 && ~is_ptr_code(et)
+                if is_struct_code(et)
                     estruc = 1;         % a struct value: address, no load
                 else
                     em_val(et);
@@ -4737,7 +4747,7 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
                 set_array_value(et);     % the row: its address, and its shape
             else
                 etype = et;
-                if et >= 1000 && ~is_ptr_code(et)
+                if is_struct_code(et)
                     estruc = 1;               % struct element: address, no load
                 else
                     em_val(et);
@@ -4843,7 +4853,7 @@ while token == 91 || token == 170 || token == 171 || token == 46 || ...
                 bstride = [];
             end
             curarrsz = mem{4} * esz;
-        elseif etype >= 1000 && ~is_ptr_code(etype)
+        elseif is_struct_code(etype)
             estruc = 1;               % a struct member: address, no load
         else
             estruc = 0;
@@ -4956,7 +4966,7 @@ for k = numel(ops):-1:1
             elseif is_ptr_code(etype) && pdepth(etype) == 1 && pbase(etype) == 1
                 em('\tmovzbl\t(%rax), %eax');
                 estruc = 0;
-            elseif etype >= 1000 && ~is_ptr_code(etype)
+            elseif is_struct_code(etype)
                 estruc = 1;     % a struct value: no load
             elseif etype == 6
                 em('\tmovsd\t(%rax), %xmm0');

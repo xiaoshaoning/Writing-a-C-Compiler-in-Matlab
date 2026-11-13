@@ -2,11 +2,23 @@
 
 ## Summary
 
+**Function-pointer members work, and the cause was not where I said (2026-11-05).**
+Earlier notes blamed `lvalue_addr` for the member miscompile. Measuring proved that
+wrong: the member access never reached it. Six places spelled out "is this a struct
+value?" by hand as `t >= 1000 && ~is_ptr_code(t)`, and a function-pointer type is
+`2000 + return type` - over 1000, and not a pointer code - so every one of those copies
+took the STRUCT branch and emitted the member's ADDRESS where its value was due
+(`p = s.f;` became `movq &s, p`: silent, not an error). `is_struct_code()` knew the
+difference all along and excluded pointers and function pointers; the hand-written
+copies did not. All six ask it now, and a function pointer as a struct member parses,
+loads, stores, sizes and calls - guard `cc57_fptrmember.c` (exit 96), which also covers
+a nested member, an array of them, a global struct and `->`. Ceiling 22493 -> **22703**.
+
 **`lvalue_addr` measured, and why it was not converted (2026-11-05).** It decides
 "is this an lvalue?" by matching the instructions just emitted against a list of load
-forms, and that is why a function-pointer member read produced the struct's address
-instead of the member's value: the load was not in the list, so the expression silently
-became an address. The fix is to record the fact where the expression is parsed.
+forms - a real design problem, but not the cause above: once the predicate was fixed the
+member load was an ordinary `movq (%rax), %rax`, which the list has always accepted. The
+measurement below stands on its own for the future.
 
 Measured before editing, by instrumenting a shadow copy of `cc_int.m` (counters in each
 branch of `lvalue_addr`, loaded ahead of `src` on the path) and compiling all 472 corpus
@@ -1176,27 +1188,27 @@ position. Guard `cc56_fptr_alias.c` (exit 96): locals, a global, a parameter, a 
 through the alias, and two pointers declared by one typedef. Ceiling 22332 ->
 **22493**.
 
-**Function-pointer members: the parser is unified, the value path is not, so the
-declaration is refused (2026-11-05, measured).** The member parser was the last copy
-of the declarator shape and it had no parenthesised form either -
-`struct S { int (*f)(int); }` failed with "expected a member name" (gcc: 42). All four
-parsers (variable, parameter, typedef, member) now ask `parse_declarator_head`.
+**Function-pointer members: the parser was one half, a copied predicate was the other
+(2026-11-05, measured).** The member parser was the last copy of the declarator shape
+and it had no parenthesised form either - `struct S { int (*f)(int); }` failed with
+"expected a member name" (gcc: 42). All four parsers (variable, parameter, typedef,
+member) now ask `parse_declarator_head`.
 
-Making it *parse* was the small half. The value path does not carry the type:
+The parser was the easy half, and the obstacle behind it was *not* where it looked. Reading
+such a member emitted the struct's ADDRESS where the member's value was due -
+`p = s.f;` became `leaq -8(%rbp), %rax; movq %rax, p` - a silent miscompile. That was
+first blamed on `lvalue_addr` and written up as an instruction-matching problem; measuring
+showed the member access never reached `lvalue_addr` at all. Six places spelled "is this a
+struct value?" by hand as `t >= 1000 && ~is_ptr_code(t)`, and a function-pointer type is
+`2000 + return type`: over 1000, not a pointer code. Every copy took the struct branch.
+`is_struct_code()` is that predicate, written once and excluding both bands; all six ask it
+now. Assignment failed for the same reason (a struct-typed target is not a store target),
+not because of the load list.
 
-- **reading** such a member emitted the struct's ADDRESS where the member's value is
-  due - `p = s.f;` became `leaq -8(%rbp), %rax; movq %rax, p`. A silent miscompile,
-  not an error.
-- **assigning** to one dies in `lvalue_addr`, which decides what an lvalue is by
-  matching the instructions already emitted against a list of load forms; a
-  function-pointer member's load is not in the list.
-
-So the declaration is refused with "function-pointer members are not supported yet".
-A wrong answer is worse than a refusal, and with the parser fixed the old failure
-("expected a member name") would have become the silent one. Closing it means
-teaching the value path the type - and `lvalue_addr`'s instruction matching is the
-design problem underneath: a text match on generated code is how an lvalue check
-should not be written.
+Guard `cc57_fptrmember.c` (exit 96) covers the member read, store, size and call, plus a
+nested member, an array of members, a global struct and `->`. Ceiling 22493 -> **22703**.
+The lesson is the session's recurring one: the bug was in a *copy* of a predicate, and the
+copy that was wrong was the one nobody had exercised with the type that breaks it.
 
 **Returns anywhere + `extern` (2026-09-29).** `parse_body` stopped at the
 *first* top-level `return` (a tutorial simplification), so a label after a

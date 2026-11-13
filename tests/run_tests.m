@@ -784,6 +784,7 @@ cctests = {
         'cc54_tagscope.c', 96;     % a tag is in scope before its body: self-reference, forward
         'cc55_typedefs.c', 96;     % one typedef naming several declarators (T, *PT, B[3])
         'cc56_fptr_alias.c', 96;   % a typedef'd function pointer (the declarator head was missing)
+        'cc57_fptrmember.c', 96;   % a function-pointer MEMBER (is_struct_code, six copies of it)
     };
     % The one range every corpus loop iterates. Three loops need it, and the
     % one that spelled the bounds out for itself was silently running the whole
@@ -1491,8 +1492,9 @@ cctests = {
     % pointer-to-a-row forms that were already working (int (*p)[3], and &a[0] + 1
     % built by address-of) and add their own code, so it was 21854; cc54 pins the
     % tag-scope rules (self-reference, forward pointer) and adds its own, so it is
-    % 22086; cc55 pins one typedef naming several declarators (22332) and cc56 a
-    % typedef'd function pointer, so it is 22493. See
+    % 22086; cc55 pins one typedef naming several declarators (22332), cc56 a
+    % typedef'd function pointer (22493) and cc57 a function-pointer member, so it is
+    % 22703. See
     % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
@@ -1518,8 +1520,8 @@ cctests = {
     if corpus_sliced
         fprintf('SKIP  instr regression: corpus total (sliced run)\n');
     else
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 22493, ...
-        sprintf('instr regression: corpus %d <= 22493', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 22703, ...
+        sprintf('instr regression: corpus %d <= 22703', ic_total));
     end
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 88, ...
         sprintf('instr regression: hello.c %d <= 88', ic_hello));
@@ -1658,21 +1660,6 @@ cctests = {
             'cc9_badargs.c arg-count error');
     end
 
-    % A function-pointer struct member must be REFUSED. gcc compiles it and the
-    % port cannot carry the type through the value path - reading one emits the
-    % struct's address where the member's value belongs, which is a silent wrong
-    % answer rather than an error. The parser refuses it, and this check exists so
-    % that making it parse again fails HERE instead of becoming that wrong answer.
-    try
-        del('tmp_cc.s');
-        cc_int('tests/programs/cc_badfptr_member.c', 'tmp_cc.s');
-        [npass nfail] = addcheck(npass, nfail, false, ...
-            'function-pointer member should be refused');
-    catch e
-        [npass nfail] = addcheck(npass, nfail, ...
-            ~isempty(strfind(e.message, 'function-pointer members are not supported')), ...
-            'function-pointer member refused with a clear message');
-    end
     % a FORWARD call with the wrong arg count errors once the parse
     % completes (the at-call check only fires for already-parsed callees)
     try
