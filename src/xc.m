@@ -2399,10 +2399,12 @@ args = zeros(1, nvals);
 for k = 1:nvals
     args(k) = double(word_load(tmp - 8*(k+1)));
 end
-% Build the output spec by spec. Each numeric spec is formatted with a
-% single-spec sprintf (safe for numeric args; sprintf with string args
-% repeats the format — BUG-16 — so %s is formatted manually). %n writes
-% the running count to its arg address; %p prints hex.
+% Build the output spec by spec, one single-spec sprintf each. %s used to be
+% formatted by hand because the clones repeated the format string for a string
+% argument (BUG-16, filed from here and fixed in cli-v18); sprintf handles %s,
+% width, precision and flags on every runtime now, so the workaround is deleted
+% rather than kept as lines nobody dares remove. %n writes the running count to
+% its arg address; %p prints hex.
 out = '';
 ai = 1;
 i = 1;
@@ -2453,7 +2455,7 @@ while i <= nf
         end
     end
     if conv == 115            % 's': the arg addresses a mem string
-        out = [out, fmt_str_spec(spec, mem_str(args(ai)))];
+        out = [out, sprintf(spec, mem_str(args(ai)))];
     elseif conv == 110        % 'n': write the running count to the arg
         word_store(args(ai), numel(out));
     elseif conv == 112        % 'p': pointer as lowercase hex
@@ -2466,51 +2468,6 @@ while i <= nf
 end
 fprintf('%s', out);
 ax = numel(out);
-end
-
-function s = fmt_str_spec(spec, str)
-% fmt_str_spec — %s width/precision/flags applied manually (the clone's
-% sprintf repeats the format for string args — BUG-16 — so width/precision
-% are implemented here).
-rest = spec(2:end-1);   % between '%' and 's'
-left = 0;
-k = 1;
-while k <= numel(rest) && ...
-      (rest(k) == '-' || rest(k) == '+' || rest(k) == '0' || rest(k) == '#')
-    if rest(k) == '-'
-        left = 1;
-    end
-    k = k + 1;
-end
-w = 0;
-while k <= numel(rest) && rest(k) >= '0' && rest(k) <= '9'
-    w = w * 10 + (double(rest(k)) - 48);
-    k = k + 1;
-end
-prec = -1;
-if k <= numel(rest) && rest(k) == '.'
-    k = k + 1;
-    prec = 0;
-    while k <= numel(rest) && rest(k) >= '0' && rest(k) <= '9'
-        prec = prec * 10 + (double(rest(k)) - 48);
-        k = k + 1;
-    end
-end
-if prec >= 0 && numel(str) > prec
-    str = str(1:prec);
-end
-if numel(str) < w
-    % repmat(' ',1,n) returns a double on the runtime — build the pad as
-    % char(32*ones) so the concatenation stays char
-    pad = char(32 * ones(1, w - numel(str)));
-    if left
-        s = [str, pad];
-    else
-        s = [pad, str];
-    end
-else
-    s = str;
-end
 end
 
 function s = hex_addr(v)

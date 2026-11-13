@@ -795,7 +795,7 @@ cctests = {
     % ONE NAME PER LINE. A newline inside a cell literal ends the ROW, so a
     % line carrying several names makes rows of different widths - the clones
     % pad them, real MATLAB rejects the whole literal with a vertcat error.
-    % A column is what the one reader (isin, which walks numel) expects.
+    % A column is what the one reader expects (strcmp over the column).
     pshared = {
         'stress.c'
         'stress2.c'
@@ -1078,7 +1078,7 @@ cctests = {
             % cross-track parity: for the shared subset, the interpreter and
             % the compiler must agree (the OS truncates the exit code to the
             % low byte)
-            if ~isempty(pshared) && isin(pshared, cctests{k,1})
+            if ~isempty(pshared) && any(strcmp(pshared, cctests{k,1}))
                 ri = xc(['tests/programs/' cctests{k,1}]);
                 [npass nfail] = addcheck(npass, nfail, ...
                     mod(double(ri), 256) == got, ...
@@ -1702,18 +1702,6 @@ fid = fopen('run_tests.log', 'a');
 if fid > 0
     fprintf(fid, '%s  %s\n', tag, name);
     fclose(fid);
-end
-end
-
-function b = isin(list, s)
-% isin — membership in a cell list. (strcmp(cell, str) is broken on the
-% clone — returns a scalar 0 — so compare element by element.)
-b = 0;
-for k = 1:numel(list)
-    if strcmp(list{k}, s)
-        b = 1;
-        return;
-    end
 end
 end
 
