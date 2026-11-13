@@ -1341,11 +1341,8 @@ while token ~= 125          % '}'
     if ~isempty(mdef)
         mbase = 1000 + 2 * register_struct(mdef.tag, mdef.body);
     end
-    depth = 0;
-    while token == 42       % '*'
-        depth = depth + 1;
-        next();
-    end
+    h = parse_declarator_head();   % the `*`s, and `(*` for a parenthesised name
+    depth = h.depth;
     anonymous = (token == 58);   % ':' straight after the type: no member name
     if anonymous
         name = '';
@@ -1355,6 +1352,16 @@ while token ~= 125          % '}'
         end
         name = idname;
         next();
+        if h.paren
+            % `int (*f)(int)`: a function-pointer member. The shared head parses the
+            % shape now, but the VALUE path does not carry it. Measured: reading such
+            % a member emits the struct's address where the member's value is due
+            % (`p = s.f;` becomes `movq &s, p` - a silent miscompile), and assigning
+            % to one dies in lvalue_addr, which recognises lvalues by matching the
+            % instructions already emitted. A wrong answer is worse than a refusal,
+            % so the declaration is refused until both paths exist.
+            fail('function-pointer members are not supported yet');
+        end
     end
     mt = pcode(mbase, depth);
     adims = [];

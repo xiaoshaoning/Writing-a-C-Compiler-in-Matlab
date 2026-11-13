@@ -1129,11 +1129,27 @@ position. Guard `cc56_fptr_alias.c` (exit 96): locals, a global, a parameter, a 
 through the alias, and two pointers declared by one typedef. Ceiling 22332 ->
 **22493**.
 
-**Still unsupported, measured:** a function pointer as a **struct member** -
-`struct S { int (*f)(int); }` fails with "expected a member name" (gcc: 42). The
-member parser is the remaining copy of the declarator shape. Note this fails for the
-plain form too, so it is not a typedef-consequence; it is the same drift one copy
-further along.
+**Function-pointer members: the parser is unified, the value path is not, so the
+declaration is refused (2026-11-05, measured).** The member parser was the last copy
+of the declarator shape and it had no parenthesised form either -
+`struct S { int (*f)(int); }` failed with "expected a member name" (gcc: 42). All four
+parsers (variable, parameter, typedef, member) now ask `parse_declarator_head`.
+
+Making it *parse* was the small half. The value path does not carry the type:
+
+- **reading** such a member emitted the struct's ADDRESS where the member's value is
+  due - `p = s.f;` became `leaq -8(%rbp), %rax; movq %rax, p`. A silent miscompile,
+  not an error.
+- **assigning** to one dies in `lvalue_addr`, which decides what an lvalue is by
+  matching the instructions already emitted against a list of load forms; a
+  function-pointer member's load is not in the list.
+
+So the declaration is refused with "function-pointer members are not supported yet".
+A wrong answer is worse than a refusal, and with the parser fixed the old failure
+("expected a member name") would have become the silent one. Closing it means
+teaching the value path the type - and `lvalue_addr`'s instruction matching is the
+design problem underneath: a text match on generated code is how an lvalue check
+should not be written.
 
 **Returns anywhere + `extern` (2026-09-29).** `parse_body` stopped at the
 *first* top-level `return` (a tutorial simplification), so a label after a
