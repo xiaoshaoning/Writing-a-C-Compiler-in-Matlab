@@ -934,11 +934,29 @@ if token == 184         % typedef
             % declarator always read this form; this branch did not, because the
             % shape was written out twice and the second copy lost the parentheses.
             expect(41);             % ')'
-            if token ~= 40
-                fail('a pointer-to-array typedef is not supported');
+            if token == 40
+                skip_prototype();   % the parameter types are not represented
+                alias = 2000 + tbase + 2 * depth;   % the code the variable path uses
+            else
+                % `typedef int (*PA)[3]`: a pointer to a ROW - `p + 1` steps a whole
+                % row - which is the type the variable declarator has always built.
+                % The row's dimensions are parsed and consumed HERE, so the '[' loop
+                % below does not read them as the alias's own array dimensions.
+                pdims = [];
+                while token == 91
+                    next();
+                    if token ~= 128
+                        fail('expected a constant array size');
+                    end
+                    pdims(end+1) = double(token_val);
+                    next();
+                    expect(93);
+                end
+                if isempty(pdims)
+                    fail('expected array dimensions after (*name)');
+                end
+                alias = pcode(array_type(pcode(tbase, depth), pdims), 1);
             end
-            skip_prototype();       % the parameter types are not represented
-            alias = 2000 + tbase + 2 * depth;   % the code the variable path uses
         end
         adims = [];
         while token == 91       % '[': `typedef int ia[3];`
@@ -1347,6 +1365,7 @@ while token ~= 125          % '}'
     depth = h.depth;
     anonymous = (token == 58);   % ':' straight after the type: no member name
     is_fptr = 0;
+    is_ptrow = 0;
     if anonymous
         name = '';
     else
@@ -1365,16 +1384,35 @@ while token ~= 125          % '}'
             % the difference, and every copy of it that spelled the test out by hand
             % had the same hole.
             expect(41);             % ')'
-            if token ~= 40
-                fail('a pointer-to-array member is not supported');
+            if token == 40
+                skip_prototype();   % the parameter types are not represented
+                is_fptr = 1;
+            else
+                % `int (*p)[3]`: a pointer-to-row MEMBER, built the way the variable
+                % path builds it. Its dimensions belong to the pointee, so they are
+                % consumed here rather than becoming the member's array dims.
+                pdims = [];
+                while token == 91
+                    next();
+                    if token ~= 128
+                        fail('expected a constant array size');
+                    end
+                    pdims(end+1) = double(token_val);
+                    next();
+                    expect(93);
+                end
+                if isempty(pdims)
+                    fail('expected array dimensions after (*name)');
+                end
+                is_ptrow = pcode(array_type(pcode(mbase, depth), pdims), 1);
             end
-            skip_prototype();       % the parameter types are not represented
-            is_fptr = 1;
         end
     end
     mt = pcode(mbase, depth);
     if is_fptr
         mt = 2000 + mbase + 2 * depth;   % the code the variable path uses
+    elseif is_ptrow ~= 0
+        mt = is_ptrow;                   % a pointer to a row: eight bytes, one indirection
     end
     adims = [];
     asz = 1;
@@ -1395,7 +1433,7 @@ while token ~= 125          % '}'
     end
     if is_struct_code(mbase) && depth == 0
         st = ssize_of(mbase);
-    elseif depth > 0 || is_fptr
+    elseif depth > 0 || is_fptr || is_ptrow ~= 0
         st = 8;                 % a pointer member
     else
         st = tsize(mbase);      % the member's element width

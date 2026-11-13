@@ -14,6 +14,22 @@ copies did not. All six ask it now, and a function pointer as a struct member pa
 loads, stores, sizes and calls - guard `cc57_fptrmember.c` (exit 96), which also covers
 a nested member, an array of them, a global struct and `->`. Ceiling 22493 -> **22703**.
 
+**A pointer to a row in all three declarator positions (2026-11-05).** `int (*p)[3]`
+worked as a local (cc52) while two positions were refused, each with its own message:
+`typedef int (*PA)[3]` and `struct S { int (*p)[3]; }`. Both are the type the variable
+path has always built - `pcode(array_type(pcode(elem, depth), dims), 1)` - so both build
+it the same way now, consuming the row's dimensions as the POINTEE's rather than as the
+declaration's own array dimensions. Guard `cc58_ptrrow_forms.c` (exit 96) checks the
+step rather than the declaration: after `p + 1`, `(*p)[0]` is the next row's first
+element in every form, and `sizeof(PA)` is 8 while `sizeof(*p)` is 12. Ceiling
+22703 -> **22884**.
+
+The other four "not supported" messages in `cc_int.m` were each checked the same way and
+are accurate: `(int[]){…}` compound literals work, `(int*){…}` ones do not (gcc agrees),
+`%` on doubles is illegal C, and float literals in array initializers, `/=` on doubles
+and `void` variables are real gaps with real messages. That is the point of checking:
+after this session, the code's own claim of what it cannot do is measured, not assumed.
+
 **`lvalue_addr` measured, and why it was not converted (2026-11-05).** It decides
 "is this an lvalue?" by matching the instructions just emitted against a list of load
 forms - a real design problem, but not the cause above: once the predicate was fixed the
