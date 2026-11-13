@@ -1065,6 +1065,7 @@ cctests = {
             for attempt = 1:5   % retry: a lingering process can hold tmp_cc.exe so gcc cannot write it (a real assembler error still fails every attempt)
                 del('tmp_cc.s');
                 del('tmp_cc.exe');   % no stale exe can leak into this test
+                progress('compiling %s', cctests{k,1});
                 cc_int(['tests/programs/' cctests{k,1}], 'tmp_cc.s');
                 [st_gcc, ~] = system([gcc, ' tmp_cc.s -o tmp_cc.exe']);
                 if st_gcc == 0 && exist('tmp_cc.exe', 'file') == 2
@@ -1104,6 +1105,7 @@ cctests = {
         % print the program BEFORE working on it: this loop is silent until a
         % check completes, so a hang leaves no trace of where it stopped
         fprintf('... output parity %s\n', ostests{ok});
+        progress('parity %s', ostests{ok});
         try
             oo = evalc(sprintf('rcx = xc(''tests/programs/%s'');', ostests{ok}));
             op = strfind(oo, 'exit(');
@@ -1150,6 +1152,7 @@ cctests = {
     for sk = corpus_range
         try
             del('tmp_cc.s');
+            progress('x86sim %s', cctests{sk,1});
             cc_int(['tests/programs/' cctests{sk,1}], 'tmp_cc.s');
             got = mod(x86sim('tmp_cc.s'), 256);
             simtot = simtot + 1;
@@ -1399,6 +1402,7 @@ cctests = {
             % functions come from the port's libfns table), which is legal C89 and an
             % error in C23, so the reference build must be asked for the older
             % dialect or ten programs look uncompilable when they are merely dated.
+            progress('gcc stdout %s', gnm);
             if system([gcc ' -std=gnu89 -w tests/programs/' gnm ' -o tmp_gcc.exe']) ~= 0 || ...
                     exist('tmp_gcc.exe', 'file') ~= 2
                 gskip{end+1} = gnm;
@@ -1503,6 +1507,7 @@ cctests = {
     for ick = corpus_range
         try
             del('tmp_cc.s');
+            progress('counting %s', cctests{ick,1});
             cc_int(['tests/programs/' cctests{ick,1}], 'tmp_cc.s');
             ic_total = ic_total + count_instr('tmp_cc.s');
         catch e
@@ -1760,6 +1765,24 @@ function last = slice_last(spec, n)
 % Pass n = Inf for the end the caller ASKED for rather than the end the list has,
 % which is what the range report prints.
 last = min(n, spec.first + spec.count - 1);
+end
+
+function progress(fmt, varargin)
+% progress - leave behind what the suite is doing RIGHT NOW.
+%
+% The host kills this process at a random point (see the header), and a killed process
+% cannot report anything: no error, no summary, and the log's last line is a check that
+% already COMPLETED. That is how a cut-short run stayed unexplained for a day. The file
+% below outlives the kill, so the next one names the program it died on.
+%
+% It is the same file run_tests.verdict ends up holding (`<passed> <failed>`), written
+% early and overwritten at the end - so a file with text in it is a run that never
+% finished, and the text says where.
+fid = fopen('run_tests.verdict', 'w');
+if fid > 0
+    fprintf(fid, sprintf(fmt, varargin{:}));
+    fclose(fid);
+end
 end
 
 function del(f)

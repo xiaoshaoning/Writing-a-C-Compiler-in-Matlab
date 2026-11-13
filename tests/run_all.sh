@@ -60,6 +60,9 @@ while : ; do
     rc=${PIPESTATUS[0]}
     suite_verdict; verdict=$?
     [ "$verdict" -ne 2 ] && break
+    if [ -r run_tests.verdict ]; then
+        echo "           it was doing: $(cat run_tests.verdict)"
+    fi
     if [ "$attempt" -eq 1 ]; then
         echo "run_tests: CUT SHORT - no summary line, so the process died (exit $rc)."
         echo "           retrying once: the death is random, always with 0 failures"
