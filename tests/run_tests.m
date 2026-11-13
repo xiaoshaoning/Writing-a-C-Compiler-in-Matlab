@@ -1657,6 +1657,22 @@ cctests = {
             ~isempty(strfind(e.message, 'called with 2 args')), ...
             'cc9_badargs.c arg-count error');
     end
+
+    % A function-pointer struct member must be REFUSED. gcc compiles it and the
+    % port cannot carry the type through the value path - reading one emits the
+    % struct's address where the member's value belongs, which is a silent wrong
+    % answer rather than an error. The parser refuses it, and this check exists so
+    % that making it parse again fails HERE instead of becoming that wrong answer.
+    try
+        del('tmp_cc.s');
+        cc_int('tests/programs/cc_badfptr_member.c', 'tmp_cc.s');
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            'function-pointer member should be refused');
+    catch e
+        [npass nfail] = addcheck(npass, nfail, ...
+            ~isempty(strfind(e.message, 'function-pointer members are not supported')), ...
+            'function-pointer member refused with a clear message');
+    end
     % a FORWARD call with the wrong arg count errors once the parse
     % completes (the at-call check only fires for already-parsed callees)
     try
