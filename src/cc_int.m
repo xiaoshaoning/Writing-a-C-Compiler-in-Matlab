@@ -122,6 +122,8 @@ etype = 0;           % type code of the current expression
 ltype = 0;           % type of the last parsed lvalue (store width)
 laddr_expr = 0;      % the last unary expression computed an ADDRESS with '&', so it
                      % is not storage: lvalue_addr refuses it (see its header)
+lspec = 0;           % what the last emitted instruction left in %rax: 1 a load,
+                     % 2 an address, 3 an indexed row, 0 nothing to say (spec_of)
 globals = struct();  % defined global names
 gtype = struct();    % global name -> type code
 garr = struct();     % global name -> 1 if an array
@@ -407,9 +409,37 @@ function idx = em(line)
 % process C escapes, so a literal backslash-t becomes a tab. Returns the
 % cell index (used to backpatch the frame size). The line's shape is
 % normalised once, in cc_int_join, where the output text is actually built.
-global out
+global out lspec
 out{end+1} = strrep(line, '\t', char(9));
+lspec = spec_of(out{end});
 idx = numel(out);
+end
+
+function k = spec_of(s)
+% spec_of - what a just-emitted instruction leaves in %rax, for lvalue_addr:
+%   1  a load             the address in rax was consumed; the VALUE is in rax
+%   2  an address (leaq)  rax holds storage; nothing to drop
+%   3  an indexed row     rax holds a row's address (addq %rbx, %rax)
+%   4  the end of a bit-field extraction (sarq/shrq): says so only together with
+%                         lbf, which the member load set - a plain `>>` ends the same
+%                         way and must not be mistaken for one
+%   0  anything else      arithmetic, a branch, a store: nothing to say
+%
+% One list, kept next to the emitter, instead of a scan of the last three instructions
+% at every store. lvalue_addr used to compare eight exact load strings itself, so a
+% load form nobody had told it about produced "bad lvalue" on a valid program - which
+% is exactly how a function-pointer member failed.
+tab = char(9);
+k = 0;
+if strncmp(s, [tab, 'leaq'], 5)
+    k = 2;
+elseif strcmp(s, [tab, 'addq', tab, '%rbx, %rax'])
+    k = 3;
+elseif strncmp(s, [tab, 'mov'], 4) && ~isempty(strfind(s, ['(%rax), %']))
+    k = 1;              % a load FROM rax's address; a store reads (%r8), not (%rax)
+elseif strncmp(s, [tab, 'sarq'], 5) || strncmp(s, [tab, 'shrq'], 5)
+    k = 4;              % the tail of em_bf_extract; lbf says whether it was one
+end
 end
 
 function set_array_value(at)
@@ -5072,7 +5102,7 @@ function [ok, bf] = lvalue_addr()
 % An '&' expression is refused outright: it produces an address, which the load
 % and leaq tests below would otherwise accept, and `&x = 5` would store through
 % the computed address. Callers clear laddr_expr before parsing an operand.
-global out lbf ltype laddr_expr
+global out lbf ltype laddr_expr lspec
 % a bit-field member: the load is followed by its shlq + sarq/shrq extraction
 % (em_bf_extract), and lbf holds where the field sits in its unit. Drop all
 % three so rax holds the unit's address and hand the description to the caller.
@@ -5084,38 +5114,21 @@ if laddr_expr
 end
 bf = lbf;
 lbf = [];                   % consumed here, so nothing can go stale
-if numel(out) >= 3 && ...
-   (strncmp(out{end}, [char(9), 'sarq'], 5) || strncmp(out{end}, [char(9), 'shrq'], 5)) && ...
-   strncmp(out{end - 1}, [char(9), 'shlq'], 5) && ...
-   ~isempty(strfind(out{end - 2}, sprintf('\t(%%rax)')))
+if ~isempty(bf) && lspec == 4 && numel(out) >= 3
+    % a bit-field: the load, its shlq, and the sarq/shrq that extracts it. bf is the
+    % description the caller needs, and the emitter recorded it.
     out(end) = [];
     out(end) = [];
     out(end) = [];
     ok = 1;
-    return;             % bf describes the load just dropped
+    return;
 end
 bf = [];
-if numel(out) >= 1 && ...
-   (strcmp(out{end}, sprintf('\tmovq\t(%%rax), %%rax')) || ...
-    strcmp(out{end}, sprintf('\tmovzbl\t(%%rax), %%eax')) || ...
-    strcmp(out{end}, sprintf('\tmovsbq\t(%%rax), %%rax')) || ...
-    strcmp(out{end}, sprintf('\tmovzwl\t(%%rax), %%eax')) || ...
-    strcmp(out{end}, sprintf('\tmovswq\t(%%rax), %%rax')) || ...
-    strcmp(out{end}, sprintf('\tmovl\t(%%rax), %%eax')) || ...
-    strcmp(out{end}, sprintf('\tmovslq\t(%%rax), %%rax')) || ...
-    strcmp(out{end}, sprintf('\tmovsd\t(%%rax), %%xmm0')))
-    out(end) = [];
+if lspec == 1 && numel(out) >= 1
+    out(end) = [];          % a load: drop it, and rax is the address again
     ok = 1;
-elseif numel(out) >= 1 && ~isempty(strfind(out{end}, 'leaq'))
-    % A struct value, or an array being assigned a string, is stored in place: the
-    % destination's address is already in rax and there is no load to drop. What is
-    % NOT an lvalue is an address the '&' operator just computed, and that is
-    % refused a few lines above by the laddr_expr test rather than by the type -
-    % an array identifier has already decayed to a pointer type by the time this
-    % runs, so the type cannot tell the two apart.
-    ok = 1;                 % a struct value: already in rax
-elseif numel(out) >= 1 && ~isempty(strfind(out{end}, sprintf('\taddq\t%%rbx, %%rax')))
-    ok = 1;                 % an indexed row: its address is already in rax
+elseif lspec == 2 || lspec == 3
+    ok = 1;                 % an address, or a row address: already storage
 else
     ok = 0;
 end
