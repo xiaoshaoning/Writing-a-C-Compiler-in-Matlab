@@ -910,39 +910,49 @@ function parse_decl_or_func()
 global token idname typedefs enums token_val
 if token == 184         % typedef
     next();
-    [base, stdef, tdim0] = parse_basetype();
+    [tbase, stdef, tdim0] = parse_basetype();
     if ~isempty(stdef)   % `typedef struct { … } P;`
-        base = 1000 + 2 * register_struct(stdef.tag, stdef.body);
+        tbase = 1000 + 2 * register_struct(stdef.tag, stdef.body);
     end
-    depth = 0;
-    while token == 42       % '*': `typedef int *ip;`
-        depth = depth + 1;
-        next();
-    end
-    if token ~= 150
-        fail('expected a typedef name');
-    end
-    nm = idname;
-    next();
-    adims = [];
-    while token == 91       % '[': `typedef int ia[3];`
-        next();
-        if token ~= 128
-            fail('expected a constant array size');
+    % One typedef may declare several names, and the '*' and '[' belong to each
+    % declarator, not to the typedef: `typedef int A, *PA, B[3];` aliases three
+    % different types, and `typedef struct { … } T, *PT;` was the last gap on the
+    % list of things this parser could not read.
+    while true
+        depth = 0;
+        while token == 42       % '*': `typedef int *ip;`
+            depth = depth + 1;
+            next();
         end
-        adims(end+1) = double(token_val);
-        next();
-        expect(93);
-        if adims(end) < 0
-            fail('bad array size');
+        if token ~= 150
+            fail('expected a typedef name');
         end
+        nm = idname;
+        next();
+        adims = [];
+        while token == 91       % '[': `typedef int ia[3];`
+            next();
+            if token ~= 128
+                fail('expected a constant array size');
+            end
+            adims(end+1) = double(token_val);
+            next();
+            expect(93);
+            if adims(end) < 0
+                fail('bad array size');
+            end
+        end
+        if isempty(adims)
+            adims = tdim0;      % `typedef ia ib;` inherits the array dims
+        end
+        % the alias is the full (tbase + 2*depth) code plus any array dims;
+        % callers still add 2*(their own '*') so `ip *pp;` composes
+        typedefs.(nm) = {pcode(tbase, depth), adims};
+        if token ~= 44          % ',': another declarator of the same typedef
+            break;
+        end
+        next();
     end
-    if isempty(adims)
-        adims = tdim0;      % `typedef ia ib;` inherits the array dims
-    end
-    % the alias is the full (base + 2*depth) code plus any array dims;
-    % callers still add 2*(their own '*') so `ip *pp;` composes
-    typedefs.(nm) = {pcode(base, depth), adims};
     expect(59);
     return;
 end

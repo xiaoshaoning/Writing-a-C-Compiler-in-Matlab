@@ -1107,10 +1107,15 @@ self-reference with and without a typedef, a forward tag, a union, nested
 anonymous structs, and a local list built through a self-pointer. Ceiling
 21854 -> **22086**.
 
-Still unsupported, and now the only typedef gap measured: **two declarators in one
-typedef** - `typedef struct { … } T, *PT;` fails with "expected token 59, got 44".
-One declarator per `typedef` works (`typedef struct { … } P;` above), so it is the
-comma and the second declarator that the branch does not loop over.
+**Two declarators in one typedef (2026-11-05).** The gap named above is closed:
+`typedef struct { … } T, *PT;` reported "expected token 59, got 44" because the
+typedef branch read one declarator and then demanded the ';'. A typedef declares a
+LIST, and `*` and `[` belong to each declarator rather than to the typedef -
+`typedef int A, *PA, B[3];` names three different types - so the branch loops over
+them now, resetting the pointer depth and inheriting the array dims per declarator.
+Guard `cc55_typedefs.c` (exit 96): a definition plus a pointer to it, a
+self-referential struct plus its pointer, a scalar/pointer/array trio, a union twice,
+and file-scope declarators from those typedefs. Ceiling 22086 -> **22332**.
 
 **Returns anywhere + `extern` (2026-09-29).** `parse_body` stopped at the
 *first* top-level `return` (a tutorial simplification), so a label after a

@@ -782,6 +782,7 @@ cctests = {
         'cc52_ptrrow.c', 96;       % int (*p)[3]: the declarator, and p + 1 stepping a row
         'cc53_ptrrow2.c', 96;      % the same row pointer built by &a[0] + 1, no declarator
         'cc54_tagscope.c', 96;     % a tag is in scope before its body: self-reference, forward
+        'cc55_typedefs.c', 96;     % one typedef naming several declarators (T, *PT, B[3])
     };
     % The one range every corpus loop iterates. Three loops need it, and the
     % one that spelled the bounds out for itself was silently running the whole
@@ -1489,7 +1490,7 @@ cctests = {
     % pointer-to-a-row forms that were already working (int (*p)[3], and &a[0] + 1
     % built by address-of) and add their own code, so it was 21854; cc54 pins the
     % tag-scope rules (self-reference, forward pointer) and adds its own, so it is
-    % 22086. See
+    % 22086; cc55 pins one typedef naming several declarators, so it is 22332. See
     % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
@@ -1515,8 +1516,8 @@ cctests = {
     if corpus_sliced
         fprintf('SKIP  instr regression: corpus total (sliced run)\n');
     else
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 22086, ...
-        sprintf('instr regression: corpus %d <= 22086', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 22332, ...
+        sprintf('instr regression: corpus %d <= 22332', ic_total));
     end
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 88, ...
         sprintf('instr regression: hello.c %d <= 88', ic_hello));
