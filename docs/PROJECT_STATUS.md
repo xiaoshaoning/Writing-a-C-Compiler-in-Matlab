@@ -1117,6 +1117,24 @@ Guard `cc55_typedefs.c` (exit 96): a definition plus a pointer to it, a
 self-referential struct plus its pointer, a scalar/pointer/array trio, a union twice,
 and file-scope declarators from those typedefs. Ceiling 22086 -> **22332**.
 
+**A typedef'd function pointer, and the parser copy that lost a form (2026-11-05).**
+Reviewing the typedef loop turned up a second defect behind the first: the branch
+parsed its own declarator (`*`s, name, `[`s) while `parse_declarator_head` exists so
+that "all the parsers" share that shape — its comment said *both*, and the typedef
+branch was a third that never asked. Its copy had lost the parenthesised form, so
+`typedef int (*FP)(int);` failed with "expected a typedef name" while the identical
+form on a variable had always worked. All three now ask the shared head, and the
+alias's bytecode is a named pair (`.code`, `.dims`) instead of a two-cell read by
+position. Guard `cc56_fptr_alias.c` (exit 96): locals, a global, a parameter, a call
+through the alias, and two pointers declared by one typedef. Ceiling 22332 ->
+**22493**.
+
+**Still unsupported, measured:** a function pointer as a **struct member** -
+`struct S { int (*f)(int); }` fails with "expected a member name" (gcc: 42). The
+member parser is the remaining copy of the declarator shape. Note this fails for the
+plain form too, so it is not a typedef-consequence; it is the same drift one copy
+further along.
+
 **Returns anywhere + `extern` (2026-09-29).** `parse_body` stopped at the
 *first* top-level `return` (a tutorial simplification), so a label after a
 return, a second top-level return, or dead code after one was a parse error

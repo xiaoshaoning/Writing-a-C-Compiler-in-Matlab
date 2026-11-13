@@ -919,16 +919,25 @@ if token == 184         % typedef
     % different types, and `typedef struct { … } T, *PT;` was the last gap on the
     % list of things this parser could not read.
     while true
-        depth = 0;
-        while token == 42       % '*': `typedef int *ip;`
-            depth = depth + 1;
-            next();
-        end
+        h = parse_declarator_head();   % the `*`s, and `(*` for a parenthesised name
+        depth = h.depth;
         if token ~= 150
             fail('expected a typedef name');
         end
         nm = idname;
         next();
+        alias = pcode(tbase, depth);
+        if h.paren
+            % `typedef int (*FP)(int);` - a function-pointer alias. The variable
+            % declarator always read this form; this branch did not, because the
+            % shape was written out twice and the second copy lost the parentheses.
+            expect(41);             % ')'
+            if token ~= 40
+                fail('a pointer-to-array typedef is not supported');
+            end
+            skip_prototype();       % the parameter types are not represented
+            alias = 2000 + tbase + 2 * depth;   % the code the variable path uses
+        end
         adims = [];
         while token == 91       % '[': `typedef int ia[3];`
             next();
@@ -947,7 +956,8 @@ if token == 184         % typedef
         end
         % the alias is the full (tbase + 2*depth) code plus any array dims;
         % callers still add 2*(their own '*') so `ip *pp;` composes
-        typedefs.(nm) = {pcode(tbase, depth), adims};
+        typedefs.(nm).code = alias;
+        typedefs.(nm).dims = adims;
         if token ~= 44          % ',': another declarator of the same typedef
             break;
         end
@@ -1263,10 +1273,8 @@ elseif token == 178 || token == 198   % struct / union
     end
 elseif token == 150 && isfield(typedefs, idname)
     td = typedefs.(idname);
-    base = td{1};
-    if numel(td) >= 2
-        tdims = td{2};      % a typedef'd array type
-    end
+    base = td.code;
+    tdims = td.dims;        % [] unless the alias is an array type
     next();
 elseif token == 185         % enum: `typedef enum { … } mxClassID;` —
     % register the constants, the type itself is an int (class ids)
@@ -3103,8 +3111,9 @@ function d = parse_declarator_head()
 % parse_declarator_head - the part of a declarator that comes BEFORE the name:
 % the `*`s bound to the type, and an optional `(*` that makes the name itself the
 % pointer. `int *p`, `int **p`, `int (*p)[3]` and `int (*fp)(int)` all start this
-% way, and a parameter can be written the same as a local, so both parsers ask
-% here instead of each carrying its own copy of the shape.
+% way, and a parameter can be written the same as a local or a typedef, so all
+% three parsers ask here instead of each carrying its own copy of the shape - the
+% typedef one did, and its copy had lost the parenthesised form entirely.
 %
 % d.paren says the declarator was parenthesised; what follows the name (`(` or
 % `[`) then decides between a function pointer and a pointer to an array.
