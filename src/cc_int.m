@@ -120,7 +120,7 @@ ginit = {};          % {name, type, codes} non-constant global inits (startup)
 strs = {};           % {label, text} string literals for the .data output
 nstr = 0;            % string-literal counter
 stags = struct();    % struct tag -> stid (struct value types = 1000+2*stid)
-sdefs = {};          % stid -> {size, membermap}; membermap: name -> {off,type}
+sdefs = {};          % stid -> a definition structure: see parse_struct_members
 nstid = 0;           % next struct id
 estruc = 0;          % 1 = current expression is a struct VALUE (address in
                      % rax, no load pending)
@@ -1118,7 +1118,8 @@ function [base, stdef, tdims] = parse_basetype()
 %
 % stdef is [] or a structure with two fields:
 %   .tag   the tag, synthetic for an anonymous definition
-%   .body  {size, membermap, names, isunion, alignment} from parse_struct_members
+%   .body  the definition structure from parse_struct_members (.size, .members,
+%          .names, .isunion, .align)
 %
 % It used to be 0 or a two-cell, so every caller asked isa(stdef,'cell') to mean
 % "is this a definition?" and then read stdef{1}/stdef{2} by position.
@@ -1306,7 +1307,8 @@ end
 
 function def = parse_struct_members(isunion)
 % members := (type ('*')* name? (('[' size ']')? | ':' width) ';')* '}' — returns
-% {size, membermap, names, isunion, alignment}. membermap maps a member name ->
+% a definition structure: .size bytes, .members the membermap, .names in
+% declaration order, .isunion, .align. membermap maps a member name ->
 % {offset, type, bit_width, element_count, dims, bit_offset}: a bit-field's
 % offset is its storage unit's and bit_offset is where the field starts inside
 % it, so the two together are the field's address. names lists the named
@@ -1440,7 +1442,11 @@ end
 next();                     % consume '}'
 % C allows trailing padding: round the size up to the widest member's alignment
 sz = off + mod(-off, algn);
-def = {sz, membermap, mnames, isunion, algn};
+def.size = sz;
+def.members = membermap;
+def.names = mnames;
+def.isunion = isunion;
+def.align = algn;
 end
 
 function sid = register_struct(tag, def)
@@ -1462,21 +1468,26 @@ sdefs{nstid} = def;
 sid = nstid;
 end
 
-function def = sdef_of(t)
-% sdef_of — the definition behind struct VALUE type code t, or a clear error.
-%
-% Takes the TYPE CODE, not the id, so `(t - 1000) / 2` is written here and nowhere
-% else. The payload is parse_struct_members' tuple:
-%   {size, membermap, names, isunion, alignment}
-% An id can exist with no body: a tag is registered when first seen, so a member
-% may point at the type being defined, and `struct B *p;` may precede B's body.
-% A pointer to an incomplete type is legal C; needing its LAYOUT is not.
+function def = sdef_by_id(stid)
+% sdef_by_id - the definition under struct id stid, or a clear error.
+% An id can exist with no body: a tag is registered when it is first seen.
 global sdefs
-stid = (t - 1000) / 2;
 if stid < 1 || stid > numel(sdefs) || isempty(sdefs{stid})
     fail('incomplete struct type: the tag was declared but never defined');
 end
 def = sdefs{stid};
+end
+
+function def = sdef_of(t)
+% sdef_of — the definition behind struct VALUE type code t, or a clear error.
+%
+% Takes the TYPE CODE, not the id, so `(t - 1000) / 2` is written here and nowhere
+% else. What comes back is the structure parse_struct_members builds:
+%   .size  bytes        .members  name -> {offset, type, bit width, ...}
+%   .names declaration order        .isunion   .align
+% It used to be a five-cell indexed by position, which said nothing at the call
+% site and had to be counted out again at every use.
+def = sdef_by_id((t - 1000) / 2);
 end
 
 function n = frame_slot(bytes)
@@ -1501,12 +1512,12 @@ end
 
 function sz = ssize_of(t)
 % ssize_of — byte size of a struct VALUE type (1000+2*stid).
-sz = sdef_of(t){1};
+sz = sdef_of(t).size;
 end
 
 function m = member_lookup(t, name)
 % member_lookup — {offset, type} of member `name` in struct VALUE type t.
-mm = sdef_of(t){2};
+mm = sdef_of(t).members;
 if isfield(mm, name)
     m = mm.(name);
 else
@@ -2273,11 +2284,11 @@ end
 function a = align_of(t)
 % align_of - the alignment a value of type t needs. A scalar aligns to its own
 % width, capped at 8, which is the widest alignment any type here has; a struct
-% value aligns to its own member-wise maximum (sdef_of(t){5}). This is the one
+% value aligns to its own member-wise maximum (sdef_of(t).align). This is the one
 % owner of that decision: member offsets and the struct's own alignment both
 % ask it. It is C's alignment, not the storage width - ssize_slot handles that.
 if is_struct_code(t)
-    a = sdef_of(t){5};
+    a = sdef_of(t).align;
 elseif is_ptr_code(t)
     a = 8;
 else
@@ -2321,13 +2332,12 @@ function n = member_leaves(minfo)
 % struct contributes its own members' leaves (recursively), an array its
 % element count, anything else one. An array OF struct value contributes the
 % struct's leaves per element.
-global sdefs
 mt = minfo{2};
 isarr = numel(minfo) >= 4 && minfo{4} > 1;
 if is_sval(mt)
-    stid = (mt - 1000) / 2;
-    nm = sdefs{stid}{3};
-    mm = sdefs{stid}{2};
+    def = sdef_of(mt);
+    nm = def.names;
+    mm = def.members;
     n = 0;
     for q = 1:numel(nm)
         n = n + member_leaves(mm.(nm{q}));
@@ -2346,9 +2356,8 @@ function bytes = struct_bytes(vals, sbase)
 % struct_bytes - map a struct's flat leaf values to its byte image
 % (little-endian; member widths come from member_elem_size). A leaf the
 % initializer did not provide is left zero.
-global sdefs
 stid = (sbase - 1000) / 2;
-bytes = zeros(1, sdefs{stid}{1});
+bytes = zeros(1, sdef_of(sbase).size);
 bytes = place_members(bytes, stid, vals, 1, 0);
 end
 
@@ -2371,9 +2380,9 @@ function bytes = place_members(bytes, stid, vals, lbase, boff)
 % starts at (a nested struct's member offsets are relative to its own start).
 % Each member's leaves are located with member_leaf_offset, so no cursor has
 % to be threaded through the walk.
-global sdefs
-names = sdefs{stid}{3};
-mm = sdefs{stid}{2};
+def = sdef_by_id(stid);
+names = def.names;
+mm = def.members;
 for k = 1:numel(names)
     minfo = mm.(names{k});
     off = boff + minfo{1};
@@ -2543,7 +2552,7 @@ function [nparams, psize, ptypes, nunnamed] = parse_params(returns_struct)
 % nunnamed counts the parameters written without a name, which a declaration
 % may do (`int printf(const char *, ...)`) but a definition may not - the
 % caller checks that once it knows which of the two it has.
-global token token_val idname lvars lvartype lvararr lvarstruct sdefs blkdecl lvarstride lvararrsz
+global token token_val idname lvars lvartype lvararr lvarstruct blkdecl lvarstride lvararrsz
 nparams = 0;
 nunnamed = 0;
 names = {};
@@ -3390,11 +3399,12 @@ function vals = aggregate_values(base, braced)
 % (6.7.9p20), which fills the members straight from the ENCLOSING list - it is
 % what makes `struct S { struct P p; int z; } s = {1, 2, 3};` mean `{{1,2},3}`.
 % The separator commas belong to whichever level reads the next element.
-global token idname sdefs
+global token idname
 stid = (base - 1000) / 2;
-names = sdefs{stid}{3};
-mm = sdefs{stid}{2};
-isunion = numel(sdefs{stid}) >= 4 && sdefs{stid}{4};
+def = sdef_of(base);
+names = def.names;
+mm = def.members;
+isunion = def.isunion;
 if isunion
     nlim = 1;                   % a union initializer sets its first member
 else
