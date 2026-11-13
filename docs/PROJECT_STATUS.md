@@ -699,6 +699,23 @@ classifier called "failed".
 A boot failure - an unrecognised function before the first check - classifies as cut
 short too, which is why the log path is printed with the verdict.
 
+**Green on real MATLAB again (2026-11-05): 831 tests, 831 passed, 0 failed, no
+warnings.** This is the run that measures the day's last three changes on the
+authority runtime, and each one had a specific thing to prove:
+
+- **function-pointer members** - `cc57_fptrmember.c` passes at exit 96, so the
+  `is_struct_code` predicate (six hand-written copies of it replaced) is right on
+  R2024b as well as on both clones.
+- **`&x = 5` refused** - the new negative check passes, so the narrowing of
+  `lvalue_addr` holds on the runtime that has contradicted us three times before.
+- **`del()` is silent about a held file** - zero warnings in the whole run. That fix
+  could not be proven on the clones, which never emit the warning; this is the
+  evidence, and it is the only evidence that could have existed.
+
+Also unchanged where it should be: x86sim **335/335**, gcc stdout **332/332
+byte-identical**, instr **22703**. 829 -> 831 is `cc57` plus the two negative checks,
+which is what the count should do.
+
 **Green on real MATLAB (2026-11-05): 829 tests, 829 passed, 0 failed.** The run
 that measures everything since the engine became the runtime: `probe_primitives`
 38/38, both selftests, the p3-p6 interpreter track, every `pp_*` program, the corpus
