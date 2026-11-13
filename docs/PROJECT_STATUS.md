@@ -655,6 +655,21 @@ classifier called "failed".
 A boot failure - an unrecognised function before the first check - classifies as cut
 short too, which is why the log path is printed with the verdict.
 
+**Green on real MATLAB (2026-11-05): 829 tests, 829 passed, 0 failed.** The run
+that measures everything since the engine became the runtime: `probe_primitives`
+38/38, both selftests, the p3-p6 interpreter track, every `pp_*` program, the corpus
+through `cc56` - including the five guards that had never executed on R2024b
+(`cc52`/`cc53` pointer-to-row, `cc54` tag scope, `cc55` multi-declarator typedef,
+`cc56` function-pointer typedef), all at exit 96 - x86sim **334/334**, gcc stdout
+**331/331 byte-identical**, and instr **22493**. 824 -> 829 is exactly the five new
+guards, which is the arithmetic one wants from a count.
+
+One warning survived it, in `del()`: `tmp_cc.exe` held by the previous program's
+process reads on Windows as "file not found or permission denied", so the helper that
+promises to be silent was silent about a missing file and loud about a held one. It
+now probes the file for writing before deleting, which is the real condition - a held
+file cannot be deleted anyway, and the corpus loop already retries for that reason.
+
 **Green on real MATLAB (2026-11-04): 824 tests, 824 passed, 0 failed.** After those
 three fixes a full `run_tests` on R2024b reports no failures at all: both selftests, the p3-p6 interpreter track, every
 `pp_*` program, the compiler corpus through cc51, the x86sim corpus **329/329**,

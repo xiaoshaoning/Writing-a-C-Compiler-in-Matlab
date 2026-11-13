@@ -1745,12 +1745,24 @@ last = min(n, spec.first + spec.count - 1);
 end
 
 function del(f)
-% del - delete a scratch file, silently. A bare delete() WARNS when the file was
-% never created, and that is every iteration wherever a step failed: on R2024b
-% that was ~100 lines of noise burying the one summary line you want to read.
-if exist(f, 'file') == 2
-    delete(f);
+% del - delete a scratch file, silently.
+%
+% Two ways a bare delete() talks, and both are the caller's business rather than
+% something to print: the file was never created (every iteration wherever a step
+% failed - on R2024b that was ~100 lines of noise burying the summary), and the file
+% exists but is held open, which on Windows reads as "file not found or permission
+% denied". A held file cannot be deleted anyway, and the corpus loop already retries
+% for exactly that reason, so the write probe below is the honest check: if it cannot
+% be opened for writing, leave it alone and let the retry decide.
+if exist(f, 'file') ~= 2
+    return;
 end
+[fid, ~] = fopen(f, 'a');
+if fid < 0
+    return;             % held open by a lingering process: not ours to remove
+end
+fclose(fid);
+delete(f);
 end
 
 function same = same_text(a, b)
