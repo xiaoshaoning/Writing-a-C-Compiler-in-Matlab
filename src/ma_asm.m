@@ -150,12 +150,12 @@ for ln = 1:numel(lines)
     for q = 1:numel(ops)
         decoded{q} = decode_operand(ops{q}, ln);
     end
-    if has_symbol_rip(decoded)
+    if ~isempty(symbol_rip_target(decoded))
         % leaq .Lret1(%rip), %rax and friends: same-section labels resolve, so this
         % cannot be encoded until the labels have offsets.
         bytes = encode_insn(mn, decoded, ln, tab);
         items = push_item(items, section, ...
-                          item_rip(mn, decoded, first_symbol(decoded), bytes, ln));
+                          item_rip(mn, decoded, symbol_rip_target(decoded), bytes, ln));
     elseif is_reloc(mn, tab)
         % A branch's size depends on how far away its target ends up, and that is a
         % property of the whole section - so it is an item, resolved in layout below.
@@ -168,9 +168,9 @@ end
 % not `[img, img.text, ...] = ...`: an indexed assignment inside a multi-output list is
 % accepted by the clone and refused by the engine ("indexed assignment base must be a
 % variable"). A temporary is portable and reads no worse.
-[img, tb, items.text] = lay_out(img, 'text', items.text);
+[img, tb, items.text] = lay_out(img, 'text', items.text, tab);
 img.text = tb;
-[img, db, items.data] = lay_out(img, 'data', items.data);
+[img, db, items.data] = lay_out(img, 'data', items.data, tab);
 img.data = db;
 end
 
@@ -360,49 +360,64 @@ lst{end+1} = it;
 items.(section) = lst;
 end
 
-function it = item_bytes(b)
-it = struct('kind', 'bytes', 'b', uint8(b), 'name', '', 'mn', '', ...
+function it = blank_item()
+% blank_item - the one place the item shape is written. Everything a phase needs sits in
+% one struct so the phases can share a list; a new field is one edit here, not one per
+% constructor.
+it = struct('kind', '', 'b', uint8([]), 'name', '', 'mn', '', ...
             'target', '', 'ln', 0, 'short', 0, 'ops', {{}});
 end
 
+function it = item_bytes(b)
+it = blank_item();
+it.kind = 'bytes';
+it.b = uint8(b);
+end
+
 function it = item_label(name)
-it = struct('kind', 'label', 'b', uint8([]), 'name', name, 'mn', '', ...
-            'target', '', 'ln', 0, 'short', 0, 'ops', {{}});
+it = blank_item();
+it.kind = 'label';
+it.name = name;
 end
 
 function it = item_rip(mn, ops, target, bytes, ln)
 % a rip-relative reference to a symbol: its bytes are final only once the layout knows
 % where the symbol is, so the operands are kept and the instruction is re-encoded.
-it = struct('kind', 'rip', 'b', uint8(bytes), 'name', '', 'mn', mn, ...
-            'target', target, 'ln', ln, 'short', 0, 'ops', {{}});
-% assigned AFTER construction: struct('f', {cellvalue}) makes a struct ARRAY with one
-% element per cell entry, not a struct with a cell field. Same trap as struct('f',{}),
-% which is why the symbol tables here are cells of structs.
+it = blank_item();
+it.kind = 'rip';
+it.mn = mn;
+it.target = target;
+it.b = uint8(bytes);
+it.ln = ln;
+% .ops is a CELL here, so it cannot go through struct('f', {ops}) - that makes a struct
+% ARRAY with one element per cell entry. Same trap as struct('f',{}), which is why the
+% symbol tables here are cells of structs.
 it.ops = ops;
 end
 
 function it = item_reloc(mn, target, ln)
 % a branch or a call: its bytes are decided in layout, because they depend on where the
 % target lands - which is the whole reason this phase exists.
-it = struct('kind', 'reloc', 'b', uint8([]), 'name', '', 'mn', mn, ...
-            'target', target, 'ln', ln, 'short', 0, 'ops', {{}});
+% A branch needs a label to jump to. `jmp %rsi` decodes to an empty symbol, and reporting
+% that as "unresolved symbol " names a symptom instead of the cause.
+if isempty(target)
+    fail(ln, sprintf('indirect %s is not supported yet', mn));
+end
+it = blank_item();
+it.kind = 'reloc';
+it.mn = mn;
+it.target = target;
+it.ln = ln;
 end
 
-function f = has_symbol_rip(ops)
-% has_symbol_rip - true when any operand is a rip-relative reference to a named symbol
-f = 0;
+function t = symbol_rip_target(ops)
+% symbol_rip_target - the name a rip-relative operand points at, or '' if none does.
+% It answers both questions the parser asks ("is there one?" and "which?"), because they
+% are the same question.
+t = '';
 for q = 1:numel(ops)
     if strcmp(ops{q}.kind, 'mem') && ops{q}.rip && ~isempty(ops{q}.symbol)
-        f = 1;
-    end
-end
-end
-
-function s2 = first_symbol(ops)
-s2 = '';
-for q = 1:numel(ops)
-    if strcmp(ops{q}.kind, 'mem') && ops{q}.rip && ~isempty(ops{q}.symbol)
-        s2 = ops{q}.symbol;
+        t = ops{q}.symbol;
         return;
     end
 end
@@ -436,7 +451,7 @@ else
 end
 end
 
-function [img, bytes, items] = lay_out(img, section, items)
+function [img, bytes, items] = lay_out(img, section, items, tab)
 % lay_out - assign every label an offset, narrow every branch that fits, then emit.
 %
 % Iteration, not two passes: `as` chooses the SHORT form for a forward branch when it fits
@@ -445,64 +460,57 @@ function [img, bytes, items] = lay_out(img, section, items)
 % only ever shrink, so this converges; the loop bound is a guard against a bug, not a
 % budget.
 for pass = 1:16
+    offs = item_offsets(items);          % where every item starts, for this pass
     changed = 0;
-    off = 0;
     for j = 1:numel(items)
         it = items{j};
-        if strcmp(it.kind, 'label')
-            items{j} = it;                   % offsets are recomputed below
-            off = off;
-        elseif strcmp(it.kind, 'reloc') && ~it.short && ~strcmp(it.mn, 'call')
-            % would the short form reach the target from here?
-            tgt = label_offset_in(items, it.target);
-            if tgt >= 0
-                d = tgt - (off + 2);
-                if d >= -128 && d <= 127
-                    it2 = items{j};
-                    it2.short = 1;
-                    items{j} = it2;      % not items{j}.short = 1: the engine refuses a
-                    changed = 1;         % chained assignment target outright
-                end
-            end
+        if ~strcmp(it.kind, 'reloc') || it.short || strcmp(it.mn, 'call')
+            continue;                    % only a branch has a form to choose
         end
-        off = off + item_size(items{j});
+        tgt = label_at(items, offs, it.target);
+        d = tgt - (offs(j) + 2);         % displacement if it were the short form
+        if tgt >= 0 && d >= -128 && d <= 127
+            it.short = 1;
+            items{j} = it;               % not items{j}.short = 1: the engine refuses a
+            changed = 1;                 % chained assignment target outright
+        end
     end
     if ~changed
         break;
     end
 end
 
-% emit: bytes now, offsets now, and the symbol table's answer for this section
+% emit: bytes now, and the symbol table's answer for this section
+offs = item_offsets(items);              % final offsets: the relaxation above is done
 bytes = uint8([]);
-off = 0;
 for j = 1:numel(items)
     it = items{j};
     if strcmp(it.kind, 'label')
         sym = sym_index(img, it.name);
         if sym == 0
             img.syms{end+1} = struct('name', it.name, 'section', section, ...
-                                     'offset', off, 'global', 0);
+                                     'offset', offs(j), 'global', 0);
         else
             e2 = img.syms{sym};
             e2.section = section;
-            e2.offset = off;
+            e2.offset = offs(j);
             img.syms{sym} = e2;
         end
     elseif strcmp(it.kind, 'rip')
-        tgt = label_offset_in(items, it.target);
+        tgt = label_at(items, offs, it.target);
         if tgt < 0
             bytes = [bytes it.b];             % another section (or external): zeros, as as does
         else
             ops2 = it.ops;
             for q = 1:numel(ops2)
                 if strcmp(ops2{q}.kind, 'mem') && ops2{q}.rip && ~isempty(ops2{q}.symbol)
-                    ops2{q}.ripdisp = tgt - (off + numel(it.b));
+                    ops2{q}.ripdisp = tgt - (offs(j) + numel(it.b));
                 end
             end
-            bytes = [bytes encode_insn(it.mn, ops2, it.ln, isa_table())];
+            bytes = [bytes encode_insn(it.mn, ops2, it.ln, tab)];
         end
     elseif strcmp(it.kind, 'reloc')
-        tgt = label_offset_in(items, it.target);
+        tgt = label_at(items, offs, it.target);
         if tgt < 0 && ~strcmp(it.mn, 'call')
             % a branch to a label that is not in this section is a real error
             fail(it.ln, sprintf('unresolved symbol %s', it.target));
@@ -511,44 +519,51 @@ for j = 1:numel(items)
             % An EXTERNAL call - the shims reach the real printf and malloc. The reference
             % emits a zero displacement and a relocation, so zeros are what byte equality
             % wants; resolving them is the linker's job, not this assembler's.
-            if strcmp(it.mn, 'call')
-                bytes = [bytes 232 0 0 0 0];
-            else
-                fail(it.ln, sprintf('unresolved branch target %s', it.target));
-            end
+            bytes = [bytes 232 0 0 0 0];
         elseif strcmp(it.mn, 'call')
-            bytes = [bytes 232 rel_bytes(tgt - (off + 5), 4)];
-        elseif it.short
-            if strcmp(it.mn, 'jmp')
-                bytes = [bytes 235 rel_bytes(tgt - (off + 2), 1)];
+            bytes = [bytes 232 rel_bytes(tgt - (offs(j) + 5), 4)];
+        elseif strcmp(it.mn, 'jmp')
+            if it.short
+                bytes = [bytes 235 rel_bytes(tgt - (offs(j) + 2), 1)];
             else
-                bytes = [bytes jcc_short(it.mn) rel_bytes(tgt - (off + 2), 1)];
+                bytes = [bytes 233 rel_bytes(tgt - (offs(j) + 5), 4)];
             end
         else
-            if strcmp(it.mn, 'jmp')
-                bytes = [bytes 233 rel_bytes(tgt - (off + 5), 4)];
+            c = jcc_codes(it.mn);
+            if c(1) == 0
+                fail(it.ln, sprintf('no encoding for conditional branch %s', it.mn));
+            end
+            if it.short
+                bytes = [bytes c(1) rel_bytes(tgt - (offs(j) + 2), 1)];
             else
-                bytes = [bytes 15 jcc_near(it.mn) rel_bytes(tgt - (off + 6), 4)];
+                bytes = [bytes 15 c(2) rel_bytes(tgt - (offs(j) + 6), 4)];
             end
         end
     else
         bytes = [bytes it.b];
     end
-    off = off + item_size(it);
 end
 end
 
-function off = label_offset_in(items, name)
-% the offset of a label in this section, or -1. Walks the items the same way lay_out does,
-% so there is one notion of where a label is.
-off = -1;
+function offs = item_offsets(items)
+% item_offsets - the start offset of every item. The one place that decides how big an
+% item is, and so the one notion of where a label is.
+offs = zeros(1, numel(items));
 at = 0;
 for j = 1:numel(items)
+    offs(j) = at;
+    at = at + item_size(items{j});
+end
+end
+
+function off = label_at(items, offs, name)
+% label_at - the offset of a label in this section, or -1 if it is not here
+off = -1;
+for j = 1:numel(items)
     if strcmp(items{j}.kind, 'label') && strcmp(items{j}.name, name)
-        off = at;
+        off = offs(j);
         return;
     end
-    at = at + item_size(items{j});
 end
 end
 
@@ -556,43 +571,28 @@ function b = rel_bytes(v, n)
 % a signed displacement, little-endian, n bytes
 if n == 1
     if v < -128 || v > 127
-        fail(0, sprintf('internal: rel8 out of range (%d)', v));
+        fail(0, sprintf('rel8 out of range (%d)', v));
     end
 end
 b = le_bytes(v, n);
 end
 
-function op = jcc_short(mn)
-% the 7x short-jump opcode for each condition
+function c = jcc_codes(mn)
+% jcc_codes - [short near] opcodes for a conditional branch. One table because one
+% immediate decides both: the 7x short forms and the 8x forms after 0F differ by 16 for
+% every condition, so two tables were the same decision written twice.
 switch mn
-    case 'je',  op = 116;
-    case 'jne', op = 117;
-    case 'jl',  op = 124;
-    case 'jge', op = 125;
-    case 'jle', op = 126;
-    case 'jg',  op = 127;
-    case 'jb',  op = 114;
-    case 'jae', op = 115;
-    case 'jbe', op = 118;
-    case 'ja',  op = 119;
-    otherwise,  error('jcc_short: not a conditional branch');
-end
-end
-
-function op = jcc_near(mn)
-% the 8x opcode after 0F for each condition
-switch mn
-    case 'je',  op = 132;
-    case 'jne', op = 133;
-    case 'jl',  op = 140;
-    case 'jge', op = 141;
-    case 'jle', op = 142;
-    case 'jg',  op = 143;
-    case 'jb',  op = 130;
-    case 'jae', op = 131;
-    case 'jbe', op = 134;
-    case 'ja',  op = 135;
-    otherwise,  error('jcc_near: not a conditional branch');
+    case 'je',  c = [116 132];
+    case 'jne', c = [117 133];
+    case 'jl',  c = [124 140];
+    case 'jge', c = [125 141];
+    case 'jle', c = [126 142];
+    case 'jg',  c = [127 143];
+    case 'jb',  c = [114 130];
+    case 'jae', c = [115 131];
+    case 'jbe', c = [118 134];
+    case 'ja',  c = [119 135];
+    otherwise,  c = [0 0];
 end
 end
 
@@ -667,7 +667,7 @@ function v = mod_low(r)
 % register", -2 rip) and must never reach an encoding: mod_low(-2) is 6, which would
 % quietly encode %rsi.
 if r < 0
-    fail(0, sprintf('internal: register sentinel %d reached the ModRM field', r));
+    fail(0, sprintf('register sentinel %d reached the ModRM field', r));
 end
 v = r - 8 * floor(r / 8);
 end

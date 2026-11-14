@@ -347,14 +347,6 @@ assignment base must be a variable". Several helpers now use a temporary, and th
 `push_item` for the section list. That is the sixth harness-level portability difference
 found by running the same code on both.
 
-### M4 — layout and relocations
-- [ ] Two passes: sizes first, then addresses (forward references need it; `.string`
-      lengths make the first pass non-trivial)
-- [ ] Internal relocation resolution: `call`/`jmp`/`jcc`/`lea sym(%rip)` → displacement
-      against the final address
-- [ ] Reject an unresolved symbol with its line, rather than emitting a zero displacement
-- [ ] Assemble all 338 corpus programs; report byte-identical count
-
 ### M5 — the gate
 - [ ] 338/338 byte-identical `.text` against `as` (or a written-down, justified list of
       exceptions with the reason each differs)
@@ -378,9 +370,11 @@ found by running the same code on both.
 2. **`.string` escaping.** GAS escapes are not C escapes, and `cc_int` already escapes
    for GAS. *Settles it:* the byte count of `.string` output compared with `as` on
    `cc22_escapes.c` and `cc18_strbslash.c`, the two programs that exist for this.
-3. **First-pass size estimation.** `.string` and `.quad` lengths decide offsets, so the
-   first pass must be exact, not approximate. *Settles it:* two-pass disagreement is
-   detected by construction (pass 2 asserts the offset it computed matches).
+3. ~~First-pass size estimation.~~ **Settled by construction, differently than planned.**
+   There is no sizing pass to get wrong: a branch starts at its longest form and only ever
+   shrinks, and every other item's size is exact the moment it is parsed. Offsets are then
+   computed from those sizes by one function (`item_offsets`) that both the relaxation and
+   the emit pass use, so there is no second opinion to disagree with.
 4. **Immediate width and `movabs`.** The project already hit the 64-bit-immediate-to-memory
    limit once. *Settles it:* byte comparison on `dreg_denselit.c` and `cc49_long.c`.
 5. **Effort.** This is the honest one: M1–M3 is mechanical and slow — roughly 51 encoders
