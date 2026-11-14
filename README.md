@@ -57,6 +57,11 @@ Building compilers/interpreters in MATLAB, following two classic tutorials:
    recursive-descent parser, 38-opcode stack VM, syscalls. Current status:
    [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md).
 
+Not from either tutorial, and not required by them: an **assembler**
+(`src/ma_asm.m`) that turns the compiler's own text output into bytes, checked
+byte-for-byte against a reference assembler on the whole corpus. See
+[The assembler](#assembler-ma_asmm) below.
+
 ## Layout
 
 ```
@@ -65,15 +70,22 @@ src/
   peephole_pass.m       post-codegen optimizer (dead code, constant
                         folding, address modes, stack traffic)
   xc.m                  C interpreter (lexer → parser → VM → syscalls)
+  ma_asm.m              assembler (.s → bytes); see "The assembler" below
   x86sim.m              gcc-free x86-64 simulator for the .s output
   c_unescape.m          C escape-sequence decoder (shared by both lexers)
 LICENSE, README.md
 
 tests/
-  run_tests.m         test harness (832 checks: probe gate, VM, lexer,
-                      program corpus, syscall/acceptance, cc_int/gcc,
-                      x86sim, cross-track parity, instruction-count
-                      regression, peephole-pass unit fixtures)
+  run_tests.m         test harness: probe gate, VM, lexer, program corpus,
+                      syscall/acceptance, cc_int/gcc, x86sim, cross-track
+                      parity, instruction-count regression, peephole-pass
+                      fixtures, and the assembler sections. Current counts:
+                      docs/PROJECT_STATUS.md (a number here goes stale, and
+                      has)
+  asm_gate.m          assembles every corpus program and compares the
+                      bytes with a reference assembler
+  asm_errors.m        the inputs the assembler must refuse, each asserted
+                      on the message
   programs/           test C programs
     return_2.c        return 2; (part 1 of the Norasandler series)
     cc2_*.c–cc23_*.c  unary … literal-forms / width programs (parts 2-18 plus
@@ -102,11 +114,12 @@ gcc prog.s -o prog.exe
 ```
 
 **Requirements:** a MATLAB-compatible runtime and MSYS2 gcc (the
-emitted assembly is COFF — it needs a Windows binutils). Both the custom C
-clone (`matlab.bat`) and the Rust engine (`matlab_in_rust`) run the suite;
-set `MATLAB=<path to matlab.exe>` (`tests/env.sh` honours it). The
-`addpath('src')` is required in `-batch` mode; in cmd the exit code is
-`%errorlevel%`.
+emitted assembly is COFF — it needs a Windows binutils). The suite runs on
+any MATLAB-compatible runtime: set `MATLAB=<path to matlab.exe>`, which
+`tests/env.sh` honours. If it is not set, `env.sh` falls back to the runtime
+this project is developed on, which may not be installed on your machine —
+export `MATLAB` rather than relying on the fallback. The `addpath('src')` is
+required in `-batch` mode; in cmd the exit code is `%errorlevel%`.
 
 **What it compiles:** the full Norasandler series (parts 1–17) — expressions
 with C precedence, `if`/`while`/`for`/`do`/`switch`, functions (recursion,
@@ -181,12 +194,12 @@ project's results are runtime-specific:
 
 | Runtime | Role |
 |---|---|
-| **the engine** — `matlab_in_rust/dist/matlab-cli/matlab.exe` (pinned at `cli-v18`, 2026-11-12) | where this project is developed, and where every check passes |
-| **real MATLAB** (R2024b) | the authority when the two disagree — and they have |
-| **the C clone** — `MATLAB_in_C/release/` | the oracle for cross-checks, not a runtime the suite runs on |
+| **real MATLAB** (R2024b) | the authority when runtimes disagree — and they have |
+| **the development runtime** — any MATLAB-compatible CLI; pass it as `$MATLAB` | where this project is developed, and where every check passes |
+| **the C clone** — `MATLAB_in_C/release/`, via `matlab.bat` | the oracle for cross-checks, not a runtime the suite runs on |
 
-`tests/env.sh` resolves it (`$MATLAB`, else the engine, else `matlab` on PATH) and
-refuses a runtime that cannot run the harness. The suite is green on all three.
+`tests/env.sh` resolves it (`$MATLAB`, else the development runtime, else `matlab` on
+PATH) and refuses a runtime that cannot run the harness. The suite is green on all three.
 
 **Policy: a tag requires a real-MATLAB run.** Both tags so far were cut without one, and
 the two runs that did happen found the three defects no clone could show. A release that
@@ -222,6 +235,32 @@ Windows. Exit codes are the low 8 bits of the returned value (214 for
 `return -42;`, 213 for `return ~42;`, 255 for `return ~0;`). Verified
 end-to-end: clone → `cc_int` → `gcc` (MSYS2 ucrt64 15.2.0) → exit code; the
 suite's gcc-gated group compiles and runs every `cc2_*.c` program.
+
+### Assembler (ma_asm.m)
+
+`cc_int.m` emits text; `ma_asm.m` turns that text into bytes. The seam is deliberately
+one function — a `.s` string in, an image out — so the assembler can be judged by
+comparing bytes and nothing else:
+
+```
+matlab.bat -batch "addpath('src'); img = ma_asm(fileread('prog.s'));"
+```
+
+It covers what this compiler emits: 50-odd mnemonics, the directives, labels, branches
+and relocations, `.string`/`.quad` data, and rip-relative addresses. It does **not**
+link, and it does not produce an object file — those need a format and a symbol table,
+and neither buys anything a byte comparison does not already check.
+
+**Verification: 338 of 338 corpus programs byte-identical to a reference assembler
+(`as`), `.text` for `.text`, on two independent runtimes.** `CC_SECTIONS=asm` runs it as
+one check, and `tests/asm_errors.m` asserts the ten inputs it must refuse — an unknown
+mnemonic, an unresolved target, a shift by a register that is not `%cl`, an immediate
+wider than 64 bits, and so on — each on the message, because these are the cases where
+being wrong would be silent.
+
+One caveat, and it is the same one this project applies to everything else: the
+assembler has **not yet run on real MATLAB**. Its numbers come from the development
+runtime and the C clone.
 
 ### Optimizer (peephole_pass.m)
 
@@ -311,16 +350,16 @@ The whole verification — the suite plus the four MEX/double gates
 bash tests/run_all.sh
 ```
 
-It resolves the runtime from `$MATLAB`, else the engine, else `matlab` on PATH,
+It resolves the runtime from `$MATLAB`, else the development runtime, else `matlab` on PATH,
 derives the repo path from its own location, and exits non-zero if any part fails —
 distinguishing "some checks failed" from "the run was cut short", because a host that
 kills the suite leaves no summary line and used to read as a failure.
 
-The engine is slow (compile throughput is far below the C clone's), so the suite is
-normally run in sections or program slices: `CC_SECTIONS`, `CC_CORPUS`, `CC_OSTESTS`.
-`docs/2026-09-06-rust-engine-compat.md` records the engine-compatibility work,
-including the five engine defects found from this project and fixed in the engine's
-`cli-v18`.
+A MATLAB-compatible CLI runs this code far slower than the C clone does, so the suite is
+normally run in sections or program slices: `CC_SECTIONS` (including `asm`, the assembler
+gate), `CC_CORPUS`, `CC_OSTESTS`.
+`docs/2026-09-06-rust-engine-compat.md` records the compatibility work, including the
+engine defects found from this project and since fixed.
 
 Or in `-batch` mode:
 
@@ -347,5 +386,5 @@ matlab.bat -batch "run('tests/run_tests.m');"
   tracked in an internal bug report (`docs/2026-08-10-matlab-clone-bug-report.md`,
   gitignored — not shipped with the repo). The port follows real MATLAB semantics and
   avoids the clone's remaining quirks defensively; the C clone is used as the **oracle**
-  at `release/v1.3.86`, and the runtime this project is developed on is the Rust engine
-  (`matlab_in_rust/dist/matlab-cli`).
+  at `release/v1.3.86`, and the runtime this project is developed on is a
+  MATLAB-compatible CLI rather than the clone.
