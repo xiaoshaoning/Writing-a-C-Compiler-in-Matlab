@@ -415,6 +415,12 @@ found by running the same code on both.
       the gcc guard - that is where they would vanish on exactly the machine where they
       still work.
 - [x] Suite totals: `CC_SECTIONS=none` 153/153, `CC_SECTIONS=asm` 154/154.
+- [x] **338/338 on real MATLAB (2026-11-05): the authority run.** 857 checks, 857 passed,
+      0 failed, with `asm gate 1..338 of 338: 338 byte-identical, 0 differ, 0 refused`. That
+      run also found the last defect in this file: `struct('.byte', 1, ...)` - illegal field
+      names are refused by real MATLAB and accepted by both clones, so 30 programs had been
+      "verified" on runtimes that could not see the bug. Fixed with a switch, and guarded by
+      `tests/check_field_names.m` so the shape cannot return.
 - [x] **338/338 on the ENGINE as well as the clone** (2026-11-05, `cli-v21-5-g9dc5345`).
       The two-runtime discipline applied to the assembler at full corpus scale for the
       first time: `asm_gate()` needs no runtime-specific handling, so both agree. On the

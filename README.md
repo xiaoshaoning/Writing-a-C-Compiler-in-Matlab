@@ -215,9 +215,9 @@ project's results are runtime-specific:
 | **the C clone** — `MATLAB_in_C/release/` | the oracle for cross-checks, not a runtime the suite runs on |
 
 `tests/env.sh` resolves it (`$MATLAB`, else the development runtime, else `matlab` on
-PATH) and refuses a runtime that cannot run the harness. The suite is green on all three as
-of the last authority run (see `docs/PROJECT_STATUS.md`); the assembler sections, added
-since, have run on the other two only.
+PATH) and refuses a runtime that cannot run the harness. The suite is green on all three,
+including the assembler sections, as of the 857-check authority run recorded in
+`docs/PROJECT_STATUS.md`.
 
 **Policy: a tag requires a real-MATLAB run.** Both tags so far were cut without one, and
 the two runs that did happen found the three defects no clone could show. A release that
@@ -276,9 +276,10 @@ mnemonic, an unresolved target, a shift by a register that is not `%cl`, an imme
 wider than 64 bits, and so on — each on the message, because these are the cases where
 being wrong would be silent.
 
-One caveat, and it is the same one this project applies to everything else: the
-assembler has **not yet run on real MATLAB**. Its numbers come from the development
-runtime and the C clone.
+The first real-MATLAB run of the assembler disagreed with both clones - it refused 30
+programs with 字段名称 ".byte" 无效, a `struct('.byte', 1, ...)` table the clones accept and
+MATLAB does not - which is why the suite now checks that shape statically instead of trusting
+a green run on a lenient runtime.
 
 ### Optimizer (peephole_pass.m)
 

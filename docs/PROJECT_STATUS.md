@@ -2,26 +2,27 @@
 
 ## Summary
 
-**Current state (2026-11-05): see the 835 line below for the authoritative counts.**
-`835 tests, 835 passed, 0 failed` on real MATLAB
-R2024b; every one of those checks also passes on the engine
-(`matlab_in_rust/dist/matlab-cli`, the runtime this project is developed on) and on the
-C clone used as an oracle. `instr` 22884 (a ceiling, not a target: it caught its own
-update four times today), x86sim 336/336 exit codes, gcc stdout 333/333 byte-identical.
-Two tracks, both complete for their dialect: `xc.m` the interpreter, `cc_int.m` the
-compiler. What is deliberately not done is listed at the end of the recent notes.
+**Current state (2026-11-05): `857 tests, 857 passed, 0 failed` on real MATLAB R2024b.**
+Every one of those checks also passes on the engine (the runtime this project is developed
+on) and on the C clone used as an oracle. `instr` 23149 (a ceiling, not a target), x86sim
+**338/338** exit codes, gcc stdout **335/335** byte-identical, and the assembler **338/338**
+corpus programs byte-identical to `as`.
+Three artefacts, each complete for its dialect: `cc_int.m` the compiler, `xc.m` the
+interpreter, `ma_asm.m` the assembler. What is deliberately not done is listed at the end of
+the recent notes.
 
-**The assembler is complete on two runtimes (2026-11-05).** `src/ma_asm.m` reads the text
-`cc_int` emits and hands back an image; `docs/PLAN_assembler.md` is the record. **338 of 338
-corpus programs are byte-identical to `as`**, `.text` for `.text`, measured on the engine and
-on the C clone. Ten inputs it must refuse have their refusals asserted on the message, in
+**The assembler is complete (2026-11-05).** `src/ma_asm.m` reads the text `cc_int` emits
+and hands back an image; `docs/PLAN_assembler.md` is the record. **338 of 338 corpus programs
+are byte-identical to `as`**, `.text` for `.text`, on all three runtimes. Ten inputs it must refuse have their refusals asserted on the message, in
 `tests/asm_errors.m`, and `CC_SECTIONS=asm` runs the whole thing as one check.
 
-The caveat is the one this project applies to everything else, and it is not yet met: the
-assembler has **never run on real MATLAB**. Every number above comes from the engine, which
-is not the authority. That is what a tag is waiting for.
+**That number is now the authority's.** The first real-MATLAB run of the assembler was also
+the first run that disagreed: it refused 30 corpus programs with 字段名称 ".byte" 无效 - a
+`struct('.byte', 1, ...)` field table, which both clones accept and real MATLAB does not. It
+is the fourth defect of that class in this project (`@anon3`, `__st1_n`, `.byte`), so it is
+now checked statically (`tests/check_field_names.m`, self-tested) rather than by running.
 
-**Green on real MATLAB at 835 (2026-11-05, final): 835 tests, 835 passed, 0 failed.**
+**Green on real MATLAB at 857 (2026-11-05, final): 857 tests, 857 passed, 0 failed.**
 The run that measures everything since 832: `cc57`-`cc60` at exit 96, the two negative
 checks (`&x = 5` refused, an integer-only compound assignment on a double refused),
 x86sim **338/338**, gcc stdout **335/335 byte-identical**, instr **23149**. 832 -> 835 is
