@@ -364,20 +364,14 @@ project could catch, because the reference assembler refuses the input.
 **Gate, measured:** 25 sample programs -> **22 byte-identical**, 2 differ, 1 missing an
 encoder, 0 errors.
 
-**Still open, each localised:**
+**Still open, each localised.** This is the only open list for M4: earlier revisions of this
+document accumulated one table per commit, so "still open" came to mean "open three commits
+ago", and it listed causes that were already fixed. One list, replaced in place.
 | item | what is known |
 |---|---|
 | cc60_scalar_literal | branch forms: 617 vs 592 bytes with identical per-instruction sizes |
 | dreg_denselit | `movabsq $0x999999999999999a` - an imm64 that loses precision in a double. The literal needs to be carried as hex digits, not as a MATLAB number |
 | cvttsd2siq | `F2 REX.W 0F 2C /r` with the GPR in the REG field and the xmm in r/m - the opposite of `cvtsi2sdq`, so it needs a shape flag, not another prefix row |
-
-**Remaining, each with its cause identified:**
-| program | cause |
-|---|---|
-| cc16_sretfptr2, cc57_fptrmember | `call *%rax` - an INDIRECT call, `ff /2`. I emit an external `e8 00000000` |
-| cc16_strarray | `unbalanced parentheses in (%rsi` - a decoder gap at line 24 |
-| cc59_double_compound, dreg_denselit | `movq %rax,%xmm0` - a GPR-to-XMM move (`66 REX.W 0f 6e /r`), which my guard refuses |
-| cc60_scalar_literal | a `jmp rel32` 27 bytes off: relaxation divergence |
 
 **An engine/clone portability finding, and the sneakiest yet:** growing a struct array with
 `tab(end+1) = add(...)` CORRUPTS it on the clone - three rows became four and every `.name`
@@ -387,14 +381,6 @@ direction from the usual clone-accepts/engine-refuses pattern.
 **Previous gate, for the record:** 7 byte-identical, 2 differ, 14 missing an encoder,
 2 errors. The branch fixture is byte-identical (463 bytes: short forward, near
 forward, short backward, near conditional, and a call).
-
-**Still open at this gate:**
-| program | what |
-|---|---|
-| cc43_gdesig | a same-section `leaq` the layout resolved to 0 but the reference to 0x10: the label is not being found |
-| cc60_scalar_literal | a `jmp rel32` 27 bytes off: a relaxation divergence, so some branch chose a different form than `as` |
-| cc16_strarray | `unbalanced parentheses in (%rsi` at line 24 - a decoder gap |
-| cc48_bitfield_layout | `.comm needs a name and a size` at line 1395 |
 
 **An engine portability finding:** `items{j}.short = 1` and `items.(section){end+1} = it`
 are chained assignment targets. The clone accepts them; the engine refuses with "indexed

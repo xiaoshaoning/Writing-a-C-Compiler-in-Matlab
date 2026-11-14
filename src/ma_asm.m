@@ -153,12 +153,13 @@ for ln = 1:numel(lines)
     for q = 1:numel(ops)
         decoded{q} = decode_operand(ops{q}, ln);
     end
-    if ~isempty(symbol_rip_target(decoded))
+    riptgt = symbol_rip_target(decoded);
+    if ~isempty(riptgt)
         % leaq .Lret1(%rip), %rax and friends: same-section labels resolve, so this
         % cannot be encoded until the labels have offsets.
         bytes = encode_insn(mn, decoded, ln, tab);
         items = push_item(items, section, ...
-                          item_rip(mn, decoded, symbol_rip_target(decoded), bytes, ln));
+                          item_rip(mn, decoded, riptgt, bytes, ln));
     elseif is_reloc(mn, tab) && (isempty(decoded) || ~decoded{1}.indirect)
         % A branch's size depends on how far away its target ends up, and that is a
         % property of the whole section - so it is an item, resolved in layout below.
@@ -754,48 +755,37 @@ function [m, extra] = mem_form(e)
 %   %rsp/%r12 needs a SIB byte even with no index
 %   %rbp/%r13 with displacement 0 must use disp8=0 (mod 00 r/m 101 means rip-relative)
 %   a displacement that fits in a signed byte uses one byte, otherwise four
-base = e.base;
-lo = mod_low(base);
+%
+% One displacement rule, not three: the choice of mod is a function of the displacement and
+% the base register alone, so it is decided once at the end. Writing it separately for the
+% SIB and non-SIB cases is how one copy drifts from the other.
+lo = mod_low(e.base);
 sib = [];
 if e.index >= 0
-    % (base,index,scale): mod 00/01/10 r/m 100, then the SIB byte. %rsp cannot be an
-    % index - its index field IS the "no index" encoding - so it is refused rather than
-    % silently dropped.
+    % (base,index,scale): r/m 100 announces a SIB byte. %rsp cannot be an index - its
+    % index field IS the "no index" encoding - so it is refused rather than dropped.
     ilo = mod_low(e.index);
     if ilo == 4
         fail(0, '%rsp cannot be a SIB index register');
     end
     code = 0;
     if e.scale == 2, code = 1; elseif e.scale == 4, code = 2; elseif e.scale == 8, code = 3; end
-    sb = code * 64 + ilo * 8 + lo;
-    if e.disp == 0 && lo ~= 5
-        m = 4;
-        extra = sb;
-    elseif e.disp >= -128 && e.disp <= 127
-        m = 68;
-        extra = [sb le_bytes(e.disp, 1)];
-    else
-        m = 132;
-        extra = [sb le_bytes(e.disp, 4)];
-    end
-    return;
-end
-if lo == 4
-    sib = 36;                                   % scale 0, no index, base 100
-    if e.disp == 0
-        m = lo;
-        extra = sib;
-        return;
-    end
+    rm_field = 4;
+    sib = code * 64 + ilo * 8 + lo;
+elseif lo == 4
+    rm_field = lo;                       % scale 0, no index, base 100
+    sib = 36;
+else
+    rm_field = lo;
 end
 if e.disp == 0 && lo ~= 5
-    m = lo;
+    m = rm_field;
     extra = sib;
 elseif e.disp >= -128 && e.disp <= 127
-    m = 64 + lo;
+    m = 64 + rm_field;
     extra = [sib le_bytes(e.disp, 1)];
 else
-    m = 128 + lo;
+    m = 128 + rm_field;
     extra = [sib le_bytes(e.disp, 4)];
 end
 end
@@ -1126,20 +1116,20 @@ function bytes = enc_sse(mn, ops, ln)
 % row each when the corpus asks for them, which it does not yet.
 % [prefix w opcode store-opcode], nil when there is no store form
 switch mn
-    case 'movsd',      sp = [242 0 16 17];
-    case 'divsd',      sp = [242 0 94  0];
-    case 'mulsd',      sp = [242 0 89  0];
-    case 'ucomisd',    sp = [102 0 46  0];
-    case 'cvtsi2sdq',  sp = [242 1 42  0];
-    otherwise,         sp = [0 0 0 0];
+    case 'movsd',      spec = [242 0 16 17];
+    case 'divsd',      spec = [242 0 94  0];
+    case 'mulsd',      spec = [242 0 89  0];
+    case 'ucomisd',    spec = [102 0 46  0];
+    case 'cvtsi2sdq',  spec = [242 1 42  0];
+    otherwise,         spec = [0 0 0 0];
 end
-if sp(3) == 0 || numel(ops) ~= 2
+if spec(3) == 0 || numel(ops) ~= 2
     fail(ln, sprintf('no encoder for %s yet (M3)', mn));
 end
 store = strcmp(ops{2}.kind, 'mem');
 if store
     regop = ops{1};
-    if sp(4) == 0
+    if spec(4) == 0
         fail(ln, sprintf('%s has no memory-destination form', mn));
     end
 else
@@ -1149,11 +1139,11 @@ if ~strcmp(regop.kind, 'reg') || regop.width ~= 128
     fail(ln, sprintf('%s needs an %%xmm register operand', mn));
 end
 if store
-    [pre, mrm, tail] = rm_operand(ops{2}, regop.reg, sp(2));
-    bytes = [sp(1) pre 15 sp(4) mrm tail];
+    [pre, mrm, tail] = rm_operand(ops{2}, regop.reg, spec(2));
+    bytes = [spec(1) pre 15 spec(4) mrm tail];
 else
-    [pre, mrm, tail] = rm_operand(ops{1}, regop.reg, sp(2));
-    bytes = [sp(1) pre 15 sp(3) mrm tail];
+    [pre, mrm, tail] = rm_operand(ops{1}, regop.reg, spec(2));
+    bytes = [spec(1) pre 15 spec(3) mrm tail];
 end
 end
 
