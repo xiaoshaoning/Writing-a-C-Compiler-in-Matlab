@@ -10,6 +10,24 @@ update four times today), x86sim 336/336 exit codes, gcc stdout 333/333 byte-ide
 Two tracks, both complete for their dialect: `xc.m` the interpreter, `cc_int.m` the
 compiler. What is deliberately not done is listed at the end of the recent notes.
 
+**Item 4 of the plan, gap 1 of three: compound assignment on doubles (2026-11-05).**
+`d /= 4.0` was refused while `d = d / 4.0` worked; the double branch handled `+= -= *=`
+and failed on `/=` and `%=` together, lumping a legal operator with an illegal one.
+Splitting them exposed a worse bug behind the refusal: `%=`, `<<=`, `>>=`, `&=`, `|=` and
+`^=` on a double fell through to the `divsd` at the end of that branch, so `d <<= 2`
+**silently divided by 2**. C requires an integer for all six, so they are refused now
+with that reason, and `d /= 4.0` compiles and matches gcc (25 for `10.0 /= 4.0` scaled).
+
+Gaps 2 and 3 are still open and are NOT ten-line changes, which is what the plan said:
+- float literals in array initializers (`double a[2] = {1.5, 2.5};`) need the value to
+  survive into the initialiser IMAGE as an exact 64-bit pattern. The emitter has
+  `cc_d2bits` for scalars, but the array path builds values as doubles and the image
+  writer emits integers, so it is ~20 lines across the initialiser parse and the image —
+  and a half-done version would silently truncate mantissas, which is the failure mode
+  this project is least willing to accept.
+- pointer compound literals (`(int*){…}`) are refused by depth in the compound-literal
+  branch; `(int[]){…}` works. Unknown size until read.
+
 **Function-pointer members work, and the cause was not where I said (2026-11-05).**
 Earlier notes blamed `lvalue_addr` for the member miscompile. Measuring proved that
 wrong: the member access never reached it. Six places spelled out "is this a struct

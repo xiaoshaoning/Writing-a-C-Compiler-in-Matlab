@@ -3794,8 +3794,11 @@ while token == 61 || (token >= 160 && token <= 169)
         em('\tmovsd\t(%rax), %xmm0');
         next();
         parse_assignment();
-        if op == 163 || op == 164
-            fail('compound "/=" and "%%=" on doubles are not supported');
+        if op == 164 || (op >= 165 && op <= 169)
+            % C requires an integer for `%=`, `<<=`, `>>=`, `&=`, `|=` and `^=`. This is
+            % not a limitation being reported, it is the language: and the old test let
+            % them fall through to the divsd below, so `d <<= 2` silently divided by 2.
+            fail('that compound assignment needs an integer type');
         end
         if etype ~= 6
             em('\tcvtsi2sdq\t%rax, %xmm0');
