@@ -108,7 +108,15 @@ for ln = 1:numel(lines)
             case '.comm'
                 img = add_comm(img, rest, ln);
             case {'.byte', '.short', '.long', '.quad'}
-                items = push_item(items, section, item_bytes(add_bytes(d, rest, ln)));
+                % `.quad .Lstr0` is an address, not a number: the bytes hold the symbol's
+                % offset within ITS section, exactly like a REL32 addend. Decided by looking
+                % at the values rather than by catching a parse failure, so the two cases are
+                % visible here instead of hidden in an exception.
+                if is_symbol_list(rest)
+                    items = push_pointers(items, section, d, rest, ln);
+                else
+                    items = push_item(items, section, item_bytes(add_bytes(d, rest, ln)));
+                end
             case '.string'
                 items = push_item(items, section, item_bytes(add_string(rest, ln)));
             otherwise
@@ -383,7 +391,7 @@ function it = blank_item()
 % one struct so the phases can share a list; a new field is one edit here, not one per
 % constructor.
 it = struct('kind', '', 'b', uint8([]), 'name', '', 'mn', '', ...
-            'target', '', 'ln', 0, 'short', 0, 'ops', {{}});
+            'target', '', 'ln', 0, 'short', 0, 'ops', {{}}, 'width', 0);
 end
 
 function it = item_bytes(b)
@@ -411,6 +419,63 @@ it.ln = ln;
 % ARRAY with one element per cell entry. Same trap as struct('f',{}), which is why the
 % symbol tables here are cells of structs.
 it.ops = ops;
+end
+
+function f = is_symbol_list(rest)
+% is_symbol_list - true when every comma-separated value starts like a symbol
+f = 1;
+k = 1;
+n = numel(rest);
+seen = 0;
+while k <= n + 1
+    if k <= n && rest(k) == ','
+        k = k + 1;
+        continue;
+    end
+    while k <= n && rest(k) == ' '
+        k = k + 1;
+    end
+    if k > n
+        break;
+    end
+    c = rest(k);
+    if ~((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '.' || c == '_')
+        f = 0;
+        return;
+    end
+    seen = seen + 1;
+    while k <= n && rest(k) ~= ','
+        k = k + 1;
+    end
+end
+f = seen > 0;
+end
+
+function items = push_pointers(items, section, d, rest, ln)
+width = struct('.byte', 1, '.short', 2, '.long', 4, '.quad', 8);
+w = width.(d);
+k = 1;
+n = numel(rest);
+while k <= n
+    e = k;
+    while e <= n && rest(e) ~= ','
+        e = e + 1;
+    end
+    nm = strtrim(rest(k:e-1));
+    if isempty(nm)
+        fail(ln, sprintf('%s has an empty value', d));
+    end
+    items = push_item(items, section, item_ptr(nm, w, ln));
+    k = e + 1;
+end
+end
+
+function it = item_ptr(target, width, ln)
+it = blank_item();
+it.kind = 'ptr';
+it.target = target;
+it.width = width;
+it.ln = ln;
 end
 
 function it = item_reloc(mn, target, ln)
@@ -460,7 +525,9 @@ end
 end
 
 function n = item_size(it)
-if strcmp(it.kind, 'reloc')
+if strcmp(it.kind, 'ptr')
+    n = it.width;
+elseif strcmp(it.kind, 'reloc')
     n = reloc_size(it);
 elseif strcmp(it.kind, 'label')
     n = 0;
@@ -522,6 +589,18 @@ for j = 1:numel(items)
             e2.offset = offs(j);
             img.syms{sym} = e2;
         end
+    elseif strcmp(it.kind, 'ptr')
+        % an address in data: the symbol's offset in its own section, plus a relocation
+        tgt = label_at(items, offs, it.target);
+        if tgt < 0
+            si = sym_index(img, it.target);
+            if si > 0 && ~is_common(img, it.target)
+                tgt = img.syms{si}.offset;
+            else
+                tgt = 0;
+            end
+        end
+        bytes = [bytes le_bytes(tgt, it.width)];
     elseif strcmp(it.kind, 'rip')
         % Three cases, and the value stored is different in each. Measured against the
         % reference's relocations:
@@ -791,13 +870,15 @@ end
 end
 
 function b = le_bytes_imm(op, n, ln)
-% le_bytes_imm - n bytes of an immediate, taken from its hex DIGITS when it had them. A
-% double holds 53 bits, so a 64-bit literal cannot round-trip through op.value; its digits
-% can, and they are exactly what the source wrote. Digits rather than uint64 on purpose:
+% le_bytes_imm - n bytes of an immediate, taken from its DIGITS. A double holds 53 bits, so
+% a 64-bit literal cannot round-trip through op.value - and cc_int emits decimal ones, like
+% `movq $9223372036854775807, %rax`. The digits are read arithmetically instead: hex digits
+% directly, decimal digits by long division. Digits rather than uint64 on purpose:
 % docs/2026-08-10-matlab-clone-bug-report.md records the uint64 conversion divergences, and
-% hex digits need no numeric type at all.
-if n == 8 && ~isempty(op.hex)
-    h = op.hex;
+% digits need no numeric type at all.
+lit = op.lit;
+if numel(lit) > 2 && lit(1) == '0' && (lit(2) == 'x' || lit(2) == 'X')
+    h = lower(lit(3:end));
     % A literal wider than 64 bits is an error in as, so it is one here: taking the low 64
     % bits would assemble a different number silently, which is the failure this whole
     % function exists to stop.
@@ -815,8 +896,53 @@ if n == 8 && ~isempty(op.hex)
         pair = h(17-2*k:18-2*k);
         b(k) = hexval(pair(1)) * 16 + hexval(pair(2));
     end
+elseif ~isempty(lit) && (lit(1) == '-' || (lit(1) >= '0' && lit(1) <= '9'))
+    b = decimal_bytes(lit, n, ln);
 else
     b = le_bytes(op.value, n);
+end
+end
+
+function b = decimal_bytes(lit, n, ln)
+% decimal_bytes - n little-endian bytes of a decimal literal, read exactly by long division.
+% Never through a double: 9007199254740993 and 9223372036854775807 are both in cc_int's
+% output and neither survives a 53-bit mantissa.
+neg = 0;
+if lit(1) == '-'
+    neg = 1;
+    lit = lit(2:end);
+end
+d = double(lit) - 48;
+if any(d < 0) || any(d > 9)
+    fail(ln, sprintf('expected a number, got %s', lit));
+end
+b = zeros(1, n);
+for k = 1:n
+    carry = 0;
+    for q = 1:numel(d)
+        cur = carry * 10 + d(q);
+        d(q) = floor(cur / 256);
+        carry = cur - d(q) * 256;
+    end
+    b(k) = carry;
+end
+if any(d ~= 0)
+    fail(ln, sprintf('immediate %s does not fit in %d bytes', lit, n));
+end
+if neg
+    % two's complement: invert and add one
+    for k = 1:n
+        b(k) = 255 - b(k);
+    end
+    k = 1;
+    while k <= n
+        b(k) = b(k) + 1;
+        if b(k) < 256
+            break;
+        end
+        b(k) = 0;
+        k = k + 1;
+    end
 end
 end
 
@@ -1001,6 +1127,10 @@ switch mn
     case 'movslq', op2 = 99;  w = 1; has0f = 0;
     case 'movsbq', op2 = 190; w = 1; has0f = 1;
     case 'movzbl', op2 = 182; w = 0; has0f = 1;
+    case 'movzwl', op2 = 183; w = 0; has0f = 1;
+    case 'movswq', op2 = 191; w = 1; has0f = 1;
+    case 'movzbq', op2 = 182; w = 1; has0f = 1;
+    case 'movsbl', op2 = 190; w = 0; has0f = 1;
     otherwise,    op2 = 0;    w = 0; has0f = 0;
 end
 if op2 == 0 || numel(ops) ~= 2
@@ -1022,6 +1152,7 @@ switch mn
     case 'movq', w = 1;
     case 'movl', w = 0;
     case 'movb', w = 0;
+    case 'movw', w = 0;      % 66 prefix, 16-bit immediates; see the end of this function
     otherwise,   w = -1;
 end
 if w < 0 || numel(ops) ~= 2
@@ -1062,6 +1193,9 @@ if strcmp(src.kind, 'imm')
             % form is not optional there, the short one would store a different number.
             bytes = [rexp(1, 0, floor(dst.reg / 8), 0) 184 + mod_low(dst.reg) ...
                      le_bytes_imm(src, 8, ln)];
+        elseif strcmp(mn, 'movw')
+            bytes = [102 rexp(0, 0, floor(dst.reg / 8), 0) 184 + mod_low(dst.reg) ...
+                     le_bytes(src.value, 2)];                    % movw: 66 b8+rd iw
         elseif strcmp(mn, 'movb')
             bytes = [rexp(0, 0, floor(dst.reg / 8), 0) 176 + mod_low(dst.reg) ...
                      le_bytes(src.value, 1)];                    % movb: b0+rb ib
@@ -1078,7 +1212,9 @@ if strcmp(src.kind, 'imm')
         % C6 /0 ib stores one byte; C7 /0 id stores four. Using C7 for a movb wrote three
         % extra bytes of nothing and still looked like a store - it cost cc60 25 bytes and
         % eleven programs' worth of drift waiting to happen.
-        if strcmp(mn, 'movb')
+        if strcmp(mn, 'movw')
+            bytes = [102 pre 199 mrm tail le_bytes(src.value, 2)];
+        elseif strcmp(mn, 'movb')
             bytes = [pre 198 mrm tail le_bytes(src.value, 1)];
         else
             bytes = [pre 199 mrm tail le_bytes(src.value, 4)];
@@ -1095,12 +1231,19 @@ else
     op_load = 139;
     op_store = 137;
 end
+% movw is the 16-bit member of the same family: same opcodes, plus the 66 operand-size
+% prefix. 66 comes before REX when there is one, which is why it is a separate variable
+% rather than part of the rexp call.
+op16 = [];
+if strcmp(mn, 'movw')
+    op16 = 102;
+end
 if strcmp(src.kind, 'mem') && strcmp(dst.kind, 'reg')
     [pre, mrm, tail] = rm_operand(src, dst.reg, w);
-    bytes = [pre op_load mrm tail];                                   % 8B/8A /r
+    bytes = [op16 pre op_load mrm tail];                              % 8B/8A /r
 else
     [pre, mrm, tail] = rm_operand(dst, src.reg, w);
-    bytes = [pre op_store mrm tail];                                  % 89/88 /r
+    bytes = [op16 pre op_store mrm tail];                             % 89/88 /r
 end
 end
 
@@ -1347,7 +1490,7 @@ o.rip = 0;
 o.ripdisp = 0;      % filled in by the emit pass for a same-section label
 o.needs_rex = 0;
 o.indirect = 0;
-o.hex = '';         % the literal's hex digits, when it had any; see le_bytes_imm
+o.lit = '';         % the literal as written; see le_bytes_imm
 o.index = -1;       % a SIB index register; -1 means none
 o.scale = 1;        % 1, 2, 4 or 8, only meaningful with an index
 
@@ -1368,10 +1511,7 @@ if txt(1) == '$'
     % The DIGITS matter when eight bytes are emitted: a MATLAB double carries 53 bits, so
     % movabsq $0x999999999999999a cannot be rebuilt from o.value. It came out as a
     % different number, at the right length, which is the quietest kind of wrong.
-    lit = strtrim(txt(2:end));
-    if numel(lit) > 2 && lit(1) == '0' && (lit(2) == 'x' || lit(2) == 'X')
-        o.hex = lower(lit(3:end));
-    end
+    o.lit = strtrim(txt(2:end));
     return;
 end
 
@@ -1524,6 +1664,13 @@ tab = [ ...
     add('%r14', 14, 64, 1); add('%r15', 15, 64, 1);
     add('%eax', 0, 32, 0); add('%ebx', 3, 32, 0); add('%edx', 2, 32, 0);
     add('%al', 0, 8, 0);   add('%cl', 1, 8, 0);   add('%dl', 2, 8, 0);
+    % 16-bit forms, for movw and the word-width operations cc_int emits for 
+    add('%ax', 0, 16, 0);  add('%cx', 1, 16, 0);  add('%dx', 2, 16, 0);
+    add('%bx', 3, 16, 0);  add('%sp', 4, 16, 0);  add('%bp', 5, 16, 0);
+    add('%si', 6, 16, 0);  add('%di', 7, 16, 0);
+    add('%r8w', 8, 16, 0); add('%r9w', 9, 16, 0); add('%r10w', 10, 16, 0);
+    add('%r11w', 11, 16, 0); add('%r12w', 12, 16, 0); add('%r13w', 13, 16, 0);
+    add('%r14w', 14, 16, 0); add('%r15w', 15, 16, 0);
     % xmm0-xmm15: width 128 is how the encoders tell them from a GPR with the same number,
     % so the table needs no extra field. Written out rather than appended in a loop because
     % growing a struct array with `tab(end+1) = ...` CORRUPTS it on the clone: appended rows
@@ -1550,8 +1697,10 @@ function tab = isa_table()
 % 'sse', 'none' (nothing yet).
 add = @(m, k) struct('mnemonic', m, 'kind', k);
 tab = [ ...
-    add('movq', 'mov'); add('movl', 'mov'); add('movb', 'mov');
+    add('movq', 'mov'); add('movl', 'mov'); add('movb', 'mov'); add('movw', 'mov');
     add('movslq', 'movx'); add('movsbq', 'movx'); add('movzbl', 'movx');
+    add('movzwl', 'movx'); add('movswq', 'movx');
+    add('movzbq', 'movx'); add('movsbl', 'movx');
     add('leaq', 'lea'); add('pushq', 'stack'); add('popq', 'stack');
     add('addq', 'alu'); add('subq', 'alu'); add('cmpq', 'alu');
     add('andq', 'alu'); add('orq', 'alu'); add('xorq', 'alu'); add('xorl', 'alu');

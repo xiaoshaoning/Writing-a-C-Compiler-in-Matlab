@@ -1,0 +1,80 @@
+
+tmp_d.o:     file format pe-x86-64
+
+
+Disassembly of section .text:
+
+0000000000000000 <main>:
+   0:	55                   	push   %rbp
+   1:	48 89 e5             	mov    %rsp,%rbp
+   4:	48 83 ec 10          	sub    $0x10,%rsp
+   8:	48 c7 c0 01 00 00 00 	mov    $0x1,%rax
+   f:	48 f7 d8             	neg    %rax
+  12:	48 63 c0             	movslq %eax,%rax
+  15:	48 89 45 f8          	mov    %rax,-0x8(%rbp)
+  19:	48 8d 05 98 00 00 00 	lea    0x98(%rip),%rax        # b8 <main+0xb8>
+  20:	50                   	push   %rax
+  21:	48 b8 ff ff ff ff ff 	movabs $0x7fffffffffffffff,%rax
+  28:	ff ff 7f 
+  2b:	50                   	push   %rax
+  2c:	e8 ae 00 00 00       	call   df <__cc_printf_2>
+  31:	48 83 c4 10          	add    $0x10,%rsp
+  35:	48 8d 05 82 00 00 00 	lea    0x82(%rip),%rax        # be <main+0xbe>
+  3c:	50                   	push   %rax
+  3d:	48 8b 45 f8          	mov    -0x8(%rbp),%rax
+  41:	50                   	push   %rax
+  42:	e8 98 00 00 00       	call   df <__cc_printf_2>
+  47:	48 83 c4 10          	add    $0x10,%rsp
+  4b:	48 8d 05 72 00 00 00 	lea    0x72(%rip),%rax        # c4 <main+0xc4>
+  52:	50                   	push   %rax
+  53:	48 8b 45 f8          	mov    -0x8(%rbp),%rax
+  57:	50                   	push   %rax
+  58:	e8 82 00 00 00       	call   df <__cc_printf_2>
+  5d:	48 83 c4 10          	add    $0x10,%rsp
+  61:	48 8d 05 62 00 00 00 	lea    0x62(%rip),%rax        # ca <main+0xca>
+  68:	50                   	push   %rax
+  69:	48 b8 01 00 00 00 00 	movabs $0x20000000000001,%rax
+  70:	00 20 00 
+  73:	50                   	push   %rax
+  74:	e8 66 00 00 00       	call   df <__cc_printf_2>
+  79:	48 83 c4 10          	add    $0x10,%rsp
+  7d:	48 8d 05 4f 00 00 00 	lea    0x4f(%rip),%rax        # d3 <main+0xd3>
+  84:	50                   	push   %rax
+  85:	48 8b 45 f8          	mov    -0x8(%rbp),%rax
+  89:	50                   	push   %rax
+  8a:	e8 50 00 00 00       	call   df <__cc_printf_2>
+  8f:	48 83 c4 10          	add    $0x10,%rsp
+  93:	48 8d 05 3f 00 00 00 	lea    0x3f(%rip),%rax        # d9 <main+0xd9>
+  9a:	50                   	push   %rax
+  9b:	48 8b 45 f8          	mov    -0x8(%rbp),%rax
+  9f:	50                   	push   %rax
+  a0:	e8 3a 00 00 00       	call   df <__cc_printf_2>
+  a5:	48 83 c4 10          	add    $0x10,%rsp
+  a9:	48 c7 c0 60 00 00 00 	mov    $0x60,%rax
+  b0:	48 63 c0             	movslq %eax,%rax
+  b3:	48 89 ec             	mov    %rbp,%rsp
+  b6:	5d                   	pop    %rbp
+  b7:	c3                   	ret
+  b8:	25 6c 6c 78 0a       	and    $0xa786c6c,%eax
+  bd:	00 25 6c 6c 78 0a    	add    %ah,0xa786c6c(%rip)        # a786d2f <__cc_printf_2+0xa786c50>
+  c3:	00 25 6c 6c 75 0a    	add    %ah,0xa756c6c(%rip)        # a756d35 <__cc_printf_2+0xa756c56>
+  c9:	00 25 30 31 36 6c    	add    %ah,0x6c363130(%rip)        # 6c3631ff <__cc_printf_2+0x6c363120>
+  cf:	6c                   	insb   (%dx),(%rdi)
+  d0:	78 0a                	js     dc <main+0xdc>
+  d2:	00 25 6c 6c 6f 0a    	add    %ah,0xa6f6c6c(%rip)        # a6f6d44 <__cc_printf_2+0xa6f6c65>
+  d8:	00 25 6c 6c 58 0a    	add    %ah,0xa586c6c(%rip)        # a586d4a <__cc_printf_2+0xa586c6b>
+	...
+
+00000000000000df <__cc_printf_2>:
+  df:	55                   	push   %rbp
+  e0:	48 89 e5             	mov    %rsp,%rbp
+  e3:	48 83 e4 f0          	and    $0xfffffffffffffff0,%rsp
+  e7:	48 83 ec 20          	sub    $0x20,%rsp
+  eb:	48 8b 4d 18          	mov    0x18(%rbp),%rcx
+  ef:	48 8b 55 10          	mov    0x10(%rbp),%rdx
+  f3:	31 c0                	xor    %eax,%eax
+  f5:	e8 00 00 00 00       	call   fa <__cc_printf_2+0x1b>
+  fa:	48 89 ec             	mov    %rbp,%rsp
+  fd:	5d                   	pop    %rbp
+  fe:	c3                   	ret
+  ff:	90                   	nop

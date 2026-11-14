@@ -16,6 +16,8 @@
 %   CC_SECTIONS=cctests   the corpus: compile, run, and interpreter parity
 %   CC_SECTIONS=ostests   the gcc-free x86sim output parity table
 %   CC_SECTIONS=instr     the instruction-count regression (142 checks, ~4m)
+%   CC_SECTIONS=asm       every corpus program's .text against the reference
+%                         assembler's, byte for byte (~12m); needs as and objcopy
 %   CC_SECTIONS=gccstdout every corpus program's stdout against gcc's own build
 %                         of the same source (~8m, the one oracle exit codes
 %                         cannot replace: a program can return 96 and print
@@ -37,6 +39,7 @@ cc_sections = getenv('CC_SECTIONS');
 sec_want = @(nm) isempty(cc_sections) || ~isempty(strfind(cc_sections, 'all')) ...
                 || ~isempty(strfind(cc_sections, nm));
 run_cctests = sec_want('cctests');
+run_asm     = sec_want('asm');
 run_ostests = sec_want('ostests');
 run_instr   = sec_want('instr');
 run_tables  = sec_want('tables');   % groups 5-9, the interpretive tables
@@ -1060,6 +1063,17 @@ cctests = {
     if gcc_ok ~= 0
         fprintf('SKIP  gcc-dependent groups (gcc not found)\n');
     else
+    if run_asm
+        progress('assembling the corpus');
+        [asm_same, asm_differ, asm_refused, asm_total] = asm_gate();
+        [npass, nfail] = addcheck(npass, nfail, ...
+            asm_same == asm_total && asm_total > 0, ...
+            sprintf('asm: %d of %d corpus programs byte-identical to as', ...
+                    asm_same, asm_total));
+        if asm_differ > 0 || asm_refused > 0
+            fprintf('      %d differ, %d refused\n', asm_differ, asm_refused);
+        end
+    end
     if run_cctests
     for k = corpus_range
         try

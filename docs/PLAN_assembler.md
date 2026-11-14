@@ -366,6 +366,9 @@ project could catch, because the reference assembler refuses the input.
 **Gate, measured (the clone): 25 of 25 byte-identical, 0 differ, 0 missing an encoder,
 0 errors.** The whole sample assembles to exactly what `as` produces.
 
+**Filed in the engine repo:** `matlab_in_rust/docs/BUG_REPORT_2026-11-05_engine_char_index_command_name.md`
+- the defect below, with the two-line reproducer and the test to add.
+
 **Open: the engine cannot verify the sample yet.** `ma_asm` on the engine throws an error
 whose message is a bare command name when the input contains one. Reproducer:
 `.string "exit"` fails with `m=[exit]`; `.string "quit"` the same; `.string "EXIT"` the same;
@@ -391,9 +394,15 @@ assignment base must be a variable". Several helpers now use a temporary, and th
 found by running the same code on both.
 
 ### M5 — the gate
-- [ ] 338/338 byte-identical `.text` against `as` (or a written-down, justified list of
-      exceptions with the reason each differs)
-- [ ] A `CC_SECTIONS=asm` group in `run_tests.m` running M5 as one check
+- [x] **338/338 byte-identical `.text` against `as`.** Every corpus program, `.text` for
+      `.text`. Nothing on the 25-program sample predicted this: the sample was chosen from
+      forms I had already met, and the corpus found five more (`movw`, `movzwl`, `movswq`,
+      `movzbq`, `movsbl`), `.quad symbol` as an address rather than a number, and - the one
+      that would have hidden longest - `movq $9223372036854775807, %rax`, a DECIMAL literal
+      beyond double precision. `cc_int` emits decimal, not hex, so "carry the hex digits" was
+      only half a fix: `decimal_bytes` now reads the digits by long division.
+- [x] A `CC_SECTIONS=asm` group in `run_tests.m` running M5 as one check: `PASS asm: 338 of
+      338 corpus programs byte-identical to as`, 144/144 in that section.
 - [ ] Error cases asserted the way `cc_bad_*` are: an unknown mnemonic, an unresolved
       symbol, a bad operand — each with its message
 
