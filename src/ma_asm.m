@@ -67,7 +67,20 @@ for ln = 1:numel(lines)
     if isempty(line)
         continue;
     end
-    if line(1) == '.'
+    % Decide what this line is by scanning the name at its start, ONCE:
+    %   <name>:            a label - and note that every local label (.Lret1, .LFB1,
+    %                      .Lstr0) starts with '.', exactly like a directive does
+    %   .<name>            a directive
+    %   <mnemonic> ...     an instruction
+    % Testing line(1) == '.' first read every dotted label as a directive, which the
+    % corpus-wide run found on all 25 programs at line 6 (.LFB1).
+    k = 1;
+    while k <= numel(line) && is_name_char(line(k))
+        k = k + 1;
+    end
+    is_label = (k > 1) && (k <= numel(line)) && (line(k) == ':');
+
+    if ~is_label && line(1) == '.'
         % A directive. Plain character scanning, not sscanf's fourth output (the clone
         % does not implement it) and not regexp(...,'end') (it does not either, measured
         % in this very file). Scanning is longer and runs everywhere.
@@ -99,12 +112,8 @@ for ln = 1:numel(lines)
         continue;
     end
 
-    % a label definition: `<name>:` at the start of the line
-    k = 1;
-    while k <= numel(line) && is_name_char(line(k))
-        k = k + 1;
-    end
-    if k > 1 && k <= numel(line) && line(k) == ':'
+    % a label definition: `<name>:` at the start of the line (scan done above)
+    if is_label
         j = sym_index(img, line(1:k-1));
         if j == 0
             img.syms{end+1} = struct('name', line(1:k-1), 'section', section, ...
@@ -128,6 +137,14 @@ for ln = 1:numel(lines)
     mn = line(1:k-1);
     if ~table_has(tab, mn)
         fail(ln, sprintf('unknown mnemonic %s', mn));
+    end
+    % M2: decode the operands even though no encoder consumes them yet. That is the point -
+    % a decoder nothing calls is untested, and this one is now run over every instruction
+    % in every compiled program, so a form it cannot read fails HERE with a line number
+    % instead of surfacing as bad bytes in M3.
+    ops = split_operands(line(k:end), ln);
+    for q = 1:numel(ops)
+        decode_operand(ops{q}, ln);
     end
     fail(ln, sprintf('no encoder for %s yet (M3)', mn));
 end
@@ -338,6 +355,189 @@ while k <= numel(s)
 end
 out(end+1) = 0;      % the terminator
 img = set_section_bytes(img, section, uint8(out));
+end
+
+function ops = split_operands(rest, ln)
+% split_operands - the operand strings of an instruction, in order.
+% Commas separate operands and nothing else in this text: the only nested punctuation is
+% `(...)` around a register, which never contains a comma.
+ops = {};
+rest = strtrim(rest);
+if isempty(rest)
+    ops = {};
+    return;
+end
+start = 1;
+for k = 1:numel(rest)
+    if rest(k) == ','
+        ops{end+1} = strtrim(rest(start:k-1));
+        start = k + 1;
+    end
+end
+ops{end+1} = strtrim(rest(start:end));
+for k = 1:numel(ops)
+    if isempty(ops{k})
+        fail(ln, 'an operand is empty');
+    end
+end
+end
+
+function o = decode_operand(txt, ln)
+% decode_operand - one operand string as a structure.
+%
+% The six forms cc_int emits, measured over 25 corpus programs:
+%   %rax            register
+%   $12  $-1  $0x10 immediate (decimal, negative, hex)
+%   -1004(%rbp)     displacement + base register
+%   (%rax)          base register
+%   .Lret1  main    a symbol, for the branch and call encoders
+%   a(%rip)         symbol + rip, the data reference
+%
+% Fields: .kind ('reg'|'imm'|'mem'|'sym'), .reg / .base (0-15, -1 for none), .width,
+% .disp, .value (immediates), .symbol, .rip.
+%
+% Width belongs to the REGISTER (%al is 8, %eax 32, %rax 64); .needs_rex marks the
+% registers whose number is 8 or more, which the encoder must reflect in REX.B/R/X.
+o.kind = '';
+o.reg = -1;
+o.base = -1;
+o.width = 0;
+o.disp = 0;
+o.value = 0;
+o.symbol = '';
+o.rip = 0;
+o.needs_rex = 0;
+
+if isempty(txt)
+    fail(ln, 'empty operand');
+end
+
+if txt(1) == '$'
+    o.kind = 'imm';
+    o.value = read_int(txt(2:end), ln);
+    return;
+end
+
+if txt(1) == '%'
+    r = reg_lookup(txt);
+    if r.num < 0
+        fail(ln, sprintf('unknown register %s', txt));
+    end
+    o.kind = 'reg';
+    o.reg = r.num;
+    o.width = r.width;
+    o.needs_rex = (r.num >= 8) || r.wide;
+    return;
+end
+
+% memory: `disp(reg)`, `(reg)`, `sym(%rip)`
+open = find(txt == '(', 1);
+if ~isempty(open)
+    close = find(txt == ')', 1, 'last');
+    if isempty(close) || close < open
+        fail(ln, sprintf('unbalanced parentheses in %s', txt));
+    end
+    inside = txt(open+1:close-1);
+    head = txt(1:open-1);
+    if txt(close+1:end) ~= ''   % hmm: trailing text after ')' is not a form cc_int emits
+        fail(ln, sprintf('cannot decode operand %s', txt));
+    end
+    o.kind = 'mem';
+    if ~isempty(inside) && inside(1) == '%'
+        r = reg_lookup(inside);
+        if r.num < 0
+            fail(ln, sprintf('unknown register in %s', txt));
+        end
+        o.base = r.num;
+        o.needs_rex = (r.num >= 8);
+        if strcmp(inside, '%rip')
+            o.rip = 1;
+        end
+    else
+        fail(ln, sprintf('memory operand without a register: %s', txt));
+    end
+    if ~isempty(head)
+        if o.rip
+            o.symbol = head;        % sym(%rip): the symbol IS the operand
+        else
+            o.disp = read_int(head, ln);
+        end
+    end
+    return;
+end
+
+% a bare symbol: a branch or call target, or a data label
+o.kind = 'sym';
+o.symbol = txt;
+end
+
+function v = read_int(txt, ln)
+% read_int - a decimal or 0x immediate, possibly negative. Same scanner the data
+% directives use, so there is one integer reader in this file.
+v = 0;
+k = 1;
+neg = 0;
+if ~isempty(txt) && txt(1) == '-'
+    neg = 1; k = 2;
+elseif ~isempty(txt) && txt(1) == '+'
+    k = 2;
+end
+if k + 1 <= numel(txt) && txt(k) == '0' && (txt(k+1) == 'x' || txt(k+1) == 'X')
+    k = k + 2;
+    while k <= numel(txt)
+        c = lower(txt(k));
+        if c >= '0' && c <= '9'
+            v = v * 16 + (double(c) - 48);
+        elseif c >= 'a' && c <= 'f'
+            v = v * 16 + (double(c) - 87);
+        else
+            break;
+        end
+        k = k + 1;
+    end
+elseif k <= numel(txt) && txt(k) >= '0' && txt(k) <= '9'
+    while k <= numel(txt) && txt(k) >= '0' && txt(k) <= '9'
+        v = v * 10 + (double(txt(k)) - 48);
+        k = k + 1;
+    end
+else
+    fail(ln, sprintf('expected a number, got %s', txt));
+end
+if neg
+    v = -v;
+end
+end
+
+function r = reg_lookup(name)
+% reg_lookup - the measured register set: number, width, and whether the 64-bit form
+% needs REX.W. One table, because every encoder asks this question.
+r.num = -1;
+r.width = 0;
+r.wide = 0;
+tab = reg_table();
+for k = 1:numel(tab)
+    if strcmp(tab(k).name, name)
+        r = tab(k);
+        return;
+    end
+end
+end
+
+function tab = reg_table()
+% the registers cc_int actually uses (measured), with x86-64 encoding numbers
+tab = struct('name', {}, 'num', {}, 'width', {}, 'wide', {});
+add = @(nm, num, w, wide) struct('name', nm, 'num', num, 'width', w, 'wide', wide);
+tab = [ ...
+    add('%rax', 0, 64, 1); add('%rcx', 1, 64, 1); add('%rdx', 2, 64, 1);
+    add('%rbx', 3, 64, 1); add('%rsp', 4, 64, 1); add('%rbp', 5, 64, 1);
+    add('%rsi', 6, 64, 1); add('%rdi', 7, 64, 1);
+    add('%r8', 8, 64, 1);  add('%r9', 9, 64, 1);
+    add('%r10', 10, 64, 1); add('%r11', 11, 64, 1);
+    add('%eax', 0, 32, 0); add('%ebx', 3, 32, 0); add('%edx', 2, 32, 0);
+    add('%al', 0, 8, 0);   add('%cl', 1, 8, 0);   add('%dl', 2, 8, 0);
+    add('%xmm0', 0, 128, 0); add('%xmm1', 1, 128, 0);
+    add('%rip', -2, 64, 0) ...
+];
 end
 
 function b = table_has(tab, mn)

@@ -194,12 +194,26 @@ to be made.
 comparable at M4, where a relocation is a displacement against a label's final address -
 comparing them now would be checking a number nothing uses yet.
 
-### M2 — operand decoding
-- [ ] Registers → ModRM/REX; `$imm` (decimal, `$0x..`); `N(%reg)`; `(%reg)`;
-      `sym(%rip)`; bare `sym`/label → a relocation record
-- [ ] Immediate width rule: x86 has no 64-bit immediate-to-memory form (this bit the
-      project already: `movabsq` through a register)
-- [ ] Sign/zero-extension forms (`movslq`, `movsbq`, `movzbl`) map to one 0F-family encoder
+### M2 — operand decoding — DONE (2026-11-05)
+- [x] Six forms, measured over 25 programs and 11157 instructions: `%rax`, `$12` / `$-1` /
+      `$0x10`, `-1004(%rbp)`, `(%rax)`, `.Lret1` / `main`, `a(%rip)`
+- [x] A register table with number, width and REX need - the measured set, not x86-64
+- [x] The decoder is a real pipeline stage, not a library: every instruction's operands are
+      decoded before the encoder gate, so an unreadable form fails with its LINE instead of
+      surfacing later as bad bytes
+- [x] **Gate:** all 25 sample programs reach the encoder gate with 0 decode failures, on
+      both runtimes
+
+The "no 64-bit immediate-to-memory" rule and the 0F-family encoders belong to M3, where
+bytes exist to be wrong; the decoder only has to say *what* an operand is.
+
+**The gate found an M1 bug on its first run.** All 25 programs died at line 6 with
+`unknown directive .LFB1`: ma_asm decided label-vs-directive by testing `line(1) == '.'`,
+and every local label (`.Lret1`, `.LFB1`, `.Lstr0`) starts with a dot exactly like a
+directive does. Nothing in the M0/M1 fixtures had a dotted label - they all used `main:`,
+`gvar:`, `tail:` - so the whole class was invisible until the corpus-wide run. The
+decision is now made by scanning the name at the start of the line ONCE and asking whether
+a ':' follows, which is what the line actually means.
 
 ### M3 — encoders, most-frequent first
 Order matters: `movq movslq leaq pushq popq addq` are **8266 of 11157 instructions
