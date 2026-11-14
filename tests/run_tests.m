@@ -1060,9 +1060,12 @@ cctests = {
     };
     % gcc-dependent groups: the compile-and-run exit-code loop and the two
     % parity groups. Everything after their `end` runs without gcc.
-    if gcc_ok ~= 0
-        fprintf('SKIP  gcc-dependent groups (gcc not found)\n');
-    else
+    % assembler groups. Neither needs gcc: the error cases need nothing but ma_asm, and
+    % the byte gate needs as and objcopy. Inside the gcc guard they would vanish silently
+    % on a machine without gcc, which is exactly the machine where they still work.
+    [asm_p, asm_f] = asm_errors();
+    npass = npass + asm_p;
+    nfail = nfail + asm_f;
     if run_asm
         progress('assembling the corpus');
         [asm_same, asm_differ, asm_refused, asm_total] = asm_gate();
@@ -1074,6 +1077,9 @@ cctests = {
             fprintf('      %d differ, %d refused\n', asm_differ, asm_refused);
         end
     end
+    if gcc_ok ~= 0
+        fprintf('SKIP  gcc-dependent groups (gcc not found)\n');
+    else
     if run_cctests
     for k = corpus_range
         try
