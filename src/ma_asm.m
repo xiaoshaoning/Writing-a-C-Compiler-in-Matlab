@@ -790,6 +790,38 @@ else
 end
 end
 
+function b = le_bytes_imm(op, n)
+% le_bytes_imm - n bytes of an immediate, taken from its hex DIGITS when it had them. A
+% double holds 53 bits, so a 64-bit literal cannot round-trip through op.value; its digits
+% can, and they are exactly what the source wrote.
+if n == 8 && ~isempty(op.hex)
+    h = op.hex;
+    if numel(h) < 16
+        h = [repmat('0', 1, 16 - numel(h)) h];
+    end
+    h = h(numel(h)-15:numel(h));            % the low 64 bits, which is what the form takes
+    b = zeros(1, 8);
+    for k = 1:8
+        pair = h(17-2*k:18-2*k);
+        b(k) = hexval(pair(1)) * 16 + hexval(pair(2));
+    end
+else
+    b = le_bytes(op.value, n);
+end
+end
+
+function v = hexval(c)
+if c >= '0' && c <= '9'
+    v = c - '0';
+elseif c >= 'a' && c <= 'f'
+    v = c - 'a' + 10;
+elseif c >= 'A' && c <= 'F'
+    v = c - 'A' + 10;
+else
+    fail(0, sprintf('not a hex digit: %s', c));
+end
+end
+
 function f = imm_fits_32(v)
 % imm_fits_32 - true when v survives sign-extension from 32 bits, which is what the
 % c7 /0 id form does to its immediate.
@@ -1015,7 +1047,7 @@ if strcmp(src.kind, 'imm')
             % and `movq $0xb2d05e00,%rax` is 48 b8 00 5e d0 b2 00 00 00 00 - the long
             % form is not optional there, the short one would store a different number.
             bytes = [rexp(1, 0, floor(dst.reg / 8), 0) 184 + mod_low(dst.reg) ...
-                     le_bytes(src.value, 8)];
+                     le_bytes_imm(src, 8)];
         elseif strcmp(mn, 'movb')
             bytes = [rexp(0, 0, floor(dst.reg / 8), 0) 176 + mod_low(dst.reg) ...
                      le_bytes(src.value, 1)];                    % movb: b0+rb ib
@@ -1029,7 +1061,14 @@ if strcmp(src.kind, 'imm')
         % assembles to c7 45 f8 f9 ff ff ff. Refusing it would have been stricter than the
         % reference and broken a program the reference assembles.
         [pre, mrm, tail] = rm_operand(dst, 0, w);
-        bytes = [pre 199 mrm tail le_bytes(src.value, 4)];
+        % C6 /0 ib stores one byte; C7 /0 id stores four. Using C7 for a movb wrote three
+        % extra bytes of nothing and still looked like a store - it cost cc60 25 bytes and
+        % eleven programs' worth of drift waiting to happen.
+        if strcmp(mn, 'movb')
+            bytes = [pre 198 mrm tail le_bytes(src.value, 1)];
+        else
+            bytes = [pre 199 mrm tail le_bytes(src.value, 4)];
+        end
     end
     return;
 end
@@ -1114,17 +1153,33 @@ function bytes = enc_sse(mn, ops, ln)
 %
 % One row per mnemonic: addsd/subsd/mulsd/divsd/ucomisd/cvt* are the same family and one
 % row each when the corpus asks for them, which it does not yet.
-% [prefix w opcode store-opcode], nil when there is no store form
+% [prefix w opcode store-opcode xmm-in-reg], all-zero-when-absent. The last column is the
+% difference between cvtsi2sdq and cvttsd2siq: one puts the xmm in the ModRM reg field and
+% the integer in r/m, the other does the reverse.
 switch mn
-    case 'movsd',      spec = [242 0 16 17];
-    case 'divsd',      spec = [242 0 94  0];
-    case 'mulsd',      spec = [242 0 89  0];
-    case 'ucomisd',    spec = [102 0 46  0];
-    case 'cvtsi2sdq',  spec = [242 1 42  0];
-    otherwise,         spec = [0 0 0 0];
+    case 'movsd',      spec = [242 0 16 17 1];
+    case 'divsd',      spec = [242 0 94  0 1];
+    case 'mulsd',      spec = [242 0 89  0 1];
+    case 'addsd',      spec = [242 0 88  0 1];
+    case 'subsd',      spec = [242 0 92  0 1];
+    case 'ucomisd',    spec = [102 0 46  0 1];
+    case 'cvtsi2sdq',  spec = [242 1 42  0 1];
+    case 'cvttsd2siq', spec = [242 1 44  0 0];   % xmm in r/m, integer in reg
+    otherwise,         spec = [0 0 0 0 1];
 end
 if spec(3) == 0 || numel(ops) ~= 2
     fail(ln, sprintf('no encoder for %s yet (M3)', mn));
+end
+if ~spec(5)
+    % cvttsd2siq: same prefix and the same opcode position as cvtsi2sdq, with the OPERANDS
+    % the other way round - the general register is in the ModRM reg field and the xmm is
+    % r/m. A flag on the row rather than a second encoder, because everything else is shared.
+    if ~strcmp(ops{2}.kind, 'reg') || ops{2}.width == 128
+        fail(ln, sprintf('%s needs a general register destination', mn));
+    end
+    [pre, mrm, tail] = rm_operand(ops{1}, ops{2}.reg, spec(2));
+    bytes = [spec(1) pre 15 spec(3) mrm tail];
+    return;
 end
 store = strcmp(ops{2}.kind, 'mem');
 if store
@@ -1214,7 +1269,7 @@ switch mn
             fail(ln, 'movabsq takes an immediate and a register');
         end
         bytes = [rexp(1, 0, floor(ops{2}.reg / 8), 0) 184 + mod_low(ops{2}.reg) ...
-                 le_bytes(ops{1}.value, 8)];                          % 48 b8+rd imm64
+                 le_bytes_imm(ops{1}, 8)];                          % 48 b8+rd imm64
     otherwise
         fail(ln, sprintf('no encoder for %s yet (M3)', mn));
 end
@@ -1278,6 +1333,7 @@ o.rip = 0;
 o.ripdisp = 0;      % filled in by the emit pass for a same-section label
 o.needs_rex = 0;
 o.indirect = 0;
+o.hex = '';         % the literal's hex digits, when it had any; see le_bytes_imm
 o.index = -1;       % a SIB index register; -1 means none
 o.scale = 1;        % 1, 2, 4 or 8, only meaningful with an index
 
@@ -1295,6 +1351,13 @@ end
 if txt(1) == '$'
     o.kind = 'imm';
     o.value = read_int(txt(2:end), ln);
+    % The DIGITS matter when eight bytes are emitted: a MATLAB double carries 53 bits, so
+    % movabsq $0x999999999999999a cannot be rebuilt from o.value. It came out as a
+    % different number, at the right length, which is the quietest kind of wrong.
+    lit = strtrim(txt(2:end));
+    if numel(lit) > 2 && lit(1) == '0' && (lit(2) == 'x' || lit(2) == 'X')
+        o.hex = lower(lit(3:end));
+    end
     return;
 end
 

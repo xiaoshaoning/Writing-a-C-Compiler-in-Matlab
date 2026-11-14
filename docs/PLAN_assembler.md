@@ -355,23 +355,32 @@ project could catch, because the reference assembler refuses the input.
       the same opcode as a load with a different prefix. The `movsd` family gained a
       per-mnemonic [prefix, w, opcode, store-opcode] row, so `divsd`, `mulsd` and `ucomisd`
       are one line each.
-- [ ] `cc60_scalar_literal` still differs: my `.text` is 617 bytes where the reference's is
-      592. Per-instruction sizes AGREE (148 compared), so the 25 bytes are branch FORMS -
-      three jmps and four conditionals that `as` makes short and I make near. The
-      forward-target adjustment below did not move it, so the criterion is wrong somewhere
-      else. Not yet understood.
+- [x] **cc60_scalar_literal was `movb $imm, memory`.** I emitted `C7 /0 id` (7 bytes)
+      where the reference emits `C6 /0 ib` (4). The same byte-width pair that cost one
+      program at the `88`/`89` opcodes, in the immediate-to-memory form. It also means my
+      earlier "per-instruction sizes agree" conclusion was wrong: that test aligned the two
+      instruction lists by MNEMONIC NAME, which silently skips entries and reports agreement
+      between things that are not the same instruction. Comparing by position found it
+      immediately.
+- [x] **imm64 literals keep their hex digits.** `movabsq $0x999999999999999a` came out as a
+      different number at the right length, because the literal went through a MATLAB double
+      and 53 bits cannot hold 64. `le_bytes_imm` builds the eight bytes from the digits the
+      source wrote.
+- [x] `cvttsd2siq`, and `addsd`/`subsd`/`mulsd`/`divsd`/`ucomisd` - one row each. The flag
+      that distinguishes `cvtsi2sdq` from `cvttsd2siq` is which operand sits in the ModRM reg
+      field: same prefixes, same shape, opposite meaning.
 
-**Gate, measured:** 25 sample programs -> **22 byte-identical**, 2 differ, 1 missing an
-encoder, 0 errors.
+**Gate, measured (the clone): 25 of 25 byte-identical, 0 differ, 0 missing an encoder,
+0 errors.** The whole sample assembles to exactly what `as` produces.
 
-**Still open, each localised.** This is the only open list for M4: earlier revisions of this
-document accumulated one table per commit, so "still open" came to mean "open three commits
-ago", and it listed causes that were already fixed. One list, replaced in place.
-| item | what is known |
-|---|---|
-| cc60_scalar_literal | branch forms: 617 vs 592 bytes with identical per-instruction sizes |
-| dreg_denselit | `movabsq $0x999999999999999a` - an imm64 that loses precision in a double. The literal needs to be carried as hex digits, not as a MATLAB number |
-| cvttsd2siq | `F2 REX.W 0F 2C /r` with the GPR in the REG field and the xmm in r/m - the opposite of `cvtsi2sdq`, so it needs a shape flag, not another prefix row |
+**Open: the engine cannot verify the sample yet.** `ma_asm` on the engine throws an error
+whose message is a bare command name when the input contains one. Reproducer:
+`.string "exit"` fails with `m=[exit]`; `.string "quit"` the same; `.string "EXIT"` the same;
+`.string "exitx"`, `"abcd"`, `"return"` and `"e x i t"` are all fine. So it is a string whose
+whole value is a COMMAND name, not a prefix or a substring. `cc17_shim` contains `call exit`,
+which is why the engine run stops at 5 of 25 files. The clone assembles all 25 identically,
+so this is an engine defect to isolate, not an assembler one - and it blocks the two-runtime
+discipline that has caught every earlier bug in this project.
 
 **An engine/clone portability finding, and the sneakiest yet:** growing a struct array with
 `tab(end+1) = add(...)` CORRUPTS it on the clone - three rows became four and every `.name`
