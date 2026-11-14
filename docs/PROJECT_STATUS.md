@@ -788,11 +788,15 @@ fixed:
    the same type either way.
 
 **The runtime is matlab_in_rust's engine (2026-11-05).** `tests/env.sh` resolves to
-`matlab_in_rust/dist/matlab-cli/matlab.exe` - currently `cli-v18`, 20,756,060 bytes,
-2026-11-12 15:37 - when `MATLAB` is not exported. The three runtimes have three roles
+`matlab_in_rust/dist/matlab-cli/matlab.exe` - currently `cli-v21-5-g9dc5345`,
+21,165,023 bytes, 2026-11-14 22:43 - when `MATLAB` is not exported. The pin here is
+the binary that is INSTALLED, and it is worth re-reading rather than assuming: it sat
+at `cli-v18` for two days while `cli-v19` and `cli-v20` were tagged, and assembling
+`call exit` was measured against a copy two days older than the fix for the defect it
+found. The three runtimes have three roles
 and it matters which is which:
 
-- **the engine** (`cli-v18`) is the runtime this project runs on. It is MATLAB
+- **the engine** (`cli-v21`) is the runtime this project runs on. It is MATLAB
   *enough*: every check in this suite passes on it, at the cost of compile throughput
   ~270x the C clone and superlinear in source size, which is why the suite is sliced
   by section and by program range rather than run whole.
@@ -811,11 +815,14 @@ the new verdict classifier, was then reported as "the host kills it at a random
 point". `run_all.sh` prints the runtime and its size/date before the suite, because a
 log that does not say which engine produced it cannot be compared with another.
 
-Five engine defects were found from here and all are fixed in `cli-v18`: `%0NX` hex
+Six engine defects were found from here and all are fixed by `cli-v21`: `%0NX` hex
 padding, `sprintf` repeating its format for string args, `x(:)` on a char row,
 `strcmp(cell,char)` returning a scalar 0, `sprintf('%s', ["ab","cd"])` throwing, and
 `c{end+1} = []` being a silent no-op - the last one the one that would have corrupted
-a compiler table. Their reports live in `matlab_in_rust/docs/`.
+a compiler table - and indexing a char array whose value is `exit` or `quit`
+terminating the interpreter (found from `call exit` in a corpus program; fixed at
+`b648ecb`, and the two-line reproducer is in `matlab_in_rust/docs/`). Their reports
+live in `matlab_in_rust/docs/`.
 
 **A cut-short run is now distinguishable from a failing one (2026-11-05).** This
 host kills `run_tests.m` at a random point - three deaths were observed in one

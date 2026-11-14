@@ -415,6 +415,12 @@ found by running the same code on both.
       the gcc guard - that is where they would vanish on exactly the machine where they
       still work.
 - [x] Suite totals: `CC_SECTIONS=none` 153/153, `CC_SECTIONS=asm` 154/154.
+- [x] **338/338 on the ENGINE as well as the clone** (2026-11-05, `cli-v21-5-g9dc5345`).
+      The two-runtime discipline applied to the assembler at full corpus scale for the
+      first time: `asm_gate()` needs no runtime-specific handling, so both agree. On the
+      engine this needed a current binary - the `dist/` copy was two days older than the
+      `exit` fix, and the same `call exit` that the assembler handles is what found the
+      engine defect.
 
 ### Later, deliberately out of v1
 - [ ] Section layout and an executable image (PE on Windows) — a new project
