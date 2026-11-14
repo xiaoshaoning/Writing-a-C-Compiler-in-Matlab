@@ -172,13 +172,27 @@ Also added: GAS's single-character escapes (`   `). `cc_int` emits none of
 them, but the reference assembler accepts them, and refusing what `as` accepts makes the
 two disagree for a reason that is ours rather than C's.
 
-### M1 — lines, labels, directives
-- [ ] Strip comments and blank lines; keep line numbers for errors
-- [ ] Label definitions (`.L<n>:`, `<sym>:`) recorded with a section and a provisional offset
-- [ ] `.text` / `.data` section switching; `.globl <sym>` marks a symbol global
-- [ ] `.file` / `.def` / `.scl` / `.type` / `.endef` / `.cfi_*` accepted and ignored
-- [ ] Byte emitters for `.byte` `.long` `.string` (observed) plus `.short` `.quad` (expected, unobserved)
-- [ ] `.comm <sym>,<len>,<align>` recorded as a zero-initialised symbol
+### M1 — lines, labels, directives — DONE (2026-11-05)
+- [x] Strip comments and blank lines; line numbers kept for errors
+- [x] Label definitions recorded with a section and an offset
+- [x] `.text` / `.data` switching; `.globl <sym>` marks a symbol global
+- [x] `.file` / `.def` / `.scl` / `.type` / `.endef` / `.cfi_*` accepted and ignored
+- [x] `.byte` `.short` `.long` `.quad` `.string` emit bytes, decimal and hex accepted, and
+      a value the scanner cannot read is REFUSED with its line rather than dropped
+- [x] `.comm <sym>,<len>,<align>` recorded as a zero-initialised symbol
+- [x] **Gate:** `tests/asm/m1_data.s` exercises every one of them, and the probe compares
+      `.data` and `.text` byte for byte against `as`: `data MATCH (22 bytes)`,
+      `text MATCH (1 byte)` on both runtimes
+
+**The padding lesson, learned twice.** `.data` is padded to a section boundary exactly as
+`.text` is - a 22-byte section comes back as 32 - so the first version of the data
+comparison reported a length mismatch where the bytes were right. Both sections now go
+through one `compare_bytes`, so the rule lives in one place and the mistake has one place
+to be made.
+
+**Deferred on purpose:** label *offsets* are recorded but not yet compared. They become
+comparable at M4, where a relocation is a displacement against a label's final address -
+comparing them now would be checking a number nothing uses yet.
 
 ### M2 — operand decoding
 - [ ] Registers → ModRM/REX; `$imm` (decimal, `$0x..`); `N(%reg)`; `(%reg)`;

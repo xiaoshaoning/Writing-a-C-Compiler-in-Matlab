@@ -65,6 +65,17 @@ fid = fopen('tmp_asm.bin', 'r');
 ref = fread(fid, inf, 'uint8').';
 fclose(fid);
 
+% .data bytes, exactly: this section is not padded, so prefix-wise would be wrong - and it
+% is what M1's data directives (.byte/.short/.long/.quad/.string) are judged by. Symbol
+% offsets are compared at M4, where relocations give them a reason to exist.
+refdata = uint8([]);
+if system('objcopy -O binary --only-section=.data tmp_asm.o tmp_asm_d.bin') == 0 && ...
+        exist('tmp_asm_d.bin', 'file') == 2
+    fid = fopen('tmp_asm_d.bin', 'r');
+    refdata = fread(fid, inf, 'uint8').';
+    fclose(fid);
+end
+
 % ---- ours ---------------------------------------------------------------------
 try
     img = ma_asm(txt);
@@ -93,19 +104,14 @@ for k = 1:n
     end
 end
 
-if n == 0 && numel(ref) > 0
-    % A comparison of no bytes is not a match. M0 printed MATCH here for an assembler that
-    % had emitted nothing at all - the exact lie this harness exists to prevent.
-    fprintf('  VACUOUS ours is empty and the reference is not: nothing was verified\n');
-elseif diff == 0 && numel(ours) <= numel(ref)
-    fprintf('  MATCH  (%d bytes compared; the reference is padded to a section boundary)\n', n);
-elseif diff == 0
-    fprintf('  LONGER than the reference by %d bytes - that is a real difference\n', ...
-            numel(ours) - numel(ref));
+% Both sections by the same rule, in one place: the reference is padded to a section
+% boundary for .data as much as for .text (a 22-byte .data comes back as 32), so a
+% whole-section equality test reports a length difference where the bytes are right.
+if isempty(threw)
+    compare_bytes('data', refdata, img.data);
+    compare_bytes('text', ref, ours);
 else
-    fprintf('  MISMATCH at byte %d\n', diff);
-    fprintf('    ref  [%s]\n', hex_window(ref, diff));
-    fprintf('    ours [%s]\n', hex_window(ours, diff));
+    fprintf(['  text  not compared: nothing was assembled (' threw ')' char(10)]);
 end
 finish(made_sample);
 end
@@ -115,12 +121,44 @@ function finish(made_sample)
 delete_if_exists('tmp_asm_in.s');
 delete_if_exists('tmp_asm.o');
 delete_if_exists('tmp_asm.bin');
+delete_if_exists('tmp_asm_d.bin');
 if made_sample && exist('tmp_asm.s', 'file') == 2
     delete('tmp_asm.s');
 end
 end
 
 % ---------------------------------------------------------------------------------
+
+function compare_bytes(what, ref, ours)
+% compare_bytes - our bytes against the reference's PREFIX, and say which it was.
+%
+% The reference section is padded to an alignment boundary (measured: five bytes of code
+% came back as sixteen, and a 22-byte .data as 32), so the rule is prefix equality - plus
+% a loud report when ours is empty and the reference is not, because a comparison of no
+% bytes is not a match and printing MATCH there was this harness's own first bug.
+if isempty(ours) && ~isempty(ref)
+    fprintf(['  %-5s VACUOUS ours is empty and the reference is not' char(10)], what);
+    return;
+end
+n = min(numel(ours), numel(ref));
+diff = 0;
+for k = 1:n
+    if ours(k) ~= ref(k)
+        diff = k;
+        break;
+    end
+end
+if diff > 0
+    fprintf(['  %-5s MISMATCH at byte %d' char(10)], what, diff);
+    fprintf(['        ref  [%s]' char(10)], hex_window(ref, diff));
+    fprintf(['        ours [%s]' char(10)], hex_window(ours, diff));
+elseif numel(ours) > numel(ref)
+    fprintf(['  %-5s LONGER than the reference by %d bytes' char(10)], ...
+            what, numel(ours) - numel(ref));
+else
+    fprintf(['  %-5s MATCH  (%d bytes; the reference is padded)' char(10)], what, n);
+end
+end
 
 function delete_if_exists(p)
 if exist(p, 'file') == 2
