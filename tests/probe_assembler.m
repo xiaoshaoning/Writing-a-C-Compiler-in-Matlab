@@ -95,24 +95,12 @@ if ~isempty(threw)
 end
 fprintf(', ours %d bytes\n', numel(ours));
 
-n = min(numel(ours), numel(ref));
-diff = 0;
-for k = 1:n
-    if ours(k) ~= ref(k)
-        diff = k;
-        break;
-    end
-end
-
 % Both sections by the same rule, in one place: the reference is padded to a section
 % boundary for .data as much as for .text (a 22-byte .data comes back as 32), so a
 % whole-section equality test reports a length difference where the bytes are right.
-if isempty(threw)
-    compare_bytes('data', refdata, img.data);
-    compare_bytes('text', ref, ours);
-else
-    fprintf(['  text  not compared: nothing was assembled (' threw ')' char(10)]);
-end
+% Nothing to guard here: a throw returned above.
+compare_bytes('data', refdata, img.data);
+compare_bytes('text', ref, ours);
 finish(made_sample);
 end
 
@@ -137,7 +125,7 @@ function compare_bytes(what, ref, ours)
 % a loud report when ours is empty and the reference is not, because a comparison of no
 % bytes is not a match and printing MATCH there was this harness's own first bug.
 if isempty(ours) && ~isempty(ref)
-    fprintf(['  %-5s VACUOUS ours is empty and the reference is not' char(10)], what);
+    fprintf('  %-5s VACUOUS ours is empty and the reference is not\n', what);
     return;
 end
 n = min(numel(ours), numel(ref));
@@ -149,14 +137,14 @@ for k = 1:n
     end
 end
 if diff > 0
-    fprintf(['  %-5s MISMATCH at byte %d' char(10)], what, diff);
-    fprintf(['        ref  [%s]' char(10)], hex_window(ref, diff));
-    fprintf(['        ours [%s]' char(10)], hex_window(ours, diff));
+    fprintf('  %-5s MISMATCH at byte %d\n', what, diff);
+    fprintf('        ref  [%s]\n', hex_window(ref, diff));
+    fprintf('        ours [%s]\n', hex_window(ours, diff));
 elseif numel(ours) > numel(ref)
-    fprintf(['  %-5s LONGER than the reference by %d bytes' char(10)], ...
+    fprintf('  %-5s LONGER than the reference by %d bytes\n', ...
             what, numel(ours) - numel(ref));
 else
-    fprintf(['  %-5s MATCH  (%d bytes; the reference is padded)' char(10)], what, n);
+    fprintf('  %-5s MATCH  (%d bytes; the reference is padded)\n', what, n);
 end
 end
 
