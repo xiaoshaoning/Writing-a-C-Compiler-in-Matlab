@@ -93,7 +93,11 @@ for k = 1:n
     end
 end
 
-if diff == 0 && numel(ours) <= numel(ref)
+if n == 0 && numel(ref) > 0
+    % A comparison of no bytes is not a match. M0 printed MATCH here for an assembler that
+    % had emitted nothing at all - the exact lie this harness exists to prevent.
+    fprintf('  VACUOUS ours is empty and the reference is not: nothing was verified\n');
+elseif diff == 0 && numel(ours) <= numel(ref)
     fprintf('  MATCH  (%d bytes compared; the reference is padded to a section boundary)\n', n);
 elseif diff == 0
     fprintf('  LONGER than the reference by %d bytes - that is a real difference\n', ...

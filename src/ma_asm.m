@@ -50,8 +50,14 @@ end
 
 img.text = uint8([]);
 img.data = uint8([]);
-img.bss = struct('name', {}, 'size', {}, 'align', {});
-img.syms = struct('name', {}, 'section', {}, 'offset', {}, 'global', {});
+% [] rather than struct('name',{},...): on the clone that form is a ONE-ELEMENT struct
+% with empty fields, not an empty array, so every list started with a phantom entry - and
+% a symbol table with a nameless member in it fails later, somewhere else. Measured:
+% numel() is 1 on the clone and 0 on the engine for the struct('f',{}) form, and correct
+% on both for [].
+img.bss = {};
+img.syms = {};     % a CELL of structs: see the note above about empty
+                   % struct arrays differing per runtime
 
 section = 'text';
 tab = isa_table();
@@ -99,8 +105,15 @@ for ln = 1:numel(lines)
         k = k + 1;
     end
     if k > 1 && k <= numel(line) && line(k) == ':'
-        img.syms(end+1) = struct('name', line(1:k-1), 'section', section, ...
-                                 'offset', numel(section_bytes(img, section)), 'global', 0);
+        j = sym_index(img, line(1:k-1));
+        if j == 0
+            img.syms{end+1} = struct('name', line(1:k-1), 'section', section, ...
+                                      'offset', numel(section_bytes(img, section)), ...
+                                      'global', 0);
+        else
+            img.syms{j}.section = section;
+            img.syms{j}.offset = numel(section_bytes(img, section));
+        end
         continue;
     end
 
@@ -138,8 +151,64 @@ b = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') |
     c == '_' || c == '.' || c == '$';
 end
 
+function vals = parse_int_list(rest, ln)
+% parse_int_list - the comma-separated integers of a data directive.
+%
+% NOT sscanf('%d,'): that stops dead at the first value it cannot read, so `1, 0x10`
+% came back as `1` and the rest vanished into the image without a word. Hex is accepted
+% because an assembler has to accept what it may be handed, and a partial parse is the
+% one outcome worse than a refusal.
+vals = [];
+k = 1;
+n = numel(rest);
+while k <= n
+    while k <= n && (rest(k) == ',' || rest(k) == ' ' || rest(k) == char(9))
+        k = k + 1;
+    end
+    if k > n
+        break;
+    end
+    neg = 0;
+    if rest(k) == '-'
+        neg = 1; k = k + 1;
+    elseif rest(k) == '+'
+        k = k + 1;
+    end
+    v = 0;
+    got = 0;
+    if k + 1 <= n && rest(k) == '0' && (rest(k+1) == 'x' || rest(k+1) == 'X')
+        k = k + 2;
+        while k <= n
+            c = lower(rest(k));
+            if c >= '0' && c <= '9'
+                v = v * 16 + (double(c) - 48);
+            elseif c >= 'a' && c <= 'f'
+                v = v * 16 + (double(c) - 87);
+            else
+                break;
+            end
+            k = k + 1;
+            got = 1;
+        end
+    else
+        while k <= n && rest(k) >= '0' && rest(k) <= '9'
+            v = v * 10 + (double(rest(k)) - 48);
+            k = k + 1;
+            got = 1;
+        end
+    end
+    if ~got
+        fail(ln, sprintf('cannot read this initialiser: %s', strtrim(rest(k:end))));
+    end
+    if neg
+        v = -v;
+    end
+    vals(end+1) = v;
+end
+end
+
 function fail(ln, msg)
-error('ma_asm: line %d: %s', ln, msg);
+error(sprintf('ma_asm: line %d: %s', ln, msg));
 end
 
 function b = section_bytes(img, section)
@@ -161,13 +230,25 @@ end
 function img = mark_global(img, name)
 % .globl marks a symbol global. The symbol may be defined later, so names are recorded
 % here and matched when the definition appears - defining one is M1's job.
-for k = 1:numel(img.syms)
-    if strcmp(img.syms(k).name, name)
-        img.syms(k).global = 1;
+j = sym_index(img, name);
+if j == 0
+    img.syms{end+1} = struct('name', name, 'section', '', 'offset', -1, 'global', 1);
+else
+    img.syms{j}.global = 1;
+end
+end
+
+function k = sym_index(img, name)
+% sym_index - the index of `name` in img.syms, or 0. `.globl f` and a later `f:` describe
+% ONE symbol, so both go through here; appending blindly gave every global function two
+% entries, one of them with no offset at all.
+k = 0;
+for j = 1:numel(img.syms)
+    if strcmp(img.syms{j}.name, name)
+        k = j;
         return;
     end
 end
-img.syms(end+1) = struct('name', name, 'section', '', 'offset', -1, 'global', 1);
 end
 
 function img = add_comm(img, rest, ln)
@@ -179,13 +260,13 @@ align = 8;
 if count >= 3
     align = parts(3);
 end
-img.bss(end+1) = struct('name', parts(1), 'size', parts(2), 'align', align);
+img.bss{end+1} = struct('name', parts(1), 'size', parts(2), 'align', align);
 end
 
 function img = add_bytes(img, section, d, rest, ln)
 width = struct('.byte', 1, '.short', 2, '.long', 4, '.quad', 8);
 w = width.(d);
-vals = sscanf(rest, '%d,');
+vals = parse_int_list(rest, ln);
 if isempty(vals)
     fail(ln, sprintf('%s with no values', d));
 end
@@ -228,10 +309,20 @@ while k <= numel(s)
         out(end+1) = 10; k = k + 1;
     elseif e == 't'
         out(end+1) = 9; k = k + 1;
-    elseif e == '\\'
-        out(end+1) = double('\'); k = k + 1;
+    elseif e == char(92)
+        % '\\' is TWO characters in MATLAB, so `e == '\\'` compared a char to a 1x2
+        % array and never matched - and 31 corpus strings contain an escaped backslash.
+        out(end+1) = 92; k = k + 1;
     elseif e == '"'
         out(end+1) = double('"'); k = k + 1;
+    elseif e == 'b'
+        out(end+1) = 8;  k = k + 1;     % GAS single-character escapes. cc_int emits
+    elseif e == 'f'                     % none of these (it escapes for GAS with \ and
+        out(end+1) = 12; k = k + 1;     % \"), but the reference assembler accepts them,
+    elseif e == 'r'                     % and refusing what as accepts makes the two
+        out(end+1) = 13; k = k + 1;     % disagree for a reason that is ours, not C's.
+    elseif e == 'v'
+        out(end+1) = 11; k = k + 1;
     elseif e >= '0' && e <= '7'
         v = 0;
         digits = 0;

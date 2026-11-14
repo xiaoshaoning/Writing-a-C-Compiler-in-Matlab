@@ -158,6 +158,20 @@ A fourth is about the *engine*: its `system()` rejects an absolute path handed t
 ("can't create ...: Invalid argument") and does not accept cmd's `cd /d`, so the probe
 passes bare names in the working directory - the suite's existing `tmp_*` convention.
 
+**And five findings from reviewing M0 an hour after writing it**, all in new code:
+
+| finding | what it would have done |
+|---|---|
+| `struct('name', {})` as an empty struct array | the clone makes a ONE-element struct, so every symbol list started with a phantom. Empty arrays differ per runtime; the symbol table is now a **cell** of structs, which is not |
+| `e == '\'` in the `.string` escape | `'\'` is TWO characters in MATLAB, so the comparison never matched - with 31 corpus strings containing an escaped backslash |
+| `sscanf('%d,')` for data values | stops at the first unreadable value, so `1, 0x10` became `1` and the rest vanished into the image |
+| `.globl f` plus a later `f:` | two symbol entries for one symbol, one of them with no offset |
+| the probe printing `MATCH` for a zero-byte comparison | an assembler that emitted nothing reported success - the same lie the harness exists to prevent, now `VACUOUS` |
+
+Also added: GAS's single-character escapes (`   `). `cc_int` emits none of
+them, but the reference assembler accepts them, and refusing what `as` accepts makes the
+two disagree for a reason that is ours rather than C's.
+
 ### M1 — lines, labels, directives
 - [ ] Strip comments and blank lines; keep line numbers for errors
 - [ ] Label definitions (`.L<n>:`, `<sym>:`) recorded with a section and a provisional offset

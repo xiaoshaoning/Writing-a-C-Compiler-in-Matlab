@@ -10,6 +10,13 @@ update four times today), x86sim 336/336 exit codes, gcc stdout 333/333 byte-ide
 Two tracks, both complete for their dialect: `xc.m` the interpreter, `cc_int.m` the
 compiler. What is deliberately not done is listed at the end of the recent notes.
 
+**An assembler is under way (2026-11-05).** `docs/PLAN_assembler.md` describes it and
+`src/ma_asm.m` is at M0: it reads the text `cc_int` emits and hands back an image, with
+directives, labels and data done, and every instruction failing by name until its encoder
+exists. The harness that will judge it - `as` + `objcopy`, byte comparison - is in place
+first, because a verification loop built after the thing it verifies tends to agree with
+it. Current score: 0 of 338 programs byte-identical, which is the honest number for M0.
+
 **Green on real MATLAB at 835 (2026-11-05, final): 835 tests, 835 passed, 0 failed.**
 The run that measures everything since 832: `cc57`-`cc60` at exit 96, the two negative
 checks (`&x = 5` refused, an integer-only compound assignment on a double refused),
