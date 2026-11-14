@@ -402,9 +402,19 @@ found by running the same code on both.
       beyond double precision. `cc_int` emits decimal, not hex, so "carry the hex digits" was
       only half a fix: `decimal_bytes` now reads the digits by long division.
 - [x] A `CC_SECTIONS=asm` group in `run_tests.m` running M5 as one check: `PASS asm: 338 of
-      338 corpus programs byte-identical to as`, 144/144 in that section.
-- [ ] Error cases asserted the way `cc_bad_*` are: an unknown mnemonic, an unresolved
-      symbol, a bad operand — each with its message
+      338 corpus programs byte-identical to as`.
+- [x] Error cases asserted the way `cc_bad_*` are - `tests/asm_errors.m`, ten inputs, each
+      asserted on the CAUSE in the message rather than on something having been thrown: an
+      unknown mnemonic, an unresolved branch target, a malformed operand, a shift by a
+      register that is not `%cl`, an SSE register in a general-register operation an
+      immediate wider than 64 bits, a label sharing a line with an instruction, an indirect
+      jump, a `.comm` with no size, a `.string` ending in a backslash. These are the cases
+      where being wrong is SILENT, so they are worth more than their count: `shlq %al,%rax`
+      was once encoded as `shlq %cl,%rax`, and `jmp %rsi` was once reported as "unresolved
+      symbol " with an empty name. They call nothing but `ma_asm`, so they are not behind
+      the gcc guard - that is where they would vanish on exactly the machine where they
+      still work.
+- [x] Suite totals: `CC_SECTIONS=none` 153/153, `CC_SECTIONS=asm` 154/154.
 
 ### Later, deliberately out of v1
 - [ ] Section layout and an executable image (PE on Windows) — a new project
