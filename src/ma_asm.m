@@ -790,16 +790,26 @@ else
 end
 end
 
-function b = le_bytes_imm(op, n)
+function b = le_bytes_imm(op, n, ln)
 % le_bytes_imm - n bytes of an immediate, taken from its hex DIGITS when it had them. A
 % double holds 53 bits, so a 64-bit literal cannot round-trip through op.value; its digits
-% can, and they are exactly what the source wrote.
+% can, and they are exactly what the source wrote. Digits rather than uint64 on purpose:
+% docs/2026-08-10-matlab-clone-bug-report.md records the uint64 conversion divergences, and
+% hex digits need no numeric type at all.
 if n == 8 && ~isempty(op.hex)
     h = op.hex;
+    % A literal wider than 64 bits is an error in as, so it is one here: taking the low 64
+    % bits would assemble a different number silently, which is the failure this whole
+    % function exists to stop.
+    while numel(h) > 16 && h(1) == '0'
+        h = h(2:end);
+    end
+    if numel(h) > 16
+        fail(ln, 'a 64-bit immediate cannot hold more than 16 hex digits');
+    end
     if numel(h) < 16
         h = [repmat('0', 1, 16 - numel(h)) h];
     end
-    h = h(numel(h)-15:numel(h));            % the low 64 bits, which is what the form takes
     b = zeros(1, 8);
     for k = 1:8
         pair = h(17-2*k:18-2*k);
@@ -811,6 +821,10 @@ end
 end
 
 function v = hexval(c)
+% hexval - the value of one hex digit, or -1 if it is not one. The caller decides whether
+% "not a digit" means "stop here" (reading a literal) or "that is a bug" (decoding digits
+% already known to be hex), so this function never decides it. One place knows what a hex
+% digit is worth.
 if c >= '0' && c <= '9'
     v = c - '0';
 elseif c >= 'a' && c <= 'f'
@@ -818,7 +832,7 @@ elseif c >= 'a' && c <= 'f'
 elseif c >= 'A' && c <= 'F'
     v = c - 'A' + 10;
 else
-    fail(0, sprintf('not a hex digit: %s', c));
+    v = -1;
 end
 end
 
@@ -1047,7 +1061,7 @@ if strcmp(src.kind, 'imm')
             % and `movq $0xb2d05e00,%rax` is 48 b8 00 5e d0 b2 00 00 00 00 - the long
             % form is not optional there, the short one would store a different number.
             bytes = [rexp(1, 0, floor(dst.reg / 8), 0) 184 + mod_low(dst.reg) ...
-                     le_bytes_imm(src, 8)];
+                     le_bytes_imm(src, 8, ln)];
         elseif strcmp(mn, 'movb')
             bytes = [rexp(0, 0, floor(dst.reg / 8), 0) 176 + mod_low(dst.reg) ...
                      le_bytes(src.value, 1)];                    % movb: b0+rb ib
@@ -1165,9 +1179,9 @@ switch mn
     case 'ucomisd',    spec = [102 0 46  0 1];
     case 'cvtsi2sdq',  spec = [242 1 42  0 1];
     case 'cvttsd2siq', spec = [242 1 44  0 0];   % xmm in r/m, integer in reg
-    otherwise,         spec = [0 0 0 0 1];
+    otherwise,         spec = [];
 end
-if spec(3) == 0 || numel(ops) ~= 2
+if isempty(spec) || numel(ops) ~= 2
     fail(ln, sprintf('no encoder for %s yet (M3)', mn));
 end
 if ~spec(5)
@@ -1269,7 +1283,7 @@ switch mn
             fail(ln, 'movabsq takes an immediate and a register');
         end
         bytes = [rexp(1, 0, floor(ops{2}.reg / 8), 0) 184 + mod_low(ops{2}.reg) ...
-                 le_bytes_imm(ops{1}, 8)];                          % 48 b8+rd imm64
+                 le_bytes_imm(ops{1}, 8, ln)];                      % 48 b8+rd imm64
     otherwise
         fail(ln, sprintf('no encoder for %s yet (M3)', mn));
 end
@@ -1459,14 +1473,11 @@ end
 if k + 1 <= numel(txt) && txt(k) == '0' && (txt(k+1) == 'x' || txt(k+1) == 'X')
     k = k + 2;
     while k <= numel(txt)
-        c = lower(txt(k));
-        if c >= '0' && c <= '9'
-            v = v * 16 + (double(c) - 48);
-        elseif c >= 'a' && c <= 'f'
-            v = v * 16 + (double(c) - 87);
-        else
+        d = hexval(txt(k));
+        if d < 0
             break;
         end
+        v = v * 16 + d;
         k = k + 1;
     end
 elseif k <= numel(txt) && txt(k) >= '0' && txt(k) <= '9'

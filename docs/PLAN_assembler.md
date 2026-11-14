@@ -233,14 +233,10 @@ the tail is covered.
       count-in-%cl D3)
 - [x] `movslq movsbq movzbl` — and `movslq` is the single-byte `63 /r`, NOT a 0F form
 - [x] `movabsq`, `cqto`, `divq`/`idivq`, `testb`, and the eight `setcc` forms
-- [ ] `call` and every branch (needs M4's layout and relocations)
-- [ ] `addq`/`subq`/`cmpq`/`andq`/`orq`/`xorq` (imm and reg forms)
-- [ ] `jmp`/`jcc` (rel8 and rel32), `setcc`
-- [ ] `imulq` (imm,reg), `idivq`/`divq`/`cqto`, `negq`/`notq`/`incq`
-- [ ] `shlq`/`shrq`/`sarq` (imm and `%cl`)
-- [ ] `movabsq`, `testb`
-- [ ] SSE: `movsd`/`mulsd`/`divsd`/`addsd`/`subsd`/`ucomisd`/`cvtsi2sdq`/`cvttsd2siq`
-
+Every one of those is also done now, including the SSE row and the branch family; the gate
+below is the statement of it. This list used to repeat six of the items above it with the
+opposite tick, which is what a checklist does when it is written as a to-do and then never
+edited again.
 **M3 progress (2026-11-05): six mnemonics, verified byte for byte.** A 23-instruction file
 covering every operand shape the corpus uses encodes to the same 80 bytes as `as`. The
 choices are the reference's, measured rather than derived from a manual, and three of them
@@ -304,7 +300,7 @@ count. `D3` takes the count from `%cl` implicitly - the encoding has no field fo
 entirely. It requires `%cl` by number now. A wrong-byte bug that no byte comparison in this
 project could catch, because the reference assembler refuses the input.
 
-### M4 — layout and relocations — IN PROGRESS (2026-11-05)
+### M4 — layout and relocations — DONE on the 25-program sample (2026-11-05)
 - [x] Parse into ITEMS (bytes, label, branch/call), not bytes: a branch's size depends on
       where its target lands, so it cannot be encoded while parsing
 - [x] Iterate to a fixed point, shrinking branches that fit: `as` picks the SHORT form even
@@ -313,9 +309,6 @@ project could catch, because the reference assembler refuses the input.
 - [x] `call` is always `e8 rel32`; a call to a symbol outside the section emits zeros,
       because that is what the reference emits (the shims reach the real printf/malloc)
 - [x] A branch to an unresolved label is refused; an external CALL is not an error
-- [ ] 7 of the 25 sample programs encode every instruction but produce DIFFERENT bytes -
-      the next thing to look at, one file at a time with the probe's hex windows
-
 - [x] Resolve rip-relative references to SAME-SECTION labels. A reference to another
       section stays 0 - measured: `leaq .Lx(%rip)` with .Lx in .data is `48 8d 05 00 00 00
       00` plus a relocation. The operand carries its own `.ripdisp`, filled in by the emit
