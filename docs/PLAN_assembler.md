@@ -220,15 +220,38 @@ Order matters: `movq movslq leaq pushq popq addq` are **8266 of 11157 instructio
 (74.1%)** across the sample, so getting those six right makes M3 measurable long before
 the tail is covered.
 
-- [ ] `movq`/`movl`/`movb` (reg↔reg, mem↔reg, imm↔reg, imm↔mem)
-- [ ] `leaq`/`lea` with `N(%reg)` and `sym(%rip)`
-- [ ] `pushq`/`popq`/`ret`/`call`
+- [x] `movq` (reg↔reg, mem↔reg, imm↔reg, imm↔mem) — byte-identical to `as`
+- [x] `leaq` with `N(%reg)` and `sym(%rip)` (the rip displacement is zero until M4)
+- [x] `movslq` (mem and register sources)
+- [x] `addq` (reg, mem, and all three immediate forms including the accumulator short form)
+- [x] `pushq`/`popq`/`ret`
+- [ ] `movl`/`movb` (same family, different widths)
+- [ ] `call` (needs M4's relocation)
 - [ ] `addq`/`subq`/`cmpq`/`andq`/`orq`/`xorq` (imm and reg forms)
 - [ ] `jmp`/`jcc` (rel8 and rel32), `setcc`
 - [ ] `imulq` (imm,reg), `idivq`/`divq`/`cqto`, `negq`/`notq`/`incq`
 - [ ] `shlq`/`shrq`/`sarq` (imm and `%cl`)
 - [ ] `movabsq`, `testb`
 - [ ] SSE: `movsd`/`mulsd`/`divsd`/`addsd`/`subsd`/`ucomisd`/`cvtsi2sdq`/`cvttsd2siq`
+
+**M3 progress (2026-11-05): six mnemonics, verified byte for byte.** A 23-instruction file
+covering every operand shape the corpus uses encodes to the same 80 bytes as `as`. The
+choices are the reference's, measured rather than derived from a manual, and three of them
+differ from what a careful reading of the encoding tables would produce:
+
+| instruction | as emits | the "obvious" answer |
+|---|---|---|
+| `movq %rax, %rbx` | `48 89 c3` (89, reg=source) | `48 8b d8` (8B) — 8B/03 are only for a MEMORY source |
+| `addq $500, %rax` | `48 05 f4 01 00 00` | `48 81 c0 …` — the accumulator short form |
+| `movq %rax, %r8` | `49 89 c0` (REX.B) | `4a 89 c0` if the r/m high bit goes in REX.X |
+
+The byte gate found all three within minutes of each other, which is the whole argument for
+building it before writing encoders.
+
+Corpus status: **0 of 25 sample programs assemble fully**; all 25 reach the
+missing-encoder wall with no decode or encoding failures on the way. 45 mnemonics to go,
+and `movl`/`movb`/`testb`/the branches/setcc/SSE remain in families M3 already has helpers
+for.
 
 ### M4 — layout and relocations
 - [ ] Two passes: sizes first, then addresses (forward references need it; `.string`
