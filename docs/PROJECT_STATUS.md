@@ -19,12 +19,24 @@ Splitting them exposed a worse bug behind the refusal: `%=`, `<<=`, `>>=`, `&=`,
 with that reason, and `d /= 4.0` compiles and matches gcc (25 for `10.0 /= 4.0` scaled).
 
 Gaps 2 and 3 are still open and are NOT ten-line changes, which is what the plan said:
-- float literals in array initializers (`double a[2] = {1.5, 2.5};`) need the value to
-  survive into the initialiser IMAGE as an exact 64-bit pattern. The emitter has
-  `cc_d2bits` for scalars, but the array path builds values as doubles and the image
-  writer emits integers, so it is ~20 lines across the initialiser parse and the image —
-  and a half-done version would silently truncate mantissas, which is the failure mode
-  this project is least willing to accept.
+- float literals in array initializers (`double a[2] = {1.5, 2.5};`) are still
+  refused, and an ATTEMPT AT THEM WAS ABANDONED (2026-11-05), which is worth more than
+  the estimate it replaces. Measured first: `double a[3] = {1.5, -2.25, 0.1}` emits
+  `1, -2, 0` — the values are already integers where the emitter receives them. Two
+  defects were found and fixed on the way (the vector emitter printed `%d`, and the
+  struct image writer had no double case; both now use `cc_d2bits`), and the output was
+  still `1, -2, 0`, so a THIRD place collects initialiser values as integers. The
+  candidates are `parse_arr_init`'s `vals` and `aggregate_values`, and which one was not
+  proven. Everything was reverted rather than left half-wired: with the parser accepting
+  floats and the values still truncated, the compiler would have accepted
+  `{1.5, 2.5}` and stored `1, 2` — silently wrong numbers instead of a refusal, which is
+  the one trade this project does not make.
+
+  **The diagnostic is worth keeping.** `sprintf('%d', 1.5)` in MATLAB prints
+  `1.500000e+00`, not `1`. So the emitted text says where the value was lost: `%e` text
+  means a double reached the emitter (a printing bug), and `1, -2, 0` means the loss is
+  upstream of it (a collection bug). That single distinction pointed at the wrong half
+  of the pipeline and then at the right one.
 - pointer compound literals (`(int*){…}`) are refused by depth in the compound-literal
   branch; `(int[]){…}` works. Unknown size until read.
 
