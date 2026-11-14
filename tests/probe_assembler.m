@@ -48,19 +48,17 @@ end
 txt = fileread(file);
 
 % ---- the reference ------------------------------------------------------------
-clean = @() cellfun(@delete_if_exists, {'tmp_asm_in.s', 'tmp_asm.o', 'tmp_asm.bin'});
-clean();
 copyfile(file, 'tmp_asm_in.s');
 if system('as --64 tmp_asm_in.s -o tmp_asm.o') ~= 0 || exist('tmp_asm.o', 'file') ~= 2
     fprintf('probe: the reference assembler REFUSED %s (as said so above)\n', file);
     fprintf('       a program as cannot assemble is not a test of this assembler\n');
-    clean();
+    finish(made_sample);
     return;
 end
 if system('objcopy -O binary --only-section=.text tmp_asm.o tmp_asm.bin') ~= 0 || ...
         exist('tmp_asm.bin', 'file') ~= 2
     fprintf('probe: objcopy could not extract .text from %s\n', file);
-    clean();
+    finish(made_sample);
     return;
 end
 fid = fopen('tmp_asm.bin', 'r');
@@ -81,7 +79,7 @@ end
 fprintf('probe %s: reference %d bytes of .text', base, numel(ref));
 if ~isempty(threw)
     fprintf(', ours: %s\n', threw);
-    clean();
+    finish(made_sample);
     return;
 end
 fprintf(', ours %d bytes\n', numel(ours));
@@ -105,7 +103,14 @@ else
     fprintf('    ref  [%s]\n', hex_window(ref, diff));
     fprintf('    ours [%s]\n', hex_window(ours, diff));
 end
-clean();
+finish(made_sample);
+end
+
+function finish(made_sample)
+% every exit path: scratch files only the probe created, and only if it created them
+delete_if_exists('tmp_asm_in.s');
+delete_if_exists('tmp_asm.o');
+delete_if_exists('tmp_asm.bin');
 if made_sample && exist('tmp_asm.s', 'file') == 2
     delete('tmp_asm.s');
 end

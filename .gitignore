@@ -27,3 +27,8 @@ tmp_gccd_out.txt
 
 # engine cut dropped in for local runs (binary, never committed)
 /dist/
+
+tmp_asm.s
+tmp_asm.o
+tmp_asm.bin
+tmp_asm_in.s
