@@ -10,6 +10,26 @@ update four times today), x86sim 336/336 exit codes, gcc stdout 333/333 byte-ide
 Two tracks, both complete for their dialect: `xc.m` the interpreter, `cc_int.m` the
 compiler. What is deliberately not done is listed at the end of the recent notes.
 
+**Green on real MATLAB at 835 (2026-11-05, final): 835 tests, 835 passed, 0 failed.**
+The run that measures everything since 832: `cc57`-`cc60` at exit 96, the two negative
+checks (`&x = 5` refused, an integer-only compound assignment on a double refused),
+x86sim **338/338**, gcc stdout **335/335 byte-identical**, instr **23149**. 832 -> 835 is
+the two new guards and one negative check, which is what a count should do.
+
+**And it disproves the `del()` fix.** Two warnings appear, at both call sites that were
+expected to be silent:
+
+    警告: 未找到文件或者权限被拒绝
+    > 位置：run_tests>del (第 1824 行)      (called from the corpus loop, and gccstdout)
+
+`del()` probes the file for writing and skips it if the probe fails - which does not
+predict a failing `delete`. The 832 run was clean by luck, not by fix; the mechanism was
+a theory that this run falsifies. The honest options are a scoped
+`warning('off','all')` around the delete with the previous state restored (guarded, since
+the clones' support for `warning` is not established), or accepting the two lines. It is
+cosmetic: nothing failed, and the noise is 2 lines rather than the ~100 that motivated the
+helper in the first place.
+
 **Item 4 of the plan, gap 1 of three: compound assignment on doubles (2026-11-05).**
 `d /= 4.0` was refused while `d = d / 4.0` worked; the double branch handled `+= -= *=`
 and failed on `/=` and `%=` together, lumping a legal operator with an illegal one.
