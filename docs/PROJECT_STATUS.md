@@ -57,6 +57,20 @@ write through it (a compound literal is an lvalue) and both unchanged forms: arr
 literals still decay, struct literals still yield their address. Ceiling 23001 ->
 **23149**.
 
+**Review of that fix found a second bug in the same branch, and a refusal replaced it
+(2026-11-05).** `(double){1.5} * 2.0` is legal C. The scalar branch stored it through the
+integer immediate path, which has no 64-bit immediate-to-memory form, so it emitted
+`movq $4609434218613702656, -8(%rbp)` - the correct pattern, an instruction the assembler
+rejects. An attempt to route it through `movabsq` produced a wrong pattern instead
+(`cc_d2bits` of whatever `v` held was not the value the old path had stored), so it was
+reverted and the form is now REFUSED with a message pointing at the two ways that do
+work (`(double)x`, or a variable). Nothing in the corpus uses it; the choice between a
+loud refusal and a possible wrong number is not a close one.
+
+The branch's closing brace is also required now (`expect(125)` rather than a silent
+`if token == 125`), so a malformed literal fails at the literal instead of three tokens
+later.
+
 **The lesson is the earlier attempt.** Adding a load to that scalar branch changed
 nothing, the load never appeared in the output, and I read that as "the branch is not
 reached, dead end". It was not a dead end, it was the diagnosis: a fix that changes

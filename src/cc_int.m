@@ -4455,9 +4455,17 @@ if token == 40              % '(': a cast (type)unary or parenthesised expr
                 if neg
                     v = -v;
                 end
-                if token == 125         % '}' - this branch reads its own initializer,
-                    next();             % unlike the array branch, where parse_arr_init does
+                if cbase == 6
+                    % A double scalar literal would be stored by the integer immediate
+                    % path, which has no 64-bit immediate-to-memory form - the assembler
+                    % rejected `movq $<1.5's pattern>, -8(%rbp)`. Refused rather than
+                    % half-built: nothing in the corpus uses this form, and emitting a
+                    % wrong pattern is worse than saying so. `(double)x` and
+                    % `double d = 1.5;` both work.
+                    fail('a double compound literal is not supported; use a variable');
                 end
+                expect(125);            % '}' - this branch reads its own initializer,
+                                        % unlike the array branch (parse_arr_init does)
                 w = tsize(cbase);
                 off = -(fbytes + w);
                 fbytes = fbytes + w;
