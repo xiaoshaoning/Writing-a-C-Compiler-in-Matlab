@@ -346,8 +346,30 @@ project could catch, because the reference assembler refuses the input.
 - [x] Mnemonics may contain digits - the scan stopped at the first non-letter, so
       `cvtsi2sdq` arrived as `cvtsi` and was reported as an unknown mnemonic.
 
-**Gate, measured:** 25 sample programs -> **18 byte-identical**, 3 differ, 1 missing an
-encoder, 3 errors.
+- [x] `call *%rax` (`ff /2`) - an indirect call through a register or a memory slot. A
+      DIRECT call still never reaches an encoder: the layout owns its displacement.
+- [x] The `(%rsi,%rcx)` decoder gap was `split_operands` splitting on commas inside
+      parentheses, so the operand arrived as `(%rsi`. Commas now split only at depth 0, and
+      the SIB form is decoded (base, index, optional scale) and encoded with REX.X.
+- [x] `movq` between a GPR and an XMM: `66 REX.W 0F 6E/7E`, and XMM-to-XMM is `F3 0F 7E` -
+      the same opcode as a load with a different prefix. The `movsd` family gained a
+      per-mnemonic [prefix, w, opcode, store-opcode] row, so `divsd`, `mulsd` and `ucomisd`
+      are one line each.
+- [ ] `cc60_scalar_literal` still differs: my `.text` is 617 bytes where the reference's is
+      592. Per-instruction sizes AGREE (148 compared), so the 25 bytes are branch FORMS -
+      three jmps and four conditionals that `as` makes short and I make near. The
+      forward-target adjustment below did not move it, so the criterion is wrong somewhere
+      else. Not yet understood.
+
+**Gate, measured:** 25 sample programs -> **22 byte-identical**, 2 differ, 1 missing an
+encoder, 0 errors.
+
+**Still open, each localised:**
+| item | what is known |
+|---|---|
+| cc60_scalar_literal | branch forms: 617 vs 592 bytes with identical per-instruction sizes |
+| dreg_denselit | `movabsq $0x999999999999999a` - an imm64 that loses precision in a double. The literal needs to be carried as hex digits, not as a MATLAB number |
+| cvttsd2siq | `F2 REX.W 0F 2C /r` with the GPR in the REG field and the xmm in r/m - the opposite of `cvtsi2sdq`, so it needs a shape flag, not another prefix row |
 
 **Remaining, each with its cause identified:**
 | program | cause |

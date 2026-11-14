@@ -159,7 +159,7 @@ for ln = 1:numel(lines)
         bytes = encode_insn(mn, decoded, ln, tab);
         items = push_item(items, section, ...
                           item_rip(mn, decoded, symbol_rip_target(decoded), bytes, ln));
-    elseif is_reloc(mn, tab)
+    elseif is_reloc(mn, tab) && (isempty(decoded) || ~decoded{1}.indirect)
         % A branch's size depends on how far away its target ends up, and that is a
         % property of the whole section - so it is an item, resolved in layout below.
         items = push_item(items, section, item_reloc(mn, decoded{1}.symbol, ln));
@@ -486,6 +486,14 @@ for pass = 1:16
         end
         tgt = label_at(items, offs, it.target);
         d = tgt - (offs(j) + 2);         % displacement if it were the short form
+        if tgt > offs(j)
+            % A FORWARD target moves back when this branch shrinks, by exactly the bytes
+            % the shrink saves - so the real displacement is smaller than the one measured
+            % against the current layout. Ignoring that made relaxation too conservative
+            % and cost cc60_scalar_literal 25 bytes: as took the short form where I took
+            % the near one, and every displacement after it drifted.
+            d = d - (reloc_size(it) - 2);
+        end
         if tgt >= 0 && d >= -128 && d <= 127
             it.short = 1;
             items{j} = it;               % not items{j}.short = 1: the engine refuses a
@@ -663,7 +671,7 @@ function bytes = encode_insn(mn, ops, ln, tab)
 %   cmpq $500, %rax   48 3d ...     the accumulator form, when imm8 does not fit
 %   shlq $1, %rax     48 d1 e0      shift-by-one, not c1 /4 01
 kind = tab_kind(tab, mn);
-if ~strcmp(kind, 'sse') && ~strcmp(kind, 'none')
+if ~strcmp(kind, 'sse') && ~strcmp(kind, 'mov') && ~strcmp(kind, 'none')
     for q = 1:numel(ops)
         if strcmp(ops{q}.kind, 'reg') && ops{q}.width == 128
             fail(ln, sprintf('%s does not take an SSE register', mn));
@@ -691,6 +699,8 @@ switch kind
         bytes = enc_imul(mn, ops, ln);
     case 'sse'
         bytes = enc_sse(mn, ops, ln);
+    case 'call'
+        bytes = enc_call(mn, ops, ln);
     case 'misc'
         bytes = enc_misc(mn, ops, ln);
     otherwise
@@ -708,14 +718,15 @@ for j = 1:numel(tab)
 end
 end
 
-function b = rexp(w, reg_hi, base_hi)
+function b = rexp(w, reg_hi, base_hi, index_hi)
 % rexp - the REX prefix, or empty when none is needed.
 % R is the register in the ModRM reg field; B is the register in the r/m field (a register
-% or a memory operand's base). X is for a SIB index, which none of the measured forms uses.
+% or a memory operand's base); X is a SIB index register.
 v = 64;
-if w,       v = v + 8; end
-if reg_hi,  v = v + 4; end
-if base_hi, v = v + 1; end
+if w,        v = v + 8; end
+if reg_hi,   v = v + 4; end
+if index_hi, v = v + 2; end
+if base_hi,  v = v + 1; end
 if v == 64
     b = [];
 else
@@ -746,6 +757,29 @@ function [m, extra] = mem_form(e)
 base = e.base;
 lo = mod_low(base);
 sib = [];
+if e.index >= 0
+    % (base,index,scale): mod 00/01/10 r/m 100, then the SIB byte. %rsp cannot be an
+    % index - its index field IS the "no index" encoding - so it is refused rather than
+    % silently dropped.
+    ilo = mod_low(e.index);
+    if ilo == 4
+        fail(0, '%rsp cannot be a SIB index register');
+    end
+    code = 0;
+    if e.scale == 2, code = 1; elseif e.scale == 4, code = 2; elseif e.scale == 8, code = 3; end
+    sb = code * 64 + ilo * 8 + lo;
+    if e.disp == 0 && lo ~= 5
+        m = 4;
+        extra = sb;
+    elseif e.disp >= -128 && e.disp <= 127
+        m = 68;
+        extra = [sb le_bytes(e.disp, 1)];
+    else
+        m = 132;
+        extra = [sb le_bytes(e.disp, 4)];
+    end
+    return;
+end
 if lo == 4
     sib = 36;                                   % scale 0, no index, base 100
     if e.disp == 0
@@ -788,12 +822,12 @@ function [prefix, mrm, tail] = rm_operand(op, reg_field, w)
 % rm_operand - an operand as the r/m field: a register, or memory with its base, SIB and
 % displacement. w asks for the 64-bit operand size.
 if strcmp(op.kind, 'reg')
-    prefix = rexp(w, floor(reg_field / 8), floor(op.reg / 8));
+    prefix = rexp(w, floor(reg_field / 8), floor(op.reg / 8), 0);
     mrm = modrmb(3, reg_field, op.reg);
     tail = [];
 elseif strcmp(op.kind, 'mem')
     if op.rip
-        prefix = rexp(w, floor(reg_field / 8), 0);
+        prefix = rexp(w, floor(reg_field / 8), 0, 0);
         mrm = modrmb(0, reg_field, 5);          % mod 00, r/m 101: rip-relative
         % Same-section labels resolve here (the emit pass fills ripdisp in). A label in
         % another section stays 0, which is exactly what the reference emits - measured:
@@ -801,7 +835,11 @@ elseif strcmp(op.kind, 'mem')
         % linker resolves it later.
         tail = le_bytes(op.ripdisp, 4);
     else
-        prefix = rexp(w, floor(reg_field / 8), floor(op.base / 8));
+        ihi = 0;
+        if op.index >= 0
+            ihi = floor(op.index / 8);
+        end
+        prefix = rexp(w, floor(reg_field / 8), floor(op.base / 8), ihi);
         [mrm, extra] = mem_form(op);
         mrm = mrm + mod_low(reg_field) * 8;
         tail = extra;
@@ -844,7 +882,7 @@ if strcmp(src.kind, 'imm')
         [pre, mrm, tail] = rm_operand(dst, spec(3), w);
         bytes = [pre 131 mrm tail le_bytes(src.value, 1)];            % 83 /digit ib
     elseif strcmp(dst.kind, 'reg') && dst.reg == 0
-        bytes = [rexp(w, 0, 0) spec(4) le_bytes(src.value, 4)];       % accumulator short form
+        bytes = [rexp(w, 0, 0, 0) spec(4) le_bytes(src.value, 4)];       % accumulator short form
     else
         [pre, mrm, tail] = rm_operand(dst, spec(3), w);
         bytes = [pre 129 mrm tail le_bytes(src.value, 4)];            % 81 /digit id
@@ -955,10 +993,30 @@ if w < 0 || numel(ops) ~= 2
 end
 src = ops{1};
 dst = ops{2};
+xs = strcmp(src.kind, 'reg') && src.width == 128;
+xd = strcmp(dst.kind, 'reg') && dst.width == 128;
+if xs || xd
+    % movq is two instructions wearing one name: GPR<->XMM is 66 REX.W 0F 6E/7E, and
+    % XMM<->XMM is f3 0f 7e (measured - the same opcode as a load, different prefix).
+    if ~strcmp(mn, 'movq')
+        fail(ln, sprintf('%s does not move between general and SSE registers', mn));
+    end
+    if xs && xd
+        [pre, mrm, tail] = rm_operand(src, dst.reg, 0);
+        bytes = [243 pre 15 126 mrm tail];              % F3 0F 7E /r
+    elseif xs
+        [pre, mrm, tail] = rm_operand(dst, src.reg, 1);
+        bytes = [102 pre 15 126 mrm tail];              % 66 REX.W 0F 7E /r
+    else
+        [pre, mrm, tail] = rm_operand(src, dst.reg, 1);
+        bytes = [102 pre 15 110 mrm tail];              % 66 REX.W 0F 6E /r
+    end
+    return;
+end
 if strcmp(src.kind, 'imm')
     if strcmp(dst.kind, 'reg')
         if w == 1 && imm_fits_32(src.value)
-            bytes = [rexp(1, 0, floor(dst.reg / 8)) 199 modrmb(3, 0, dst.reg) ...
+            bytes = [rexp(1, 0, floor(dst.reg / 8), 0) 199 modrmb(3, 0, dst.reg) ...
                      le_bytes(src.value, 4)];                    % movq: c7 /0 id
         elseif w == 1
             % c7 /0 id SIGN-EXTENDS its 32-bit immediate, so it only reproduces the value
@@ -966,13 +1024,13 @@ if strcmp(src.kind, 'imm')
             % (48 b8+rd io, 10 bytes). Measured: `movq $5,%rax` is 48 c7 c0 05 00 00 00
             % and `movq $0xb2d05e00,%rax` is 48 b8 00 5e d0 b2 00 00 00 00 - the long
             % form is not optional there, the short one would store a different number.
-            bytes = [rexp(1, 0, floor(dst.reg / 8)) 184 + mod_low(dst.reg) ...
+            bytes = [rexp(1, 0, floor(dst.reg / 8), 0) 184 + mod_low(dst.reg) ...
                      le_bytes(src.value, 8)];
         elseif strcmp(mn, 'movb')
-            bytes = [rexp(0, 0, floor(dst.reg / 8)) 176 + mod_low(dst.reg) ...
+            bytes = [rexp(0, 0, floor(dst.reg / 8), 0) 176 + mod_low(dst.reg) ...
                      le_bytes(src.value, 1)];                    % movb: b0+rb ib
         else
-            bytes = [rexp(0, 0, floor(dst.reg / 8)) 184 + mod_low(dst.reg) ...
+            bytes = [rexp(0, 0, floor(dst.reg / 8), 0) 184 + mod_low(dst.reg) ...
                      le_bytes(src.value, 4)];                    % movl: b8+rd id
         end
     else
@@ -1048,6 +1106,17 @@ else
 end
 end
 
+function bytes = enc_call(mn, ops, ln)
+% enc_call - `ff /2`, for an indirect call through a register or a memory slot. A DIRECT
+% call never reaches an encoder: its displacement depends on where the callee lands, so it
+% is an item resolved by the layout.
+if numel(ops) ~= 1 || ~ops{1}.indirect
+    fail(ln, 'a direct call is resolved by the layout, not encoded here');
+end
+[pre, mrm, tail] = rm_operand(ops{1}, 2, 0);
+bytes = [pre 255 mrm tail];
+end
+
 function bytes = enc_sse(mn, ops, ln)
 % enc_sse - two-operand SSE operations: f2 [REX] 0f <op> /r, with the store form one
 % opcode higher than the load form. `movsd %xmm0,%xmm1` uses the LOAD form (0f 10), which
@@ -1055,29 +1124,36 @@ function bytes = enc_sse(mn, ops, ln)
 %
 % One row per mnemonic: addsd/subsd/mulsd/divsd/ucomisd/cvt* are the same family and one
 % row each when the corpus asks for them, which it does not yet.
+% [prefix w opcode store-opcode], nil when there is no store form
 switch mn
-    case 'movsd', op = 16;                              % 0F 10 / 0F 11
-    otherwise,    op = 0;
+    case 'movsd',      sp = [242 0 16 17];
+    case 'divsd',      sp = [242 0 94  0];
+    case 'mulsd',      sp = [242 0 89  0];
+    case 'ucomisd',    sp = [102 0 46  0];
+    case 'cvtsi2sdq',  sp = [242 1 42  0];
+    otherwise,         sp = [0 0 0 0];
 end
-if op == 0 || numel(ops) ~= 2
+if sp(3) == 0 || numel(ops) ~= 2
     fail(ln, sprintf('no encoder for %s yet (M3)', mn));
 end
-if strcmp(ops{2}.kind, 'mem')
+store = strcmp(ops{2}.kind, 'mem');
+if store
     regop = ops{1};
-    store = 1;
+    if sp(4) == 0
+        fail(ln, sprintf('%s has no memory-destination form', mn));
+    end
 else
     regop = ops{2};
-    store = 0;
 end
 if ~strcmp(regop.kind, 'reg') || regop.width ~= 128
     fail(ln, sprintf('%s needs an %%xmm register operand', mn));
 end
 if store
-    [pre, mrm, tail] = rm_operand(ops{2}, regop.reg, 0);
-    bytes = [242 pre 15 op + 1 mrm tail];
+    [pre, mrm, tail] = rm_operand(ops{2}, regop.reg, sp(2));
+    bytes = [sp(1) pre 15 sp(4) mrm tail];
 else
-    [pre, mrm, tail] = rm_operand(ops{1}, regop.reg, 0);
-    bytes = [242 pre 15 op mrm tail];
+    [pre, mrm, tail] = rm_operand(ops{1}, regop.reg, sp(2));
+    bytes = [sp(1) pre 15 sp(3) mrm tail];
 end
 end
 
@@ -1147,7 +1223,7 @@ switch mn
         if numel(ops) ~= 2 || ~strcmp(ops{1}.kind, 'imm') || ~strcmp(ops{2}.kind, 'reg')
             fail(ln, 'movabsq takes an immediate and a register');
         end
-        bytes = [rexp(1, 0, floor(ops{2}.reg / 8)) 184 + mod_low(ops{2}.reg) ...
+        bytes = [rexp(1, 0, floor(ops{2}.reg / 8), 0) 184 + mod_low(ops{2}.reg) ...
                  le_bytes(ops{1}.value, 8)];                          % 48 b8+rd imm64
     otherwise
         fail(ln, sprintf('no encoder for %s yet (M3)', mn));
@@ -1165,8 +1241,13 @@ if isempty(rest)
     return;
 end
 start = 1;
+depth = 0;
 for k = 1:numel(rest)
-    if rest(k) == ','
+    if rest(k) == '('
+        depth = depth + 1;
+    elseif rest(k) == ')'
+        depth = depth - 1;
+    elseif rest(k) == ',' && depth == 0
         ops{end+1} = strtrim(rest(start:k-1));
         start = k + 1;
     end
@@ -1206,9 +1287,19 @@ o.symbol = '';
 o.rip = 0;
 o.ripdisp = 0;      % filled in by the emit pass for a same-section label
 o.needs_rex = 0;
+o.indirect = 0;
+o.index = -1;       % a SIB index register; -1 means none
+o.scale = 1;        % 1, 2, 4 or 8, only meaningful with an index
 
 if isempty(txt)
     fail(ln, 'empty operand');
+end
+
+if txt(1) == '*'
+    % `call *%rax` - an indirect call, ff /2. The star is part of the syntax, not the
+    % operand, and a call WITHOUT it is resolved by the layout instead of encoded here.
+    o.indirect = 1;
+    txt = strtrim(txt(2:end));
 end
 
 if txt(1) == '$'
@@ -1242,6 +1333,35 @@ if ~isempty(open)
         fail(ln, sprintf('cannot decode operand %s', txt));
     end
     o.kind = 'mem';
+    if ~isempty(strfind(inside, ','))
+        % (base,index) or (base,index,scale): the SIB form
+        c1 = find(inside == ',', 1);
+        base_txt = strtrim(inside(1:c1-1));
+        tail_txt = inside(c1+1:end);
+        c2 = find(tail_txt == ',', 1);
+        if isempty(c2)
+            idx_txt = strtrim(tail_txt);
+        else
+            idx_txt = strtrim(tail_txt(1:c2-1));
+            sc = read_int(strtrim(tail_txt(c2+1:end)), ln);
+            if sc ~= 1 && sc ~= 2 && sc ~= 4 && sc ~= 8
+                fail(ln, sprintf('a SIB scale must be 1, 2, 4 or 8, not %d', sc));
+            end
+            o.scale = sc;
+        end
+        rb = reg_lookup(base_txt);
+        ri = reg_lookup(idx_txt);
+        if rb.width == 0 || ri.width == 0
+            fail(ln, sprintf('unknown register in %s', txt));
+        end
+        o.base = rb.num;
+        o.index = ri.num;
+        o.needs_rex = (rb.num >= 8) || (ri.num >= 8);
+        if ~isempty(head)
+            o.disp = read_int(head, ln);
+        end
+        return;
+    end
     if ~isempty(inside) && inside(1) == '%'
         r = reg_lookup(inside);
         % width, not a non-negative number: %rip is a sentinel with number -2, and -1
