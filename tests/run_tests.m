@@ -1654,6 +1654,39 @@ cctests = {
                 sprintf('globals audit %s: %s', gsrc{gk}, e.message));
         end
     end
+    % struct field names must start with a LETTER (2026-11-05). The clones accept
+    % struct('.byte', ...) and real MATLAB refuses it, so this cannot be found by running:
+    % it was found on the authority run, after 338 of 338 programs had been measured
+    % byte-identical on both clones. Static, over the same file list the globals audit uses,
+    % with a synthetic violation so a broken checker cannot pass silently.
+    for gk = 1:numel(gsrc)
+        try
+            fb = check_field_names(gsrc{gk});
+            [npass nfail] = addcheck(npass, nfail, isempty(fb), ...
+                sprintf('field names %s', gsrc{gk}));
+            for fq = 1:numel(fb)
+                fprintf('   %s\n', fb{fq});
+            end
+        catch e
+            [npass nfail] = addcheck(npass, nfail, false, ...
+                sprintf('field names %s: %s', gsrc{gk}, e.message));
+        end
+    end
+    fsf = 'tmp_fieldname_selftest.m';
+    ff = fopen(fsf, 'w');
+    fprintf(ff, 'function x = tmp_fieldname_selftest()\n');
+    fprintf(ff, 'x = struct(''1bad'', 1);\n');
+    fprintf(ff, 'end\n');
+    fclose(ff);
+    try
+        fsel = check_field_names(fsf);
+        [npass nfail] = addcheck(npass, nfail, numel(fsel) == 1, ...
+            'field-name checker self-test (catches a synthetic violation)');
+    catch e
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            sprintf('field-name checker self-test: %s', e.message));
+    end
+    del(fsf);
     gsf = 'tmp_globals_selftest.m';
     gf = fopen(gsf, 'w');
     % the chunk before the first function is the script: an assignment there

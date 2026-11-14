@@ -310,9 +310,26 @@ end
 img.bss{end+1} = struct('name', nm, 'size', sz, 'align', align);
 end
 
+function w = data_width(d)
+% data_width - the byte width of a data directive's values.
+%
+% A switch, NOT struct('.byte', 1, '.short', 2, ...): MATLAB field names must start with a
+% letter, so that table is accepted by the clone and the engine and refused by real MATLAB
+% with 字段名称 ".byte" 无效. It was written that way, measured 338/338 byte-identical on
+% both of those runtimes, and then refused 30 corpus programs on the authority run. This is
+% the fourth time this project has been bitten by a field name the clones tolerate, so the
+% suite now checks for the shape (see "struct field names" in run_tests.m).
+switch d
+    case '.byte',  w = 1;
+    case '.short', w = 2;
+    case '.long',  w = 4;
+    case '.quad',  w = 8;
+    otherwise,     fail(0, sprintf('internal: no width for %s', d));
+end
+end
+
 function bytes = add_bytes(d, rest, ln)
-width = struct('.byte', 1, '.short', 2, '.long', 4, '.quad', 8);
-w = width.(d);
+w = data_width(d);
 vals = parse_int_list(rest, ln);
 if isempty(vals)
     fail(ln, sprintf('%s with no values', d));
@@ -451,8 +468,7 @@ end
 end
 
 function items = push_pointers(items, section, d, rest, ln)
-width = struct('.byte', 1, '.short', 2, '.long', 4, '.quad', 8);
-w = width.(d);
+w = data_width(d);
 v = split_values(rest);
 if isempty(v)
     fail(ln, sprintf('%s has no values', d));
