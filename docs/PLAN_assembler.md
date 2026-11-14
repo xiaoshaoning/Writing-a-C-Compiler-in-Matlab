@@ -304,6 +304,28 @@ count. `D3` takes the count from `%cl` implicitly - the encoding has no field fo
 entirely. It requires `%cl` by number now. A wrong-byte bug that no byte comparison in this
 project could catch, because the reference assembler refuses the input.
 
+### M4 — layout and relocations — IN PROGRESS (2026-11-05)
+- [x] Parse into ITEMS (bytes, label, branch/call), not bytes: a branch's size depends on
+      where its target lands, so it cannot be encoded while parsing
+- [x] Iterate to a fixed point, shrinking branches that fit: `as` picks the SHORT form even
+      for a forward reference (measured: `jmp` to a label 23 bytes ahead is `eb 15`), so the
+      form of one branch moves the offsets of everything after it
+- [x] `call` is always `e8 rel32`; a call to a symbol outside the section emits zeros,
+      because that is what the reference emits (the shims reach the real printf/malloc)
+- [x] A branch to an unresolved label is refused; an external CALL is not an error
+- [ ] 7 of the 25 sample programs encode every instruction but produce DIFFERENT bytes -
+      the next thing to look at, one file at a time with the probe's hex windows
+
+**Gate, measured:** 25 sample programs -> **2 byte-identical**, 7 differ, 14 missing an
+encoder, 2 errors. The branch fixture is byte-identical (463 bytes: short forward, near
+forward, short backward, near conditional, and a call).
+
+**An engine portability finding:** `items{j}.short = 1` and `items.(section){end+1} = it`
+are chained assignment targets. The clone accepts them; the engine refuses with "indexed
+assignment base must be a variable". Several helpers now use a temporary, and there is a
+`push_item` for the section list. That is the sixth harness-level portability difference
+found by running the same code on both.
+
 ### M4 — layout and relocations
 - [ ] Two passes: sizes first, then addresses (forward references need it; `.string`
       lengths make the first pass non-trivial)

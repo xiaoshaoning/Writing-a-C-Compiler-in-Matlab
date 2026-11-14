@@ -61,6 +61,11 @@ img.syms = {};     % a CELL of structs: see the note above about empty
 
 section = 'text';
 tab = isa_table();
+% The parse phase builds ITEMS, not bytes: a label is a position, and a branch is a
+% choice of size that cannot be made until every label has one. Sections are separate
+% item lists because a branch never crosses one.
+items.text = {};
+items.data = {};
 
 for ln = 1:numel(lines)
     line = strip_comment(lines{ln});
@@ -103,9 +108,9 @@ for ln = 1:numel(lines)
             case '.comm'
                 img = add_comm(img, rest, ln);
             case {'.byte', '.short', '.long', '.quad'}
-                img = add_bytes(img, section, d, rest, ln);
+                items = push_item(items, section, item_bytes(add_bytes(d, rest, ln)));
             case '.string'
-                img = add_string(img, section, rest, ln);
+                items = push_item(items, section, item_bytes(add_string(rest, ln)));
             otherwise
                 fail(ln, sprintf('unknown directive %s', d));
         end
@@ -114,15 +119,7 @@ for ln = 1:numel(lines)
 
     % a label definition: `<name>:` at the start of the line (scan done above)
     if is_label
-        j = sym_index(img, line(1:k-1));
-        if j == 0
-            img.syms{end+1} = struct('name', line(1:k-1), 'section', section, ...
-                                      'offset', numel(section_bytes(img, section)), ...
-                                      'global', 0);
-        else
-            img.syms{j}.section = section;
-            img.syms{j}.offset = numel(section_bytes(img, section));
-        end
+        items = push_item(items, section, item_label(line(1:k-1)));
         if ~isempty(strtrim(line(k+1:end)))
             % GAS allows `label: instruction` on one line. cc_int never emits it, and
             % silently DROPPING the instruction (which is what this did) is the worst of
@@ -134,7 +131,7 @@ for ln = 1:numel(lines)
         continue;
     end
 
-    % anything else is an instruction, and M0 has no encoders
+    % an instruction
     k = 1;
     while k <= numel(line) && line(k) >= 'a' && line(k) <= 'z'
         k = k + 1;
@@ -146,18 +143,29 @@ for ln = 1:numel(lines)
     if isempty(tab_kind(tab, mn))
         fail(ln, sprintf('unknown mnemonic %s', mn));
     end
-    % M2: decode the operands even though no encoder consumes them yet. That is the point -
-    % a decoder nothing calls is untested, and this one is now run over every instruction
-    % in every compiled program, so a form it cannot read fails HERE with a line number
-    % instead of surfacing as bad bytes in M3.
+    % The decoder runs on every instruction of every program, so a form it cannot read
+    % fails HERE with a line number instead of becoming bad bytes later.
     ops = split_operands(line(k:end), ln);
     decoded = cell(1, numel(ops));
     for q = 1:numel(ops)
         decoded{q} = decode_operand(ops{q}, ln);
     end
-    bytes = encode_insn(mn, decoded, ln, tab);
-    img = set_section_bytes(img, section, bytes);
+    if is_reloc(mn, tab)
+        % A branch's size depends on how far away its target ends up, and that is a
+        % property of the whole section - so it is an item, resolved in layout below.
+        items = push_item(items, section, item_reloc(mn, decoded{1}.symbol, ln));
+    else
+        items = push_item(items, section, item_bytes(encode_insn(mn, decoded, ln, tab)));
+    end
 end
+
+% not `[img, img.text, ...] = ...`: an indexed assignment inside a multi-output list is
+% accepted by the clone and refused by the engine ("indexed assignment base must be a
+% variable"). A temporary is portable and reads no worse.
+[img, tb, items.text] = lay_out(img, 'text', items.text);
+img.text = tb;
+[img, db, items.data] = lay_out(img, 'data', items.data);
+img.data = db;
 end
 
 % ---------------------------------------------------------------------------------
@@ -229,7 +237,9 @@ j = sym_index(img, name);
 if j == 0
     img.syms{end+1} = struct('name', name, 'section', '', 'offset', -1, 'global', 1);
 else
-    img.syms{j}.global = 1;
+    e2 = img.syms{j};
+    e2.global = 1;
+    img.syms{j} = e2;
 end
 end
 
@@ -258,7 +268,7 @@ end
 img.bss{end+1} = struct('name', parts(1), 'size', parts(2), 'align', align);
 end
 
-function img = add_bytes(img, section, d, rest, ln)
+function bytes = add_bytes(d, rest, ln)
 width = struct('.byte', 1, '.short', 2, '.long', 4, '.quad', 8);
 w = width.(d);
 vals = parse_int_list(rest, ln);
@@ -272,10 +282,10 @@ for k = 1:numel(vals)
         bytes((k-1)*w + b + 1) = mod(floor(v / 2^(8*b)), 256);
     end
 end
-img = set_section_bytes(img, section, uint8(bytes));
+bytes = uint8(bytes);
 end
 
-function img = add_string(img, section, rest, ln)
+function bytes = add_string(rest, ln)
 % .string "text" - GAS escapes, not C escapes. cc_int has already escaped for GAS, so
 % this only has to undo the ones that change the byte: \\, \", \n, \t, \ooo.
 s = strtrim(rest);
@@ -332,7 +342,208 @@ while k <= numel(s)
     end
 end
 out(end+1) = 0;      % the terminator
-img = set_section_bytes(img, section, uint8(out));
+bytes = uint8(out);
+end
+
+function items = push_item(items, section, it)
+% push_item - append to a section's item list. Not `items.(section){end+1} = it`: the
+% engine refuses a chained assignment target, and the clone accepts it, so the chained
+% form passes here and fails there.
+lst = items.(section);
+lst{end+1} = it;
+items.(section) = lst;
+end
+
+function it = item_bytes(b)
+it = struct('kind', 'bytes', 'b', uint8(b), 'name', '', 'mn', '', ...
+            'target', '', 'ln', 0, 'short', 0);
+end
+
+function it = item_label(name)
+it = struct('kind', 'label', 'b', uint8([]), 'name', name, 'mn', '', ...
+            'target', '', 'ln', 0, 'short', 0);
+end
+
+function it = item_reloc(mn, target, ln)
+% a branch or a call: its bytes are decided in layout, because they depend on where the
+% target lands - which is the whole reason this phase exists.
+it = struct('kind', 'reloc', 'b', uint8([]), 'name', '', 'mn', mn, ...
+            'target', target, 'ln', ln, 'short', 0);
+end
+
+function b = is_reloc(mn, tab)
+k = tab_kind(tab, mn);
+b = strcmp(k, 'jmp') || strcmp(k, 'call');
+end
+
+function n = reloc_size(it)
+% the size a branch or call occupies at its current form
+if strcmp(it.mn, 'call')
+    n = 5;                                  % e8 rel32, always
+elseif it.short
+    n = 2;                                  % eb rel8 / 7x rel8
+elseif strcmp(it.mn, 'jmp')
+    n = 5;                                  % e9 rel32
+else
+    n = 6;                                  % 0f 8x rel32
+end
+end
+
+function n = item_size(it)
+if strcmp(it.kind, 'reloc')
+    n = reloc_size(it);
+elseif strcmp(it.kind, 'label')
+    n = 0;
+else
+    n = numel(it.b);
+end
+end
+
+function [img, bytes, items] = lay_out(img, section, items)
+% lay_out - assign every label an offset, narrow every branch that fits, then emit.
+%
+% Iteration, not two passes: `as` chooses the SHORT form for a forward branch when it fits
+% (measured - a jmp to a label 23 bytes ahead comes out `eb 15`), so the form of one
+% branch affects the offsets of everything after it, which affects later branches. Sizes
+% only ever shrink, so this converges; the loop bound is a guard against a bug, not a
+% budget.
+for pass = 1:16
+    changed = 0;
+    off = 0;
+    for j = 1:numel(items)
+        it = items{j};
+        if strcmp(it.kind, 'label')
+            items{j} = it;                   % offsets are recomputed below
+            off = off;
+        elseif strcmp(it.kind, 'reloc') && ~it.short && ~strcmp(it.mn, 'call')
+            % would the short form reach the target from here?
+            tgt = label_offset_in(items, it.target);
+            if tgt >= 0
+                d = tgt - (off + 2);
+                if d >= -128 && d <= 127
+                    it2 = items{j};
+                    it2.short = 1;
+                    items{j} = it2;      % not items{j}.short = 1: the engine refuses a
+                    changed = 1;         % chained assignment target outright
+                end
+            end
+        end
+        off = off + item_size(items{j});
+    end
+    if ~changed
+        break;
+    end
+end
+
+% emit: bytes now, offsets now, and the symbol table's answer for this section
+bytes = uint8([]);
+off = 0;
+for j = 1:numel(items)
+    it = items{j};
+    if strcmp(it.kind, 'label')
+        sym = sym_index(img, it.name);
+        if sym == 0
+            img.syms{end+1} = struct('name', it.name, 'section', section, ...
+                                     'offset', off, 'global', 0);
+        else
+            e2 = img.syms{sym};
+            e2.section = section;
+            e2.offset = off;
+            img.syms{sym} = e2;
+        end
+    elseif strcmp(it.kind, 'reloc')
+        tgt = label_offset_in(items, it.target);
+        if tgt < 0 && ~strcmp(it.mn, 'call')
+            % a branch to a label that is not in this section is a real error
+            fail(it.ln, sprintf('unresolved symbol %s', it.target));
+        end
+        if tgt < 0
+            % An EXTERNAL call - the shims reach the real printf and malloc. The reference
+            % emits a zero displacement and a relocation, so zeros are what byte equality
+            % wants; resolving them is the linker's job, not this assembler's.
+            if strcmp(it.mn, 'call')
+                bytes = [bytes 232 0 0 0 0];
+            else
+                fail(it.ln, sprintf('unresolved branch target %s', it.target));
+            end
+        elseif strcmp(it.mn, 'call')
+            bytes = [bytes 232 rel_bytes(tgt - (off + 5), 4)];
+        elseif it.short
+            if strcmp(it.mn, 'jmp')
+                bytes = [bytes 235 rel_bytes(tgt - (off + 2), 1)];
+            else
+                bytes = [bytes jcc_short(it.mn) rel_bytes(tgt - (off + 2), 1)];
+            end
+        else
+            if strcmp(it.mn, 'jmp')
+                bytes = [bytes 233 rel_bytes(tgt - (off + 5), 4)];
+            else
+                bytes = [bytes 15 jcc_near(it.mn) rel_bytes(tgt - (off + 6), 4)];
+            end
+        end
+    else
+        bytes = [bytes it.b];
+    end
+    off = off + item_size(it);
+end
+end
+
+function off = label_offset_in(items, name)
+% the offset of a label in this section, or -1. Walks the items the same way lay_out does,
+% so there is one notion of where a label is.
+off = -1;
+at = 0;
+for j = 1:numel(items)
+    if strcmp(items{j}.kind, 'label') && strcmp(items{j}.name, name)
+        off = at;
+        return;
+    end
+    at = at + item_size(items{j});
+end
+end
+
+function b = rel_bytes(v, n)
+% a signed displacement, little-endian, n bytes
+if n == 1
+    if v < -128 || v > 127
+        fail(0, sprintf('internal: rel8 out of range (%d)', v));
+    end
+end
+b = le_bytes(v, n);
+end
+
+function op = jcc_short(mn)
+% the 7x short-jump opcode for each condition
+switch mn
+    case 'je',  op = 116;
+    case 'jne', op = 117;
+    case 'jl',  op = 124;
+    case 'jge', op = 125;
+    case 'jle', op = 126;
+    case 'jg',  op = 127;
+    case 'jb',  op = 114;
+    case 'jae', op = 115;
+    case 'jbe', op = 118;
+    case 'ja',  op = 119;
+    otherwise,  error('jcc_short: not a conditional branch');
+end
+end
+
+function op = jcc_near(mn)
+% the 8x opcode after 0F for each condition
+switch mn
+    case 'je',  op = 132;
+    case 'jne', op = 133;
+    case 'jl',  op = 140;
+    case 'jge', op = 141;
+    case 'jle', op = 142;
+    case 'jg',  op = 143;
+    case 'jb',  op = 130;
+    case 'jae', op = 131;
+    case 'jbe', op = 134;
+    case 'ja',  op = 135;
+    otherwise,  error('jcc_near: not a conditional branch');
+end
 end
 
 function bytes = encode_insn(mn, ops, ln, tab)
