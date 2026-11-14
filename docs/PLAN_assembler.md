@@ -316,9 +316,30 @@ project could catch, because the reference assembler refuses the input.
 - [ ] 7 of the 25 sample programs encode every instruction but produce DIFFERENT bytes -
       the next thing to look at, one file at a time with the probe's hex windows
 
-**Gate, measured:** 25 sample programs -> **2 byte-identical**, 7 differ, 14 missing an
+- [x] Resolve rip-relative references to SAME-SECTION labels. A reference to another
+      section stays 0 - measured: `leaq .Lx(%rip)` with .Lx in .data is `48 8d 05 00 00 00
+      00` plus a relocation. The operand carries its own `.ripdisp`, filled in by the emit
+      pass, so resolving costs no argument threading.
+- [x] `movq $imm, reg` uses `c7 /0 id` only when the value survives SIGN-extension from 32
+      bits, else `movabs` (10 bytes). Measured: `movq $5` is `48 c7 c0 ...`, `movq
+      $0xb2d05e00` is `48 b8 ...` - the long form is not optional, the short one would store
+      a DIFFERENT number.
+- [x] `movq $imm, mem` TRUNCATES to 32 bits, because `as` does. Refusing was stricter than
+      the reference and broke a corpus program it assembles.
+- [x] `movb` has its own opcodes, `88`/`8A`; using the 32-bit pair moved a different number
+      of bytes and looked entirely plausible. Cost one program at byte 88.
+
+**Gate, measured:** 25 sample programs -> **7 byte-identical**, 2 differ, 14 missing an
 encoder, 2 errors. The branch fixture is byte-identical (463 bytes: short forward, near
 forward, short backward, near conditional, and a call).
+
+**Still open at this gate:**
+| program | what |
+|---|---|
+| cc43_gdesig | a same-section `leaq` the layout resolved to 0 but the reference to 0x10: the label is not being found |
+| cc60_scalar_literal | a `jmp rel32` 27 bytes off: a relaxation divergence, so some branch chose a different form than `as` |
+| cc16_strarray | `unbalanced parentheses in (%rsi` at line 24 - a decoder gap |
+| cc48_bitfield_layout | `.comm needs a name and a size` at line 1395 |
 
 **An engine portability finding:** `items{j}.short = 1` and `items.(section){end+1} = it`
 are chained assignment targets. The clone accepts them; the engine refuses with "indexed

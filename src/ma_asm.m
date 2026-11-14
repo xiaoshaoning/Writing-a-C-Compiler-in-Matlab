@@ -150,7 +150,13 @@ for ln = 1:numel(lines)
     for q = 1:numel(ops)
         decoded{q} = decode_operand(ops{q}, ln);
     end
-    if is_reloc(mn, tab)
+    if has_symbol_rip(decoded)
+        % leaq .Lret1(%rip), %rax and friends: same-section labels resolve, so this
+        % cannot be encoded until the labels have offsets.
+        bytes = encode_insn(mn, decoded, ln, tab);
+        items = push_item(items, section, ...
+                          item_rip(mn, decoded, first_symbol(decoded), bytes, ln));
+    elseif is_reloc(mn, tab)
         % A branch's size depends on how far away its target ends up, and that is a
         % property of the whole section - so it is an item, resolved in layout below.
         items = push_item(items, section, item_reloc(mn, decoded{1}.symbol, ln));
@@ -356,19 +362,50 @@ end
 
 function it = item_bytes(b)
 it = struct('kind', 'bytes', 'b', uint8(b), 'name', '', 'mn', '', ...
-            'target', '', 'ln', 0, 'short', 0);
+            'target', '', 'ln', 0, 'short', 0, 'ops', {{}});
 end
 
 function it = item_label(name)
 it = struct('kind', 'label', 'b', uint8([]), 'name', name, 'mn', '', ...
-            'target', '', 'ln', 0, 'short', 0);
+            'target', '', 'ln', 0, 'short', 0, 'ops', {{}});
+end
+
+function it = item_rip(mn, ops, target, bytes, ln)
+% a rip-relative reference to a symbol: its bytes are final only once the layout knows
+% where the symbol is, so the operands are kept and the instruction is re-encoded.
+it = struct('kind', 'rip', 'b', uint8(bytes), 'name', '', 'mn', mn, ...
+            'target', target, 'ln', ln, 'short', 0, 'ops', {{}});
+% assigned AFTER construction: struct('f', {cellvalue}) makes a struct ARRAY with one
+% element per cell entry, not a struct with a cell field. Same trap as struct('f',{}),
+% which is why the symbol tables here are cells of structs.
+it.ops = ops;
 end
 
 function it = item_reloc(mn, target, ln)
 % a branch or a call: its bytes are decided in layout, because they depend on where the
 % target lands - which is the whole reason this phase exists.
 it = struct('kind', 'reloc', 'b', uint8([]), 'name', '', 'mn', mn, ...
-            'target', target, 'ln', ln, 'short', 0);
+            'target', target, 'ln', ln, 'short', 0, 'ops', {{}});
+end
+
+function f = has_symbol_rip(ops)
+% has_symbol_rip - true when any operand is a rip-relative reference to a named symbol
+f = 0;
+for q = 1:numel(ops)
+    if strcmp(ops{q}.kind, 'mem') && ops{q}.rip && ~isempty(ops{q}.symbol)
+        f = 1;
+    end
+end
+end
+
+function s2 = first_symbol(ops)
+s2 = '';
+for q = 1:numel(ops)
+    if strcmp(ops{q}.kind, 'mem') && ops{q}.rip && ~isempty(ops{q}.symbol)
+        s2 = ops{q}.symbol;
+        return;
+    end
+end
 end
 
 function b = is_reloc(mn, tab)
@@ -450,6 +487,19 @@ for j = 1:numel(items)
             e2.section = section;
             e2.offset = off;
             img.syms{sym} = e2;
+        end
+    elseif strcmp(it.kind, 'rip')
+        tgt = label_offset_in(items, it.target);
+        if tgt < 0
+            bytes = [bytes it.b];             % another section (or external): zeros, as as does
+        else
+            ops2 = it.ops;
+            for q = 1:numel(ops2)
+                if strcmp(ops2{q}.kind, 'mem') && ops2{q}.rip && ~isempty(ops2{q}.symbol)
+                    ops2{q}.ripdisp = tgt - (off + numel(it.b));
+                end
+            end
+            bytes = [bytes encode_insn(it.mn, ops2, it.ln, isa_table())];
         end
     elseif strcmp(it.kind, 'reloc')
         tgt = label_offset_in(items, it.target);
@@ -651,6 +701,16 @@ else
 end
 end
 
+function f = imm_fits_32(v)
+% imm_fits_32 - true when v survives sign-extension from 32 bits, which is what the
+% c7 /0 id form does to its immediate.
+lo = mod(v, 4294967296);
+if lo >= 2147483648
+    lo = lo - 4294967296;
+end
+f = (lo == v);
+end
+
 function b = le_bytes(v, n)
 u = mod(v, 2^(8*n));
 b = zeros(1, n);
@@ -670,7 +730,11 @@ elseif strcmp(op.kind, 'mem')
     if op.rip
         prefix = rexp(w, floor(reg_field / 8), 0);
         mrm = modrmb(0, reg_field, 5);          % mod 00, r/m 101: rip-relative
-        tail = [0 0 0 0];                        % M4 fills this from a relocation
+        % Same-section labels resolve here (the emit pass fills ripdisp in). A label in
+        % another section stays 0, which is exactly what the reference emits - measured:
+        % `leaq .Lx(%rip)` with .Lx in .data assembles to 48 8d 05 00 00 00 00, and the
+        % linker resolves it later.
+        tail = le_bytes(op.ripdisp, 4);
     else
         prefix = rexp(w, floor(reg_field / 8), floor(op.base / 8));
         [mrm, extra] = mem_form(op);
@@ -828,9 +892,17 @@ src = ops{1};
 dst = ops{2};
 if strcmp(src.kind, 'imm')
     if strcmp(dst.kind, 'reg')
-        if w == 1
+        if w == 1 && imm_fits_32(src.value)
             bytes = [rexp(1, 0, floor(dst.reg / 8)) 199 modrmb(3, 0, dst.reg) ...
                      le_bytes(src.value, 4)];                    % movq: c7 /0 id
+        elseif w == 1
+            % c7 /0 id SIGN-EXTENDS its 32-bit immediate, so it only reproduces the value
+            % when the value fits in a signed 32 bits. For anything else as emits movabs
+            % (48 b8+rd io, 10 bytes). Measured: `movq $5,%rax` is 48 c7 c0 05 00 00 00
+            % and `movq $0xb2d05e00,%rax` is 48 b8 00 5e d0 b2 00 00 00 00 - the long
+            % form is not optional there, the short one would store a different number.
+            bytes = [rexp(1, 0, floor(dst.reg / 8)) 184 + mod_low(dst.reg) ...
+                     le_bytes(src.value, 8)];
         elseif strcmp(mn, 'movb')
             bytes = [rexp(0, 0, floor(dst.reg / 8)) 176 + mod_low(dst.reg) ...
                      le_bytes(src.value, 1)];                    % movb: b0+rb ib
@@ -839,17 +911,30 @@ if strcmp(src.kind, 'imm')
                      le_bytes(src.value, 4)];                    % movl: b8+rd id
         end
     else
+        % No immediate-to-memory form reaches past 32 bits, and as TRUNCATES here rather
+        % than choosing a longer form - a `movq $4294967289, -8(%rbp)` from the corpus
+        % assembles to c7 45 f8 f9 ff ff ff. Refusing it would have been stricter than the
+        % reference and broken a program the reference assembles.
         [pre, mrm, tail] = rm_operand(dst, 0, w);
         bytes = [pre 199 mrm tail le_bytes(src.value, 4)];
     end
     return;
 end
+% movb has its own opcodes: 88 /r store, 8A /r load. Using the 32-bit pair would move a
+% different number of bytes and still look plausible.
+if strcmp(mn, 'movb')
+    op_load = 138;
+    op_store = 136;
+else
+    op_load = 139;
+    op_store = 137;
+end
 if strcmp(src.kind, 'mem') && strcmp(dst.kind, 'reg')
     [pre, mrm, tail] = rm_operand(src, dst.reg, w);
-    bytes = [pre 139 mrm tail];                                       % 8B /r: memory source
+    bytes = [pre op_load mrm tail];                                   % 8B/8A /r
 else
     [pre, mrm, tail] = rm_operand(dst, src.reg, w);
-    bytes = [pre 137 mrm tail];                                       % 89 /r: r/m destination
+    bytes = [pre op_store mrm tail];                                  % 89/88 /r
 end
 end
 
@@ -963,7 +1048,8 @@ function o = decode_operand(txt, ln)
 %   a(%rip)         symbol + rip, the data reference
 %
 % Fields: .kind ('reg'|'imm'|'mem'|'sym'), .reg / .base (0-15, -1 for none), .width,
-% .disp, .value (immediates), .symbol, .rip.
+% .disp, .value (immediates), .symbol, .rip, and .ripdisp - the displacement a
+% rip-relative reference ends up with, which only the layout can compute.
 %
 % Width belongs to the REGISTER (%al is 8, %eax 32, %rax 64); .needs_rex marks the
 % registers whose number is 8 or more, which the encoder must reflect in REX.B/R/X.
@@ -975,6 +1061,7 @@ o.disp = 0;
 o.value = 0;
 o.symbol = '';
 o.rip = 0;
+o.ripdisp = 0;      % filled in by the emit pass for a same-section label
 o.needs_rex = 0;
 
 if isempty(txt)
