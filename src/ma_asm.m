@@ -143,7 +143,7 @@ for ln = 1:numel(lines)
         fail(ln, sprintf('cannot read this line: %s', line));
     end
     mn = line(1:k-1);
-    if ~table_has(tab, mn)
+    if isempty(tab_kind(tab, mn))
         fail(ln, sprintf('unknown mnemonic %s', mn));
     end
     % M2: decode the operands even though no encoder consumes them yet. That is the point -
@@ -197,7 +197,13 @@ vals(end+1) = read_int(strtrim(rest(start:end)), ln);
 end
 
 function fail(ln, msg)
-error(sprintf('ma_asm: line %d: %s', ln, msg));
+% fail - a source error, with its line. ln <= 0 means an internal invariant broke, which is
+% not something the input can fix, and "line 0:" would read as the input's fault.
+if ln > 0
+    error(sprintf('ma_asm: line %d: %s', ln, msg));
+else
+    error(sprintf('ma_asm: internal: %s', msg));
+end
 end
 
 function b = section_bytes(img, section)
@@ -474,8 +480,7 @@ switch mn
     case 'orq',  spec = [9 11 1 13];
     case 'andq', spec = [33 35 4 37];
     case 'subq', spec = [41 43 5 45];
-    case 'xorq', spec = [49 51 6 53];
-    case 'xorl', spec = [49 51 6 53];   % same opcodes, w=0 from the suffix
+    case {'xorq', 'xorl'}, spec = [49 51 6 53];   % same opcodes; w comes from the suffix
     case 'cmpq', spec = [57 59 7 61];
     otherwise,   spec = [];
 end
@@ -536,7 +541,9 @@ if strcmp(ops{1}.kind, 'imm')
     else
         bytes = [pre 193 mrm tail le_bytes(v, 1)];                    % C1 /digit ib
     end
-elseif strcmp(ops{1}.kind, 'reg') && ops{1}.width == 8
+elseif strcmp(ops{1}.kind, 'reg') && ops{1}.reg == 1 && ops{1}.width == 8
+    % D3 takes the count from CL implicitly - the encoding has no field for it - so any
+    % other 8-bit register would be silently encoded as CL.
     [pre, mrm, tail] = rm_operand(dst, slot, 1);
     bytes = [pre 211 mrm tail];                                       % D3 /digit, count in %cl
 else
@@ -896,16 +903,6 @@ tab = [ ...
     add('%rip', -2, 64, 0) ...   % -2: not a register, a marker the mem encoder
                                  % recognises, because -1 already means 'no base'
 ];
-end
-
-function b = table_has(tab, mn)
-b = 0;
-for k = 1:numel(tab)
-    if strcmp(tab(k).mnemonic, mn)
-        b = 1;
-        return;
-    end
-end
 end
 
 function tab = isa_table()

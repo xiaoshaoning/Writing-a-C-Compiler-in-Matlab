@@ -298,6 +298,12 @@ rest (`imulq`, `movsd`) are two small family additions to do alongside it.
 | `movabsq` as `B0+rd` | the same slip, in the `misc` family instead |
 | `xorl` had no table row | the ALU spec is keyed by mnemonic, and I had only added the `q` suffix forms |
 
+And one from reviewing the batch: `enc_shift` accepted **any** 8-bit register as a shift
+count. `D3` takes the count from `%cl` implicitly - the encoding has no field for it - so
+`shlq %al, %rax` would have been encoded as `shlq %cl, %rax` and meant something else
+entirely. It requires `%cl` by number now. A wrong-byte bug that no byte comparison in this
+project could catch, because the reference assembler refuses the input.
+
 ### M4 — layout and relocations
 - [ ] Two passes: sizes first, then addresses (forward references need it; `.string`
       lengths make the first pass non-trivial)
