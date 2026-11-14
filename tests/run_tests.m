@@ -787,6 +787,7 @@ cctests = {
         'cc57_fptrmember.c', 96;   % a function-pointer MEMBER (is_struct_code, six copies of it)
         'cc58_ptrrow_forms.c', 96;  % a pointer to a row as a typedef and as a member
         'cc59_double_compound.c', 96;  % /= and the arithmetic forms on a double
+        'cc60_scalar_literal.c', 96;   % a scalar compound literal's value is the object
     };
     % The one range every corpus loop iterates. Three loops need it, and the
     % one that spelled the bounds out for itself was silently running the whole
@@ -1500,8 +1501,9 @@ cctests = {
     % tag-scope rules (self-reference, forward pointer) and adds its own, so it is
     % 22086; cc55 pins one typedef naming several declarators (22332), cc56 a
     % typedef'd function pointer (22493), cc57 a function-pointer member (22703),
-    % cc58 a pointer to a row as a typedef and as a member (22884) and cc59 compound
-    % assignment on a double, so it is 23001. See
+    % cc58 a pointer to a row as a typedef and as a member (22884), cc59 compound
+    % assignment on a double (23001) and cc60 a scalar compound literal's value, so it
+    % is 23149. See
     % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
@@ -1528,8 +1530,8 @@ cctests = {
     if corpus_sliced
         fprintf('SKIP  instr regression: corpus total (sliced run)\n');
     else
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 23001, ...
-        sprintf('instr regression: corpus %d <= 23001', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 23149, ...
+        sprintf('instr regression: corpus %d <= 23149', ic_total));
     end
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 88, ...
         sprintf('instr regression: hello.c %d <= 88', ic_hello));

@@ -41,21 +41,27 @@ Gaps 2 and 3 are still open and are NOT ten-line changes, which is what the plan
 - pointer compound literals (`(int*){…}`) are refused by depth in the compound-literal
   branch; `(int[]){…}` works.
 
-**Chasing gap 3 found a live silent wrong answer in a SUPPORTED path: a scalar compound
-literal's value is its address (2026-11-05, measured).** `(int){5} + 1` returns garbage
-(156, 188, 252 across three builds - it is address-dependent) where C says 6, and
-`&(int){9}` returns 9, which is why the address-shaped value looks right in the one case
-anyone would try. `(int[]){…}` is fine because an array literal's value IS its address;
-a scalar's is the stored object.
+**A scalar compound literal's value is the object, not its address - fixed
+(2026-11-05).** `(int){5} + 1` returned garbage (156, 188, 252 across three builds, so
+address-dependent) where C says 6, while `&(int){9}` returned 9 correctly - which is why
+it hid, since the one case a person would try is the case where an address is right.
 
-The obvious fix did not work and the reason is the finding: adding `em_val(cbase)` after
-the `leaq` in the `(int){5}` branch of the compound-literal parser changed nothing, and
-the load never appeared in the output - so the compiler is not executing that branch for
-`(int){5}` at all. The edit was reverted rather than left as dead code; the live path was
-not located in the time available. That is the state of this bug: real, measured,
-reproducible, and not in the code that looks like it handles it.
+The cause was a single clause: the compound-literal parser's ARRAY branch tested
+`cl_isarr || cbase == 0 || cbase == 1`, so every scalar `int` (code 0) or `char` (code 1)
+literal took the array path, where a literal's value is its own address. The scalar branch
+below it was unreachable for exactly those types. The fix is three lines - test
+`cl_isarr` alone, load the stored object in the scalar branch, and consume the `}` that
+branch reads for itself - and `&(int){9}` still works because '&' drops that load through
+`lvalue_addr`. Guard `cc60_scalar_literal.c` (exit 96) covers the value, the address, a
+write through it (a compound literal is an lvalue) and both unchanged forms: array
+literals still decay, struct literals still yield their address. Ceiling 23001 ->
+**23149**.
 
-Nothing in the corpus uses either form, which is why 832 checks pass with it there.
+**The lesson is the earlier attempt.** Adding a load to that scalar branch changed
+nothing, the load never appeared in the output, and I read that as "the branch is not
+reached, dead end". It was not a dead end, it was the diagnosis: a fix that changes
+nothing means the code is unreachable, and the reason was one clause up. Next time, an
+inert edit is evidence about control flow, not a wasted attempt.
 
 **The doubles fix is guarded (2026-11-05, review).** The negative check asserts
 `that compound assignment needs an integer`, not the shorter `needs an integer type`:

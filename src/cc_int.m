@@ -4393,8 +4393,13 @@ if token == 40              % '(': a cast (type)unary or parenthesised expr
                 em(sprintf('\tleaq\t%d(%%rbp), %%rax', off));
                 etype = cbase;
                 estruc = 1;
-            elseif cl_isarr || cbase == 0 || cbase == 1
-                % (int[3]){…} / (int[]){…} / (char[..]){…}: an array
+            elseif cl_isarr
+                % (int[3]){…} / (int[]){…} / (char[..]){…}: an ARRAY. This branch used
+                % to also accept `cbase == 0 || cbase == 1`, which made every scalar
+                % int or char compound literal take the array path - `(int){5}` is a
+                % scalar, and as an array its value became its own address, so
+                % `(int){5} + 1` returned address+1 instead of 6. That is why fixing
+                % the scalar branch below changed nothing: it was never reached.
                 elem = tsize(cbase);
                 if isempty(cl_dims)
                     % unsized: count the top-level elements (peek)
@@ -4450,11 +4455,19 @@ if token == 40              % '(': a cast (type)unary or parenthesised expr
                 if neg
                     v = -v;
                 end
+                if token == 125         % '}' - this branch reads its own initializer,
+                    next();             % unlike the array branch, where parse_arr_init does
+                end
                 w = tsize(cbase);
                 off = -(fbytes + w);
                 fbytes = fbytes + w;
                 em_imm_store(v, sprintf('%d(%%rbp)', off), w);
                 em(sprintf('\tleaq\t%d(%%rbp), %%rax', off));
+                % The VALUE of a scalar compound literal is the stored object, not its
+                % address: `(int){5} + 1` is 6. '&(int){9}' still works, because '&'
+                % drops this load through lvalue_addr, which is what that function is
+                % for now that the emitter records what rax holds.
+                em_val(cbase);
                 etype = cbase;
                 estruc = 0;
             end
