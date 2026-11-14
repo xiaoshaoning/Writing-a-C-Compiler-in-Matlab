@@ -125,13 +125,38 @@ file, not `/dev/stdout`, is the working form on Windows.
 
 ## Milestones (checklist)
 
-### M0 — inventory and scaffolding
+### M0 — inventory and scaffolding — DONE (2026-11-05)
 - [x] Mnemonics, directives, registers and operand shapes measured (above)
-- [ ] `src/ma_asm.m` exists; unknown mnemonic fails with `line N: unknown mnemonic <x>`
-- [ ] ISA table skeleton: one row per mnemonic with its encoder kind
-- [ ] Test harness `tests/probe_assembler.m`: assemble a program's `.s` with `as`, extract
-      `.text` with `objcopy`, diff against `ma_asm` **prefix-wise** (the reference is
-      padded to 16 bytes), print the first difference
+- [x] `src/ma_asm.m`: parses lines, sections, labels and directives; `.byte/.long/.short/
+      .quad/.string/.comm/.globl` implemented; every instruction fails with either
+      `line N: unknown mnemonic <x>` (not in the table) or
+      `line N: no encoder for <x> yet (M3)` (in the table, M3 owns it)
+- [x] ISA table: one row per measured mnemonic, with the encoder family it needs
+- [x] `tests/probe_assembler.m`: `as` + `objcopy`, **prefix-wise** diff, both lengths
+      printed, `as` refusing a program reported as "not a test of this assembler"
+- [x] Both runtimes agree on all four demonstration cases: a one-instruction sample
+      (`reference 16 bytes, ours: line 4: no encoder for leaq yet`), a directives-only
+      file (`MATCH`), an unknown mnemonic (`line 1: unknown mnemonic frobnicate`), and a
+      known mnemonic with no encoder
+
+**Three MATLAB-portability findings from building M0**, each of which silently produced
+wrong behaviour rather than an error, and each now avoided:
+
+| construct | clone behaviour | used instead |
+|---|---|---|
+| `sscanf(..., 4)` (the next-index output) | returned something that indexed as 0 | plain character scanning |
+| `regexp(s, '...', 'end')` | returned empty | plain character scanning |
+| `regexp(txt, '?
+', 'split')` | returned the WHOLE text as one line - so `ma_asm` assembled nothing and reported success | split by `char(10)` by hand |
+
+The third is the dangerous one: a split that quietly returns one element makes an
+assembler that produces an empty image and says it worked. Any new MATLAB module in this
+repo should assume `regexp` options beyond `'match'` and `sscanf`'s fourth output are not
+available on the clone, and prefer scanning.
+
+A fourth is about the *engine*: its `system()` rejects an absolute path handed to `as`
+("can't create ...: Invalid argument") and does not accept cmd's `cd /d`, so the probe
+passes bare names in the working directory - the suite's existing `tmp_*` convention.
 
 ### M1 — lines, labels, directives
 - [ ] Strip comments and blank lines; keep line numbers for errors
