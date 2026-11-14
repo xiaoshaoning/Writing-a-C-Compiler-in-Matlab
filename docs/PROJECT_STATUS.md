@@ -39,7 +39,23 @@ Gaps 2 and 3 are still open and are NOT ten-line changes, which is what the plan
   upstream of it (a collection bug). That single distinction pointed at the wrong half
   of the pipeline and then at the right one.
 - pointer compound literals (`(int*){…}`) are refused by depth in the compound-literal
-  branch; `(int[]){…}` works. Unknown size until read.
+  branch; `(int[]){…}` works.
+
+**Chasing gap 3 found a live silent wrong answer in a SUPPORTED path: a scalar compound
+literal's value is its address (2026-11-05, measured).** `(int){5} + 1` returns garbage
+(156, 188, 252 across three builds - it is address-dependent) where C says 6, and
+`&(int){9}` returns 9, which is why the address-shaped value looks right in the one case
+anyone would try. `(int[]){…}` is fine because an array literal's value IS its address;
+a scalar's is the stored object.
+
+The obvious fix did not work and the reason is the finding: adding `em_val(cbase)` after
+the `leaq` in the `(int){5}` branch of the compound-literal parser changed nothing, and
+the load never appeared in the output - so the compiler is not executing that branch for
+`(int){5}` at all. The edit was reverted rather than left as dead code; the live path was
+not located in the time available. That is the state of this bug: real, measured,
+reproducible, and not in the code that looks like it handles it.
+
+Nothing in the corpus uses either form, which is why 832 checks pass with it there.
 
 **The doubles fix is guarded (2026-11-05, review).** The negative check asserts
 `that compound assignment needs an integer`, not the shorter `needs an integer type`:
