@@ -133,7 +133,10 @@ for ln = 1:numel(lines)
 
     % an instruction
     k = 1;
-    while k <= numel(line) && line(k) >= 'a' && line(k) <= 'z'
+    % digits belong to the mnemonic - cvtsi2sdq was being read as "cvtsi" and reported as
+    % an unknown mnemonic, which hides where the real gap is
+    while k <= numel(line) && ((line(k) >= 'a' && line(k) <= 'z') || ...
+                               (line(k) >= '0' && line(k) <= '9'))
         k = k + 1;
     end
     if k == 1
@@ -168,10 +171,12 @@ end
 % not `[img, img.text, ...] = ...`: an indexed assignment inside a multi-output list is
 % accepted by the clone and refused by the engine ("indexed assignment base must be a
 % variable"). A temporary is portable and reads no worse.
-[img, tb, items.text] = lay_out(img, 'text', items.text, tab);
-img.text = tb;
+% .data first: a .text instruction may reference a .data symbol, and what it stores is
+% that symbol's offset WITHIN .data - so .data has to be measured before .text is emitted.
 [img, db, items.data] = lay_out(img, 'data', items.data, tab);
 img.data = db;
+[img, tb, items.text] = lay_out(img, 'text', items.text, tab);
+img.text = tb;
 end
 
 % ---------------------------------------------------------------------------------
@@ -263,15 +268,27 @@ end
 end
 
 function img = add_comm(img, rest, ln)
-[parts, count] = sscanf(rest, '%[A-Za-z0-9_.$],%d,%d', 3);
-if count < 2
+% .comm name,size,align - a zero-filled global. Scanned by hand: sscanf's first output
+% here is a STRING, so [parts, count] concatenated everything into one char array and the
+% count became a character.
+k = find(rest == ',', 1);
+if isempty(k)
     fail(ln, '.comm needs a name and a size');
 end
+nm = strtrim(rest(1:k-1));
+tail = rest(k+1:end);
+k2 = find(tail == ',', 1);
 align = 8;
-if count >= 3
-    align = parts(3);
+if isempty(k2)
+    sz = read_int(strtrim(tail), ln);
+else
+    sz = read_int(strtrim(tail(1:k2-1)), ln);
+    align = read_int(strtrim(tail(k2+1:end)), ln);
 end
-img.bss{end+1} = struct('name', parts(1), 'size', parts(2), 'align', align);
+if isempty(nm)
+    fail(ln, '.comm needs a name and a size');
+end
+img.bss{end+1} = struct('name', nm, 'size', sz, 'align', align);
 end
 
 function bytes = add_bytes(d, rest, ln)
@@ -497,18 +514,44 @@ for j = 1:numel(items)
             img.syms{sym} = e2;
         end
     elseif strcmp(it.kind, 'rip')
+        % Three cases, and the value stored is different in each. Measured against the
+        % reference's relocations:
+        %   label in THIS section      a real distance: target - end of instruction
+        %   symbol in another section  the REL32 addend: the symbol's offset in ITS
+        %                              section, plus a section relocation. Not a distance -
+        %                              .Lstr0 at .data+0x18 stores 0x18 regardless of where
+        %                              the reference sits.
+        %   undefined (printf)         zero, plus a symbol relocation
         tgt = label_at(items, offs, it.target);
-        if tgt < 0
-            bytes = [bytes it.b];             % another section (or external): zeros, as as does
+        if tgt >= 0
+            disp = tgt - (offs(j) + numel(it.b));
         else
-            ops2 = it.ops;
-            for q = 1:numel(ops2)
-                if strcmp(ops2{q}.kind, 'mem') && ops2{q}.rip && ~isempty(ops2{q}.symbol)
-                    ops2{q}.ripdisp = tgt - (offs(j) + numel(it.b));
-                end
+            % Which relocation as picks decides what the bytes hold, and the deciding
+            % property is whether the symbol has a section YET:
+            %   .comm (common)   its section is not fixed until link time, so it needs a
+            %                    SYMBOL relocation and the bytes hold 0
+            %   defined in .data a SECTION relocation, and the bytes hold the symbol's
+            %                    offset within .data (.Lstr0 at .data+0x18 stores 0x18,
+            %                    even though the instruction it appears in is at .text+0x275)
+            %   undefined        a SYMBOL relocation, bytes 0 (printf)
+            % Measured on the reference's own relocations, not inferred: `h` is .globl at
+            % .data+0x10 and stores 0x10, while `a` in cc49 is a .comm and stores 0.
+            si = sym_index(img, it.target);
+            if is_common(img, it.target)
+                disp = 0;
+            elseif si > 0
+                disp = img.syms{si}.offset;
+            else
+                disp = 0;
             end
-            bytes = [bytes encode_insn(it.mn, ops2, it.ln, tab)];
         end
+        ops2 = it.ops;
+        for q = 1:numel(ops2)
+            if strcmp(ops2{q}.kind, 'mem') && ops2{q}.rip && ~isempty(ops2{q}.symbol)
+                ops2{q}.ripdisp = disp;
+            end
+        end
+        bytes = [bytes encode_insn(it.mn, ops2, it.ln, tab)];
     elseif strcmp(it.kind, 'reloc')
         tgt = label_at(items, offs, it.target);
         if tgt < 0 && ~strcmp(it.mn, 'call')
@@ -541,6 +584,17 @@ for j = 1:numel(items)
         end
     else
         bytes = [bytes it.b];
+    end
+end
+end
+
+function f = is_common(img, name)
+% is_common - true when the name arrives via .comm, so it has no section yet
+f = 0;
+for k = 1:numel(img.bss)
+    if strcmp(img.bss{k}.name, name)
+        f = 1;
+        return;
     end
 end
 end
@@ -609,6 +663,13 @@ function bytes = encode_insn(mn, ops, ln, tab)
 %   cmpq $500, %rax   48 3d ...     the accumulator form, when imm8 does not fit
 %   shlq $1, %rax     48 d1 e0      shift-by-one, not c1 /4 01
 kind = tab_kind(tab, mn);
+if ~strcmp(kind, 'sse') && ~strcmp(kind, 'none')
+    for q = 1:numel(ops)
+        if strcmp(ops{q}.kind, 'reg') && ops{q}.width == 128
+            fail(ln, sprintf('%s does not take an SSE register', mn));
+        end
+    end
+end
 switch kind
     case 'alu'
         bytes = enc_alu(mn, ops, ln);
@@ -626,6 +687,10 @@ switch kind
         bytes = enc_stack(mn, ops, ln);
     case 'setcc'
         bytes = enc_setcc(mn, ops, ln);
+    case 'imul'
+        bytes = enc_imul(mn, ops, ln);
+    case 'sse'
+        bytes = enc_sse(mn, ops, ln);
     case 'misc'
         bytes = enc_misc(mn, ops, ln);
     otherwise
@@ -938,6 +1003,84 @@ else
 end
 end
 
+function bytes = enc_imul(mn, ops, ln)
+% enc_imul - three shapes, all measured against as:
+%   imulq %reg          48 f7 /5        one operand, 128-bit result in rax:rdx
+%   imulq %reg, %reg    48 0f af /r     two-operand, two-address
+%   imulq $imm, %reg    48 6b /r ib     signed imm8
+%                       48 69 /r id     anything else
+% The two-operand immediate form means "multiply the destination by the immediate", so the
+% register appears on both sides: 6b /r has one register field and the r/m field is the same
+% register, which is why `imulq $4,%rax` and `imulq $4,%rax,%rax` are the same bytes.
+if numel(ops) == 1
+    [pre, mrm, tail] = rm_operand(ops{1}, 5, 1);
+    bytes = [pre 247 mrm tail];
+elseif strcmp(ops{1}.kind, 'imm')
+    % two operands means "the destination times the immediate", so source and destination
+    % are the same register; three operands names them separately. Treating a three-operand
+    % form as the two-operand one encoded `imulq $3,%rsi,%rax` as `imulq $3,%rsi` - a
+    % different multiplication, and the bytes still looked plausible.
+    if numel(ops) == 2
+        rmop = ops{2};
+        dst = ops{2};
+    elseif numel(ops) == 3
+        rmop = ops{2};
+        dst = ops{3};
+    else
+        fail(ln, sprintf('imulq with an immediate takes two or three operands, not %d', ...
+                         numel(ops)));
+    end
+    if ~strcmp(dst.kind, 'reg')
+        fail(ln, 'imulq with an immediate needs a register destination');
+    end
+    v = ops{1}.value;
+    [pre, mrm] = rm_operand(rmop, dst.reg, 1);
+    if v >= -128 && v <= 127
+        bytes = [pre 107 mrm le_bytes(v, 1)];          % 6B /r ib
+    else
+        bytes = [pre 105 mrm le_bytes(v, 4)];          % 69 /r id
+    end
+elseif numel(ops) == 2
+    [pre, mrm, tail] = rm_operand(ops{1}, ops{2}.reg, 1);
+    bytes = [pre 15 175 mrm tail];                      % 0F AF /r
+else
+    fail(ln, sprintf('imulq takes one or two operands, not %d', numel(ops)));
+end
+end
+
+function bytes = enc_sse(mn, ops, ln)
+% enc_sse - two-operand SSE operations: f2 [REX] 0f <op> /r, with the store form one
+% opcode higher than the load form. `movsd %xmm0,%xmm1` uses the LOAD form (0f 10), which
+% is what as emits - the register-to-register case is not a third shape.
+%
+% One row per mnemonic: addsd/subsd/mulsd/divsd/ucomisd/cvt* are the same family and one
+% row each when the corpus asks for them, which it does not yet.
+switch mn
+    case 'movsd', op = 16;                              % 0F 10 / 0F 11
+    otherwise,    op = 0;
+end
+if op == 0 || numel(ops) ~= 2
+    fail(ln, sprintf('no encoder for %s yet (M3)', mn));
+end
+if strcmp(ops{2}.kind, 'mem')
+    regop = ops{1};
+    store = 1;
+else
+    regop = ops{2};
+    store = 0;
+end
+if ~strcmp(regop.kind, 'reg') || regop.width ~= 128
+    fail(ln, sprintf('%s needs an %%xmm register operand', mn));
+end
+if store
+    [pre, mrm, tail] = rm_operand(ops{2}, regop.reg, 0);
+    bytes = [242 pre 15 op + 1 mrm tail];
+else
+    [pre, mrm, tail] = rm_operand(ops{1}, regop.reg, 0);
+    bytes = [242 pre 15 op mrm tail];
+end
+end
+
 function bytes = enc_stack(mn, ops, ln)
 % pushq/popq: 50+rd / 58+rd, no ModRM, no operand-size prefix
 if numel(ops) ~= 1 || ~strcmp(ops{1}.kind, 'reg')
@@ -1197,7 +1340,16 @@ tab = [ ...
     add('%r14', 14, 64, 1); add('%r15', 15, 64, 1);
     add('%eax', 0, 32, 0); add('%ebx', 3, 32, 0); add('%edx', 2, 32, 0);
     add('%al', 0, 8, 0);   add('%cl', 1, 8, 0);   add('%dl', 2, 8, 0);
-    add('%xmm0', 0, 128, 0); add('%xmm1', 1, 128, 0);
+    % xmm0-xmm15: width 128 is how the encoders tell them from a GPR with the same number,
+    % so the table needs no extra field. Written out rather than appended in a loop because
+    % growing a struct array with `tab(end+1) = ...` CORRUPTS it on the clone: appended rows
+    % replicated and every .name came back as the new one. Measured, silently.
+    add('%xmm0', 0, 128, 0);   add('%xmm1', 1, 128, 0);   add('%xmm2', 2, 128, 0);
+    add('%xmm3', 3, 128, 0);   add('%xmm4', 4, 128, 0);   add('%xmm5', 5, 128, 0);
+    add('%xmm6', 6, 128, 0);   add('%xmm7', 7, 128, 0);   add('%xmm8', 8, 128, 0);
+    add('%xmm9', 9, 128, 0);   add('%xmm10', 10, 128, 0); add('%xmm11', 11, 128, 0);
+    add('%xmm12', 12, 128, 0); add('%xmm13', 13, 128, 0); add('%xmm14', 14, 128, 0);
+    add('%xmm15', 15, 128, 0);
     add('%rip', -2, 64, 0) ...   % -2: not a register, a marker the mem encoder
                                  % recognises, because -1 already means 'no base'
 ];
@@ -1221,7 +1373,7 @@ tab = [ ...
     add('andq', 'alu'); add('orq', 'alu'); add('xorq', 'alu'); add('xorl', 'alu');
     add('notq', 'unary'); add('negq', 'unary'); add('incq', 'unary');
     add('shlq', 'shift'); add('shrq', 'shift'); add('sarq', 'shift');
-    add('imulq', 'imm');
+    add('imulq', 'imul');
     add('movabsq', 'misc'); add('idivq', 'misc'); add('divq', 'misc');
     add('cqto', 'misc'); add('testb', 'misc'); add('movsd', 'sse');
     add('jmp', 'jmp'); add('je', 'jmp'); add('jne', 'jmp'); add('jg', 'jmp');

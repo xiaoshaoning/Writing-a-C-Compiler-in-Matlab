@@ -329,8 +329,41 @@ project could catch, because the reference assembler refuses the input.
 - [x] `movb` has its own opcodes, `88`/`8A`; using the 32-bit pair moved a different number
       of bytes and looked entirely plausible. Cost one program at byte 88.
 
-**Gate, measured:** 25 sample programs -> **7 byte-identical**, 2 differ, 14 missing an
-encoder, 2 errors. The branch fixture is byte-identical (463 bytes: short forward, near
+- [x] `imulq`: three shapes (`F7 /5`, `0F AF /r`, `6B`/`69 /r`) - and the THREE-operand
+      form, which I first encoded as the two-operand one. `imulq $3,%rsi,%rax` came out as
+      `imulq $3,%rsi`: a different multiplication, plausible-looking bytes. Only the
+      hand-written fixture exposed it; no corpus program uses that form.
+- [x] `movsd` and the XMM registers, which the register table distinguishes by width 128
+      rather than by a new field. `movsd %xmm0,%xmm1` uses the LOAD opcode, measured.
+- [x] REL32 against another section stores an ADDEND, not a distance, and which addend
+      depends on whether the symbol has a section yet:
+      `.comm` -> 0 (symbol relocation; its section is decided at link time);
+      `.data` symbol -> its offset within `.data` (`h` at `.data+0x10` stores `0x10` from
+      `.text+0xc5`); undefined -> 0. Read off the reference's own relocations, and it is
+      why `.data` must be laid out before `.text`.
+- [x] `.comm name,size,align` scanned by hand: `sscanf`'s first output is a STRING, so
+      `[parts, count]` concatenated the name and the count into one char array.
+- [x] Mnemonics may contain digits - the scan stopped at the first non-letter, so
+      `cvtsi2sdq` arrived as `cvtsi` and was reported as an unknown mnemonic.
+
+**Gate, measured:** 25 sample programs -> **18 byte-identical**, 3 differ, 1 missing an
+encoder, 3 errors.
+
+**Remaining, each with its cause identified:**
+| program | cause |
+|---|---|
+| cc16_sretfptr2, cc57_fptrmember | `call *%rax` - an INDIRECT call, `ff /2`. I emit an external `e8 00000000` |
+| cc16_strarray | `unbalanced parentheses in (%rsi` - a decoder gap at line 24 |
+| cc59_double_compound, dreg_denselit | `movq %rax,%xmm0` - a GPR-to-XMM move (`66 REX.W 0f 6e /r`), which my guard refuses |
+| cc60_scalar_literal | a `jmp rel32` 27 bytes off: relaxation divergence |
+
+**An engine/clone portability finding, and the sneakiest yet:** growing a struct array with
+`tab(end+1) = add(...)` CORRUPTS it on the clone - three rows became four and every `.name`
+returned the new one - while the engine keeps them correct. Silent, and it is the opposite
+direction from the usual clone-accepts/engine-refuses pattern.
+
+**Previous gate, for the record:** 7 byte-identical, 2 differ, 14 missing an encoder,
+2 errors. The branch fixture is byte-identical (463 bytes: short forward, near
 forward, short backward, near conditional, and a call).
 
 **Still open at this gate:**
