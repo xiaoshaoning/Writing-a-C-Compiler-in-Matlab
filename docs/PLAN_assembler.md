@@ -114,14 +114,24 @@ Two oracles, both already installed:
 A byte mismatch is reported with the offending line and the first differing byte offset —
 the same "print both sides" discipline that broke the parity deadlock earlier.
 
+**Measured while writing this plan, because it would have produced a false failure on
+every program:** the reference bytes are PADDED. Assembling the five-byte
+`leaq 1(%rdi),%rax; ret` and extracting `.text` yields 16 bytes —
+`48 8d 47 01 c3 90 90 …` — because gas aligns the section. The comparison must therefore
+be prefix-based up to the meaningful length (the last symbol's end, or `img.text`'s own
+length), never whole-section equality. Both `objcopy -O binary --only-section=.text` and
+the `as`/`objcopy`/`objdump` binaries are present in the MSYS2 toolchain; writing to a
+file, not `/dev/stdout`, is the working form on Windows.
+
 ## Milestones (checklist)
 
 ### M0 — inventory and scaffolding
 - [x] Mnemonics, directives, registers and operand shapes measured (above)
 - [ ] `src/ma_asm.m` exists; unknown mnemonic fails with `line N: unknown mnemonic <x>`
 - [ ] ISA table skeleton: one row per mnemonic with its encoder kind
-- [ ] Test harness `tests/probe_assembler.m`: assemble a program's `.s`, diff against
-      `as`, print the first difference
+- [ ] Test harness `tests/probe_assembler.m`: assemble a program's `.s` with `as`, extract
+      `.text` with `objcopy`, diff against `ma_asm` **prefix-wise** (the reference is
+      padded to 16 bytes), print the first difference
 
 ### M1 — lines, labels, directives
 - [ ] Strip comments and blank lines; keep line numbers for errors
