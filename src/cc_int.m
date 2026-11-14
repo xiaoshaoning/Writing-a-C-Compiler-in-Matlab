@@ -5117,6 +5117,10 @@ if laddr_expr
 end
 bf = lbf;
 lbf = [];                   % consumed here, so nothing can go stale
+% lspec is not cleared here: it describes the last instruction EMITTED, and every
+% caller parses and emits before asking again. Dropping an instruction below leaves it
+% describing what was dropped, which is correct for this one call and wrong for any
+% hypothetical second one - there is none.
 if ~isempty(bf) && lspec == 4 && numel(out) >= 3
     % a bit-field: the load, its shlq, and the sarq/shrq that extracts it. bf is the
     % description the caller needs, and the emitter recorded it.

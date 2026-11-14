@@ -786,6 +786,7 @@ cctests = {
         'cc56_fptr_alias.c', 96;   % a typedef'd function pointer (the declarator head was missing)
         'cc57_fptrmember.c', 96;   % a function-pointer MEMBER (is_struct_code, six copies of it)
         'cc58_ptrrow_forms.c', 96;  % a pointer to a row as a typedef and as a member
+        'cc59_double_compound.c', 96;  % /= and the arithmetic forms on a double
     };
     % The one range every corpus loop iterates. Three loops need it, and the
     % one that spelled the bounds out for itself was silently running the whole
@@ -1498,8 +1499,9 @@ cctests = {
     % built by address-of) and add their own code, so it was 21854; cc54 pins the
     % tag-scope rules (self-reference, forward pointer) and adds its own, so it is
     % 22086; cc55 pins one typedef naming several declarators (22332), cc56 a
-    % typedef'd function pointer (22493), cc57 a function-pointer member (22703) and
-    % cc58 a pointer to a row as a typedef and as a member, so it is 22884. See
+    % typedef'd function pointer (22493), cc57 a function-pointer member (22703),
+    % cc58 a pointer to a row as a typedef and as a member (22884) and cc59 compound
+    % assignment on a double, so it is 23001. See
     % docs/2026-09-07-x86sim-peephole-divergences.md.
     ic_total = 0;
     ic_hello = 0;
@@ -1526,8 +1528,8 @@ cctests = {
     if corpus_sliced
         fprintf('SKIP  instr regression: corpus total (sliced run)\n');
     else
-    [npass nfail] = addcheck(npass, nfail, ic_total <= 22884, ...
-        sprintf('instr regression: corpus %d <= 22884', ic_total));
+    [npass nfail] = addcheck(npass, nfail, ic_total <= 23001, ...
+        sprintf('instr regression: corpus %d <= 23001', ic_total));
     end
     [npass nfail] = addcheck(npass, nfail, ic_hello <= 88, ...
         sprintf('instr regression: hello.c %d <= 88', ic_hello));
@@ -1664,6 +1666,20 @@ cctests = {
         [npass nfail] = addcheck(npass, nfail, ...
             ~isempty(strfind(e.message, 'called with 2 args')), ...
             'cc9_badargs.c arg-count error');
+    end
+
+    % a double takes only the arithmetic compound forms. The others fell through to
+    % the division at the end of that branch, so `d <<= 2` divided by 2 in silence
+    % until it was refused; gcc refuses them too.
+    try
+        del('tmp_cc.s');
+        cc_int('tests/programs/cc_bad_dblshift.c', 'tmp_cc.s');
+        [npass nfail] = addcheck(npass, nfail, false, ...
+            'd <<= 2 should be refused');
+    catch e
+        [npass nfail] = addcheck(npass, nfail, ...
+            ~isempty(strfind(e.message, 'needs an integer type')), ...
+            'integer-only compound assignment on a double refused');
     end
 
     % an '&' expression is not a modifiable lvalue (gcc: "lvalue required as left

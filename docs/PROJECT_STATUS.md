@@ -28,6 +28,20 @@ Gaps 2 and 3 are still open and are NOT ten-line changes, which is what the plan
 - pointer compound literals (`(int*){…}`) are refused by depth in the compound-literal
   branch; `(int[]){…}` works. Unknown size until read.
 
+**The doubles fix is guarded (2026-11-05, review).** Reviewing it found the gap the
+review exists for: `d /= 4.0` was fixed and the six refusals were fixed, and nothing in
+the suite would have noticed either regressing. Guard `cc59_double_compound.c` (exit 96)
+covers `/=`, `+=` with an int RHS, `-=` and `*=`; the negative check beside
+`cc9_badargs` asserts that `d <<= 2` is refused - the case that used to divide by two in
+silence. Ceiling 22884 -> **23001**.
+
+Also measured, because `spec_of` runs on every emitted instruction and `em` is the
+hottest function in the compiler: 8 programs compile in 18.6-21.2 s with it and
+18.3-19.0 s without, so the classification costs nothing the noise can resolve. The first
+single-run comparison said the opposite (41 s vs 19 s) - the first invocation on this
+runtime pays a warm-up, so a single timing here is worthless and two alternating runs
+are the minimum.
+
 **Function-pointer members work, and the cause was not where I said (2026-11-05).**
 Earlier notes blamed `lvalue_addr` for the member miscompile. Measuring proved that
 wrong: the member access never reached it. Six places spelled out "is this a struct
