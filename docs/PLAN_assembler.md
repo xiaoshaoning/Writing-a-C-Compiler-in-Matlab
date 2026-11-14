@@ -225,8 +225,15 @@ the tail is covered.
 - [x] `movslq` (mem and register sources)
 - [x] `addq` (reg, mem, and all three immediate forms including the accumulator short form)
 - [x] `pushq`/`popq`/`ret`
-- [ ] `movl`/`movb` (same family, different widths)
-- [ ] `call` (needs M4's relocation)
+- [x] `movl`/`movb` (same family, different widths) — and the immediate-to-register opcode
+      differs by width: `c7 /0` for movq, `b8+rd` for movl, `b0+rb` for movb
+- [x] the ALU family: `addq subq cmpq andq orq xorq xorl` (one shape, six opcode sets,
+      width from the suffix; accumulator short forms)
+- [x] `notq negq incq` (F7/FF group) and `shlq shrq sarq` (including shift-by-one D1 and
+      count-in-%cl D3)
+- [x] `movslq movsbq movzbl` — and `movslq` is the single-byte `63 /r`, NOT a 0F form
+- [x] `movabsq`, `cqto`, `divq`/`idivq`, `testb`, and the eight `setcc` forms
+- [ ] `call` and every branch (needs M4's layout and relocations)
 - [ ] `addq`/`subq`/`cmpq`/`andq`/`orq`/`xorq` (imm and reg forms)
 - [ ] `jmp`/`jcc` (rel8 and rel32), `setcc`
 - [ ] `imulq` (imm,reg), `idivq`/`divq`/`cqto`, `negq`/`notq`/`incq`
@@ -268,6 +275,28 @@ fewer and one more row of data.
 - `ret` dispatched by name instead of by table kind
 - `mod_low` had no guard against a sentinel: `mod_low(-2)` is 6, which quietly encodes
   `%rsi`. Every caller checks first; it now says so instead of relying on that
+
+**M3 status (2026-11-05, second batch): 30 of 51 mnemonics, two files of instructions
+byte-identical to `as`.** A 39-instruction file covering every new shape encodes to 139
+bytes identical to the reference, and the original 23-instruction file still matches at 80.
+
+Corpus: **1 of 25 sample programs assembles fully** (was 0), 24 stop at a missing encoder,
+0 fail for any other reason. What they ask for, in the order they hit the wall:
+
+    je 8   imulq 5   jne 3   jg 2   jge 2   movsd 2   call 1   jbe 1
+
+Five of those eight are branches, and a branch cannot be encoded without knowing the
+distance to its label - so the corpus is now blocked on **M4, not on more encoders**. The
+rest (`imulq`, `movsd`) are two small family additions to do alongside it.
+
+**Four bugs the byte gate caught in this batch**, all mine, all invisible to reading:
+
+| what | why |
+|---|---|
+| `movslq` encoded as `0F 63` | it is the single-byte `63 /r`; my refactor had folded it in with the two genuine 0F forms |
+| `movl $5, %eax` as `B0` | `B0+rb` is 8-bit; 32-bit is `B8+rd`, and 64-bit is `c7 /0` - three forms, one per width |
+| `movabsq` as `B0+rd` | the same slip, in the `misc` family instead |
+| `xorl` had no table row | the ALU spec is keyed by mnemonic, and I had only added the `q` suffix forms |
 
 ### M4 — layout and relocations
 - [ ] Two passes: sizes first, then addresses (forward references need it; `.string`

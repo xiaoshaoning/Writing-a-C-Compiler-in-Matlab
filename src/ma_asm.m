@@ -330,23 +330,39 @@ img = set_section_bytes(img, section, uint8(out));
 end
 
 function bytes = encode_insn(mn, ops, ln, tab)
-% encode_insn - one instruction's bytes.
+% encode_insn - one instruction's bytes, dispatched by SHAPE rather than by name.
 %
-% Only the families implemented so far are dispatched; anything else still fails by name
-% with its line, which is how M3 is worked through in frequency order. The opcodes are
-% the reference assembler's CHOICES, measured from `as` rather than taken from a manual:
-% `addq $500, %rax` is 48 05 f4 01 00 00 - the accumulator short form - and not the
-% 81 /0 the general rule would give, because as picks the shorter one and the byte gate
-% compares against as, not against whatever encodes.
+% The ALU family is six mnemonics with one shape and six opcode bytes, the shift family is
+% three with one shape and three extents, and so on. Encoding by name would be an if-chain
+% twenty long; encoding by shape means a new mnemonic is usually one row in a family table.
+%
+% Every opcode below is what `as` chooses, measured rather than derived. Three short forms
+% would have been missed from the encoding tables:
+%   movl $5, %eax     b8 ...        imm->reg, 32-bit - not c7 /0
+%   cmpq $500, %rax   48 3d ...     the accumulator form, when imm8 does not fit
+%   shlq $1, %rax     48 d1 e0      shift-by-one, not c1 /4 01
 kind = tab_kind(tab, mn);
-if strcmp(kind, 'rm')
-    bytes = enc_rm(mn, ops, ln);
-elseif strcmp(kind, 'stack')
-    bytes = enc_stack(mn, ops, ln);
-elseif strcmp(kind, 'ret')
-    bytes = 195;                     % C3
-else
-    fail(ln, sprintf('no encoder for %s yet (M3)', mn));
+switch kind
+    case 'alu'
+        bytes = enc_alu(mn, ops, ln);
+    case 'shift'
+        bytes = enc_shift(mn, ops, ln);
+    case 'unary'
+        bytes = enc_unary(mn, ops, ln);
+    case 'lea'
+        bytes = enc_lea(mn, ops, ln);
+    case 'movx'
+        bytes = enc_movx(mn, ops, ln);
+    case 'mov'
+        bytes = enc_mov(mn, ops, ln);
+    case 'stack'
+        bytes = enc_stack(mn, ops, ln);
+    case 'setcc'
+        bytes = enc_setcc(mn, ops, ln);
+    case 'misc'
+        bytes = enc_misc(mn, ops, ln);
+    otherwise
+        fail(ln, sprintf('no encoder for %s yet (M3)', mn));
 end
 end
 
@@ -362,14 +378,8 @@ end
 
 function b = rexp(w, reg_hi, base_hi)
 % rexp - the REX prefix, or empty when none is needed.
-%
-% R is the high bit of the register in the ModRM reg field; B is the high bit of the
-% register in the r/m field (a register, or a memory operand's base). X is for a SIB
-% index, which none of the measured forms uses.
-%
-% There were two of these, one for registers and one for memory bases, and the register
-% one put the r/m high bit in X instead of B: `movq %rax, %r8` came out 4a 89 c0 where as
-% emits 49 89 c0. One byte, and the byte gate found it.
+% R is the register in the ModRM reg field; B is the register in the r/m field (a register
+% or a memory operand's base). X is for a SIB index, which none of the measured forms uses.
 v = 64;
 if w,       v = v + 8; end
 if reg_hi,  v = v + 4; end
@@ -386,9 +396,9 @@ b = mod * 64 + mod_low(reg) * 8 + mod_low(rm);
 end
 
 function v = mod_low(r)
-% the low three bits of a register number. Negative numbers here are sentinels (-1 "no
-% register", -2 rip) and must never reach an encoding: `mod_low(-2)` is 6, which would
-% quietly encode %rsi. Every caller checks for the sentinel first, and this says so.
+% the low three bits of a register number. A negative number is a sentinel (-1 "no
+% register", -2 rip) and must never reach an encoding: mod_low(-2) is 6, which would
+% quietly encode %rsi.
 if r < 0
     fail(0, sprintf('internal: register sentinel %d reached the ModRM field', r));
 end
@@ -396,38 +406,35 @@ v = r - 8 * floor(r / 8);
 end
 
 function [m, extra] = mem_form(e)
-% mem_form - the ModRM byte and the bytes that follow it for a memory operand used as the
-% r/m field. Returns the byte with a placeholder reg field; the caller ORs in its own reg.
-%
-% Three x86 rules decide the shape, and all three appear in the corpus:
+% mem_form - the ModRM byte for a memory operand in the r/m position (its reg field is
+% zero for the caller to fill) and the bytes after it. Three rules, all in the corpus:
 %   %rsp/%r12 needs a SIB byte even with no index
-%   %rbp/%r13 with displacement 0 must use disp8=0 (mod 00 rm 101 is rip-relative)
-%   a displacement that fits in a signed byte uses 1 byte, otherwise 4
+%   %rbp/%r13 with displacement 0 must use disp8=0 (mod 00 r/m 101 means rip-relative)
+%   a displacement that fits in a signed byte uses one byte, otherwise four
 base = e.base;
 lo = mod_low(base);
 sib = [];
-if lo == 4                       % rsp, r12
-    sib = 36;                    % scale 0, no index, base 100
+if lo == 4
+    sib = 36;                                   % scale 0, no index, base 100
     if e.disp == 0
-        m = 0 * 64 + lo;         % mod 00 with SIB
-        extra = [sib];
+        m = lo;
+        extra = sib;
         return;
     end
 end
 if e.disp == 0 && lo ~= 5
-    m = 0 * 64 + lo;
+    m = lo;
     extra = sib;
 elseif e.disp >= -128 && e.disp <= 127
-    m = 1 * 64 + lo;
+    m = 64 + lo;
     extra = [sib le_bytes(e.disp, 1)];
 else
-    m = 2 * 64 + lo;
+    m = 128 + lo;
     extra = [sib le_bytes(e.disp, 4)];
 end
 end
 
 function b = le_bytes(v, n)
-% little-endian bytes of v, n of them, two's complement
 u = mod(v, 2^(8*n));
 b = zeros(1, n);
 for k = 1:n
@@ -436,8 +443,8 @@ end
 end
 
 function [prefix, mrm, tail] = rm_operand(op, reg_field, w)
-% rm_operand - encode an operand as the r/m field: register or memory, with the REX prefix
-% and whatever follows the ModRM byte.
+% rm_operand - an operand as the r/m field: a register, or memory with its base, SIB and
+% displacement. w asks for the 64-bit operand size.
 if strcmp(op.kind, 'reg')
     prefix = rexp(w, floor(reg_field / 8), floor(op.reg / 8));
     mrm = modrmb(3, reg_field, op.reg);
@@ -454,83 +461,182 @@ elseif strcmp(op.kind, 'mem')
         tail = extra;
     end
 else
-    error('rm_operand called with a non-register, non-memory operand');
+    fail(0, 'rm_operand called with a non-register, non-memory operand');
 end
 end
 
-function bytes = enc_rm(mn, ops, ln)
-% enc_rm - the movq/movslq/leaq/addq family, operand order as written.
-if numel(ops) ~= 2
-    fail(ln, sprintf('%s takes two operands', mn));
+function spec = alu_spec(mn)
+% r_to_rm, rm_to_r, extent (the /digit of the immediate forms), acc (the accumulator short
+% form). Measured from as, one row per mnemonic - adding `testb` to this family would be a
+% row, not a function.
+switch mn
+    case 'addq', spec = [1 3 0 5];
+    case 'orq',  spec = [9 11 1 13];
+    case 'andq', spec = [33 35 4 37];
+    case 'subq', spec = [41 43 5 45];
+    case 'xorq', spec = [49 51 6 53];
+    case 'xorl', spec = [49 51 6 53];   % same opcodes, w=0 from the suffix
+    case 'cmpq', spec = [57 59 7 61];
+    otherwise,   spec = [];
+end
+end
+
+function bytes = enc_alu(mn, ops, ln)
+% enc_alu - add/sub/cmp/and/or/xor: one shape, six opcode sets, and a width taken from the
+% mnemonic's suffix (xorl is the 32-bit form and carries no REX).
+spec = alu_spec(mn);
+if isempty(spec) || numel(ops) ~= 2
+    fail(ln, sprintf('no encoder for %s yet (M3)', mn));
+end
+w = 0;
+if ~isempty(mn) && mn(end) == 'q'
+    w = 1;
 end
 src = ops{1};
 dst = ops{2};
-
-if strcmp(mn, 'leaq')
-    [pre, mrm, tail] = rm_operand(src, dst.reg, 1);
-    bytes = [pre 141 mrm tail];                  % 8D /r
-    return;
-end
-
-if strcmp(mn, 'movslq')
-    [pre, mrm, tail] = rm_operand(src, dst.reg, 1);
-    bytes = [pre 99 mrm tail];                   % 63 /r
-    return;
-end
-
-if strcmp(mn, 'movq')
-    if strcmp(src.kind, 'imm')
-        if strcmp(dst.kind, 'reg')
-            pre = rexp(1, 0, floor(dst.reg / 8));      % W, no reg field, B from the target
-            bytes = [pre 199 modrmb(3, 0, dst.reg) le_bytes(src.value, 4)];  % C7 /0
-        else
-            [pre, mrm, tail] = rm_operand(dst, 0, 1);
-            bytes = [pre 199 mrm tail le_bytes(src.value, 4)];
-        end
-        return;
-    end
-    % Which of 8B / 89 depends on where the memory operand is, NOT on which operand the
-    % reader thinks of as the source: for register-to-register as uses 89 with reg=source
-    % and r/m=destination (measured: `movq %rax, %rbx` is 48 89 c3, not 48 8b d8).
-    if strcmp(src.kind, 'mem') && strcmp(dst.kind, 'reg')
-        [pre, mrm, tail] = rm_operand(src, dst.reg, 1);
-        bytes = [pre 139 mrm tail];     % 8B /r: r/m is the source
+if strcmp(src.kind, 'imm')
+    if src.value >= -128 && src.value <= 127
+        [pre, mrm, tail] = rm_operand(dst, spec(3), w);
+        bytes = [pre 131 mrm tail le_bytes(src.value, 1)];            % 83 /digit ib
+    elseif strcmp(dst.kind, 'reg') && dst.reg == 0
+        bytes = [rexp(w, 0, 0) spec(4) le_bytes(src.value, 4)];       % accumulator short form
     else
-        [pre, mrm, tail] = rm_operand(dst, src.reg, 1);
-        bytes = [pre 137 mrm tail];     % 89 /r: r/m is the destination
+        [pre, mrm, tail] = rm_operand(dst, spec(3), w);
+        bytes = [pre 129 mrm tail le_bytes(src.value, 4)];            % 81 /digit id
     end
     return;
 end
+if strcmp(src.kind, 'mem') && strcmp(dst.kind, 'reg')
+    [pre, mrm, tail] = rm_operand(src, dst.reg, w);
+    bytes = [pre spec(2) mrm tail];                                   % r/m -> reg
+else
+    [pre, mrm, tail] = rm_operand(dst, src.reg, w);
+    bytes = [pre spec(1) mrm tail];                                   % reg -> r/m
+end
+end
 
-if strcmp(mn, 'addq')
-    if strcmp(src.kind, 'imm')
-        if src.value >= -128 && src.value <= 127
-            [pre, mrm, tail] = rm_operand(dst, 0, 1);
-            bytes = [pre 131 mrm tail le_bytes(src.value, 1)];               % 83 /0 ib
-        elseif strcmp(dst.kind, 'reg') && dst.reg == 0
-            bytes = [72 5 le_bytes(src.value, 4)];                          % 05 id, %rax
-        else
-            [pre, mrm, tail] = rm_operand(dst, 0, 1);
-            bytes = [pre 129 mrm tail le_bytes(src.value, 4)];              % 81 /0 id
-        end
-        return;
-    end
-    % Same rule as movq: 03 only when the memory operand is the source.
-    if strcmp(src.kind, 'mem') && strcmp(dst.kind, 'reg')
-        [pre, mrm, tail] = rm_operand(src, dst.reg, 1);
-        bytes = [pre 3 mrm tail];
+function bytes = enc_shift(mn, ops, ln)
+% enc_shift - shl/shr/sar by an immediate or by %cl. Shift by one has its own form (D1),
+% which as uses and the general rule would miss.
+switch mn
+    case 'shlq', slot = 4;
+    case 'shrq', slot = 5;
+    case 'sarq', slot = 7;
+    otherwise,   slot = -1;
+end
+if slot < 0 || numel(ops) ~= 2
+    fail(ln, sprintf('no encoder for %s yet (M3)', mn));
+end
+dst = ops{2};
+if strcmp(ops{1}.kind, 'imm')
+    v = ops{1}.value;
+    [pre, mrm, tail] = rm_operand(dst, slot, 1);
+    if v == 1
+        bytes = [pre 209 mrm tail];                                   % D1 /digit
     else
-        [pre, mrm, tail] = rm_operand(dst, src.reg, 1);
-        bytes = [pre 1 mrm tail];
+        bytes = [pre 193 mrm tail le_bytes(v, 1)];                    % C1 /digit ib
+    end
+elseif strcmp(ops{1}.kind, 'reg') && ops{1}.width == 8
+    [pre, mrm, tail] = rm_operand(dst, slot, 1);
+    bytes = [pre 211 mrm tail];                                       % D3 /digit, count in %cl
+else
+    fail(ln, sprintf('%s: the count must be an immediate or %%cl', mn));
+end
+end
+
+function bytes = enc_unary(mn, ops, ln)
+% enc_unary - not/neg are F7 /2 and /3, inc is FF /0; all take one r/m operand
+switch mn
+    case 'notq', opcode = 247; slot = 2;
+    case 'negq', opcode = 247; slot = 3;
+    case 'incq', opcode = 255; slot = 0;
+    otherwise,   opcode = 0;   slot = -1;
+end
+if opcode == 0 || numel(ops) ~= 1
+    fail(ln, sprintf('no encoder for %s yet (M3)', mn));
+end
+[pre, mrm, tail] = rm_operand(ops{1}, slot, 1);
+bytes = [pre opcode mrm tail];
+end
+
+function bytes = enc_lea(mn, ops, ln)
+% enc_lea - 8D /r: a memory address into a register. The operand must be memory; leaq on a
+% register is not a form cc_int emits and is not valid C either.
+if numel(ops) ~= 2 || ~strcmp(ops{1}.kind, 'mem')
+    fail(ln, sprintf('%s takes a memory operand and a register', mn));
+end
+[pre, mrm, tail] = rm_operand(ops{1}, ops{2}.reg, 1);
+bytes = [pre 141 mrm tail];
+end
+
+function bytes = enc_movx(mn, ops, ln)
+% enc_movx - the sign/zero-extending loads. Two share the 0F map and one does not:
+%   movslq  63 /r      single-byte opcode
+%   movsbq  0F BE /r
+%   movzbl  0F B6 /r
+% Treating movslq as a 0F form (which this function did for one commit) writes 48 0F 63
+% where as writes 48 63 - caught by the byte gate, not by reading.
+switch mn
+    case 'movslq', op2 = 99;  w = 1; has0f = 0;
+    case 'movsbq', op2 = 190; w = 1; has0f = 1;
+    case 'movzbl', op2 = 182; w = 0; has0f = 1;
+    otherwise,    op2 = 0;    w = 0; has0f = 0;
+end
+if op2 == 0 || numel(ops) ~= 2
+    fail(ln, sprintf('no encoder for %s yet (M3)', mn));
+end
+[pre, mrm, tail] = rm_operand(ops{1}, ops{2}.reg, w);
+if has0f
+    bytes = [pre 15 op2 mrm tail];
+else
+    bytes = [pre op2 mrm tail];
+end
+end
+
+function bytes = enc_mov(mn, ops, ln)
+% enc_mov - movq (w=1), movl (w=0), movb (w=0, byte registers). The immediate-to-register
+% form differs by width: c7 /0 for 64-bit, b8+rd for 32-bit. That asymmetry is as's, and
+% matching it is the job.
+switch mn
+    case 'movq', w = 1;
+    case 'movl', w = 0;
+    case 'movb', w = 0;
+    otherwise,   w = -1;
+end
+if w < 0 || numel(ops) ~= 2
+    fail(ln, sprintf('no encoder for %s yet (M3)', mn));
+end
+src = ops{1};
+dst = ops{2};
+if strcmp(src.kind, 'imm')
+    if strcmp(dst.kind, 'reg')
+        if w == 1
+            bytes = [rexp(1, 0, floor(dst.reg / 8)) 199 modrmb(3, 0, dst.reg) ...
+                     le_bytes(src.value, 4)];                    % movq: c7 /0 id
+        elseif strcmp(mn, 'movb')
+            bytes = [rexp(0, 0, floor(dst.reg / 8)) 176 + mod_low(dst.reg) ...
+                     le_bytes(src.value, 1)];                    % movb: b0+rb ib
+        else
+            bytes = [rexp(0, 0, floor(dst.reg / 8)) 184 + mod_low(dst.reg) ...
+                     le_bytes(src.value, 4)];                    % movl: b8+rd id
+        end
+    else
+        [pre, mrm, tail] = rm_operand(dst, 0, w);
+        bytes = [pre 199 mrm tail le_bytes(src.value, 4)];
     end
     return;
 end
-
-fail(ln, sprintf('no encoder for %s yet (M3)', mn));
+if strcmp(src.kind, 'mem') && strcmp(dst.kind, 'reg')
+    [pre, mrm, tail] = rm_operand(src, dst.reg, w);
+    bytes = [pre 139 mrm tail];                                       % 8B /r: memory source
+else
+    [pre, mrm, tail] = rm_operand(dst, src.reg, w);
+    bytes = [pre 137 mrm tail];                                       % 89 /r: r/m destination
+end
 end
 
 function bytes = enc_stack(mn, ops, ln)
-% enc_stack - pushq/popq: 50+rd / 58+rd, no ModRM, no operand-size prefix
+% pushq/popq: 50+rd / 58+rd, no ModRM, no operand-size prefix
 if numel(ops) ~= 1 || ~strcmp(ops{1}.kind, 'reg')
     fail(ln, sprintf('%s takes one register', mn));
 end
@@ -544,6 +650,61 @@ if r >= 8
     bytes = [65 op];
 else
     bytes = op;
+end
+end
+
+function bytes = enc_setcc(mn, ops, ln)
+% setcc - 0f 9x /0; a byte store, so the operand is an 8-bit register
+switch mn
+    case 'sete',  op2 = 148;
+    case 'setne', op2 = 149;
+    case 'setg',  op2 = 159;
+    case 'setl',  op2 = 156;
+    case 'setge', op2 = 157;
+    case 'setle', op2 = 158;
+    case 'seta',  op2 = 151;
+    case 'setb',  op2 = 146;
+    otherwise,    op2 = 0;
+end
+if op2 == 0 || numel(ops) ~= 1 || ~strcmp(ops{1}.kind, 'reg')
+    fail(ln, sprintf('no encoder for %s yet (M3)', mn));
+end
+[pre, mrm, tail] = rm_operand(ops{1}, 0, 0);
+bytes = [pre 15 op2 mrm tail];
+end
+
+function bytes = enc_misc(mn, ops, ln)
+% the one-shape leftovers: ret, cqto, idivq/divq, testb, movabsq
+switch mn
+    case 'ret'
+        bytes = 195;                                                  % C3
+    case 'cqto'
+        bytes = [72 153];                                             % 48 99
+    case {'idivq', 'divq'}
+        if numel(ops) ~= 1
+            fail(ln, sprintf('%s takes one operand', mn));
+        end
+        if strcmp(mn, 'idivq')
+            slot = 7;
+        else
+            slot = 6;
+        end
+        [pre, mrm, tail] = rm_operand(ops{1}, slot, 1);
+        bytes = [pre 247 mrm tail];                                   % F7 /7, F7 /6
+    case 'testb'
+        if numel(ops) ~= 2
+            fail(ln, 'testb takes two operands');
+        end
+        [pre, mrm, tail] = rm_operand(ops{2}, ops{1}.reg, 0);
+        bytes = [pre 132 mrm tail];                                   % 84 /r
+    case 'movabsq'
+        if numel(ops) ~= 2 || ~strcmp(ops{1}.kind, 'imm') || ~strcmp(ops{2}.kind, 'reg')
+            fail(ln, 'movabsq takes an immediate and a register');
+        end
+        bytes = [rexp(1, 0, floor(ops{2}.reg / 8)) 184 + mod_low(ops{2}.reg) ...
+                 le_bytes(ops{1}.value, 8)];                          % 48 b8+rd imm64
+    otherwise
+        fail(ln, sprintf('no encoder for %s yet (M3)', mn));
 end
 end
 
@@ -758,19 +919,23 @@ function tab = isa_table()
 % 'sse', 'none' (nothing yet).
 add = @(m, k) struct('mnemonic', m, 'kind', k);
 tab = [ ...
-    add('movq', 'rm'); add('movl', 'rm'); add('movb', 'rm'); add('movabsq', 'imm');
-    add('movslq', 'rm'); add('movsbq', 'rm'); add('movzbl', 'rm'); add('movsd', 'sse');
-    add('leaq', 'rm'); add('pushq', 'stack'); add('popq', 'stack');
-    add('addq', 'rm'); add('subq', 'rm'); add('imulq', 'imm'); add('idivq', 'rm');
-    add('divq', 'rm'); add('negq', 'rm'); add('incq', 'rm'); add('cqto', 'none');
-    add('andq', 'rm'); add('orq', 'rm'); add('xorq', 'rm'); add('xorl', 'rm');
-    add('notq', 'rm'); add('shlq', 'imm'); add('shrq', 'imm'); add('sarq', 'imm');
-    add('cmpq', 'rm'); add('testb', 'rm');
+    add('movq', 'mov'); add('movl', 'mov'); add('movb', 'mov');
+    add('movslq', 'movx'); add('movsbq', 'movx'); add('movzbl', 'movx');
+    add('leaq', 'lea'); add('pushq', 'stack'); add('popq', 'stack');
+    add('addq', 'alu'); add('subq', 'alu'); add('cmpq', 'alu');
+    add('andq', 'alu'); add('orq', 'alu'); add('xorq', 'alu'); add('xorl', 'alu');
+    add('notq', 'unary'); add('negq', 'unary'); add('incq', 'unary');
+    add('shlq', 'shift'); add('shrq', 'shift'); add('sarq', 'shift');
+    add('imulq', 'imm');
+    add('movabsq', 'misc'); add('idivq', 'misc'); add('divq', 'misc');
+    add('cqto', 'misc'); add('testb', 'misc'); add('movsd', 'sse');
     add('jmp', 'jmp'); add('je', 'jmp'); add('jne', 'jmp'); add('jg', 'jmp');
     add('jge', 'jmp'); add('jl', 'jmp'); add('jle', 'jmp'); add('ja', 'jmp');
     add('jae', 'jmp'); add('jbe', 'jmp');
-    add('call', 'call'); add('ret', 'ret');
+    add('call', 'call'); add('ret', 'misc');
     add('sete', 'setcc'); add('setne', 'setcc'); add('setg', 'setcc');
+    add('setl', 'setcc'); add('setge', 'setcc'); add('setle', 'setcc');
+    add('seta', 'setcc'); add('setb', 'setcc');
     add('mulsd', 'sse'); add('divsd', 'sse'); add('addsd', 'sse'); add('subsd', 'sse');
     add('ucomisd', 'sse'); add('cvtsi2sdq', 'sse'); add('cvttsd2siq', 'sse') ...
 ];
