@@ -253,6 +253,22 @@ missing-encoder wall with no decode or encoding failures on the way. 45 mnemonic
 and `movl`/`movb`/`testb`/the branches/setcc/SSE remain in families M3 already has helpers
 for.
 
+**A structural note for the rest of M3.** `enc_rm` is an if-chain over four mnemonics. At
+twenty it becomes the kind of method nobody can hold in their head, and the ISA table is
+already the right place to say which family a mnemonic belongs to: `kind` should grow
+finer (`mov`, `lea`, `movsx`, `alu-add`, `alu-sub`, `shift`...) so each encoder is a
+function of *one shape* rather than of a list of names. `ret` was the first evidence - it
+was dispatched by `strcmp(mn, 'ret')` and is now a table kind, which is one special case
+fewer and one more row of data.
+
+**Review of this slice, three findings, all in code an hour old:**
+
+- the `movq $imm, %reg` path hardcoded REX 72/73 instead of asking `rexp` - the same
+  duplication that had just put the B bit in X, fixed twice in one hour for the same reason
+- `ret` dispatched by name instead of by table kind
+- `mod_low` had no guard against a sentinel: `mod_low(-2)` is 6, which quietly encodes
+  `%rsi`. Every caller checks first; it now says so instead of relying on that
+
 ### M4 — layout and relocations
 - [ ] Two passes: sizes first, then addresses (forward references need it; `.string`
       lengths make the first pass non-trivial)

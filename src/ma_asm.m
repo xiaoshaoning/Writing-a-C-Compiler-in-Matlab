@@ -343,9 +343,8 @@ if strcmp(kind, 'rm')
     bytes = enc_rm(mn, ops, ln);
 elseif strcmp(kind, 'stack')
     bytes = enc_stack(mn, ops, ln);
-elseif strcmp(kind, 'none') && strcmp(mn, 'ret')
+elseif strcmp(kind, 'ret')
     bytes = 195;                     % C3
-    return;
 else
     fail(ln, sprintf('no encoder for %s yet (M3)', mn));
 end
@@ -387,6 +386,12 @@ b = mod * 64 + mod_low(reg) * 8 + mod_low(rm);
 end
 
 function v = mod_low(r)
+% the low three bits of a register number. Negative numbers here are sentinels (-1 "no
+% register", -2 rip) and must never reach an encoding: `mod_low(-2)` is 6, which would
+% quietly encode %rsi. Every caller checks for the sentinel first, and this says so.
+if r < 0
+    fail(0, sprintf('internal: register sentinel %d reached the ModRM field', r));
+end
 v = r - 8 * floor(r / 8);
 end
 
@@ -476,11 +481,7 @@ end
 if strcmp(mn, 'movq')
     if strcmp(src.kind, 'imm')
         if strcmp(dst.kind, 'reg')
-            if dst.reg >= 8
-                pre = 73;
-            else
-                pre = 72;
-            end
+            pre = rexp(1, 0, floor(dst.reg / 8));      % W, no reg field, B from the target
             bytes = [pre 199 modrmb(3, 0, dst.reg) le_bytes(src.value, 4)];  % C7 /0
         else
             [pre, mrm, tail] = rm_operand(dst, 0, 1);
@@ -768,7 +769,7 @@ tab = [ ...
     add('jmp', 'jmp'); add('je', 'jmp'); add('jne', 'jmp'); add('jg', 'jmp');
     add('jge', 'jmp'); add('jl', 'jmp'); add('jle', 'jmp'); add('ja', 'jmp');
     add('jae', 'jmp'); add('jbe', 'jmp');
-    add('call', 'call'); add('ret', 'none');
+    add('call', 'call'); add('ret', 'ret');
     add('sete', 'setcc'); add('setne', 'setcc'); add('setg', 'setcc');
     add('mulsd', 'sse'); add('divsd', 'sse'); add('addsd', 'sse'); add('subsd', 'sse');
     add('ucomisd', 'sse'); add('cvtsi2sdq', 'sse'); add('cvttsd2siq', 'sse') ...
