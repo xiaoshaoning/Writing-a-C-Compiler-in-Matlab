@@ -73,6 +73,10 @@ src/
   ma_asm.m              assembler (.s → bytes); see "The assembler" below
   x86sim.m              gcc-free x86-64 simulator for the .s output
   c_unescape.m          C escape-sequence decoder (shared by both lexers)
+  mx_preamble.m         MatlabEngine (MEX) preamble for the double track
+  mex_run.m             run MEX sources against real MATLAB
+  mex_run_gcc.m         the same through gcc, for comparison
+  mx_ref.c              reference MEX source
 LICENSE, README.md
 
 tests/
@@ -86,28 +90,41 @@ tests/
                       bytes with a reference assembler
   asm_errors.m        the inputs the assembler must refuse, each asserted
                       on the message
+  env.sh              resolves the runtime and the paths; sourced, not run
+  run_all.sh          the suite plus the MEX/double gates, one exit status
+  probe_*.m           the primitive/literal/portability probes
   programs/           test C programs
     return_2.c        return 2; (part 1 of the Norasandler series)
-    cc2_*.c–cc23_*.c  unary … literal-forms / width programs (parts 2-18 plus
-                      extensions, gcc-gated in the suite)
+    cc2_*.c–cc18_*.c  the tutorial's parts 2-18, one program per feature
+    cc19_*.c–cc60_*.c extensions, dialect guards and regression programs
+                      (gcc-gated in the suite)
+    cc_bad_*.c        inputs a compiler must REFUSE, asserted on the message
+    dreg_*, pp_*, mx_*  doubles, preprocessor and MEX cases
     hello.c           fibonacci demo — xc.m acceptance program
 docs/
   PROJECT_STATUS.md                       current project status
+  PLAN_assembler.md                       the assembler's plan and its measured record
   2026-08-16-reference-cross-check.md     reference xc.c parity verification
   2026-08-16-compiler-optimization-plan.md optimizer phases A–F + results
   2026-09-02-over-engineering-audit.md    over-engineering audit (ponytail-audit)
+  2026-09-06-correctness-review-*.md      correctness reviews
+  2026-09-07-x86sim-peephole-divergences.md  simulator vs peephole divergences
   2026-08-10-matlab-clone-bug-report.md   bugs found in the MATLAB clone (internal, gitignored)
 ```
 
 ## Usage
+
+The examples below write the runtime as `"%MATLAB%"` (cmd) or `"$MATLAB"` (bash) — the
+variable described under Requirements. There is no launcher script in this repository, so
+that variable is how you name the runtime.
 
 The compiler (`src/cc_int.m`) translates C to x86-64 assembly; you then
 assemble/link with gcc and run, **or** execute the assembly with the
 built-in gcc-free simulator (`src/x86sim.m`):
 
 ```
-matlab.bat -batch "addpath('src'); cc_int('prog.c','prog.s');"
-matlab.bat -batch "addpath('src'); rc = x86sim('prog.s')"   # no gcc
+%MATLAB% -batch "addpath('src'); cc_int('prog.c','prog.s');"
+%MATLAB% -batch "addpath('src'); rc = x86sim('prog.s')"   # no gcc
 
 gcc prog.s -o prog.exe
 ./prog.exe            (bash)  /  prog.exe, then echo %errorlevel% (cmd)
@@ -166,18 +183,17 @@ int main() {
 → `p=(3,4) fp=15 A`. Exit codes are the program's `return` value (or
 `exit(n)`), truncated to the low 8 bits.
 
-`tests/programs/cc2_*.c`–`cc23_*.c` are self-contained examples of each
-feature; `cc17_shim.c` shows `malloc`/`memset`/`memcmp`/`exit` together,
+`tests/programs/cc2_*.c`–`cc18_*.c` are self-contained examples of each
+tutorial feature, and `cc19_*.c`–`cc60_*.c` extend and guard them; `cc17_shim.c` shows `malloc`/`memset`/`memcmp`/`exit` together,
 and `cc18_*.c` covers pointer-returning fptrs, compound literals, and
 `unsigned`; `cc19_hex.c`–`cc20_litforms.c` cover the literal bases and
 `cc21_width.c` the narrow widths. The
-full 832-check
-suite (both tracks, cross-track parity,
+full suite (both tracks, cross-track parity,
 stdout parity, instruction-count regression, optimizer unit fixtures, and
 the static globals audit):
 
 ```
-matlab.bat tests/run_tests.m
+"$MATLAB" tests/run_tests.m
 ```
 
 The dialect is complete against its documented scope (the former gaps —
@@ -196,10 +212,12 @@ project's results are runtime-specific:
 |---|---|
 | **real MATLAB** (R2024b) | the authority when runtimes disagree — and they have |
 | **the development runtime** — any MATLAB-compatible CLI; pass it as `$MATLAB` | where this project is developed, and where every check passes |
-| **the C clone** — `MATLAB_in_C/release/`, via `matlab.bat` | the oracle for cross-checks, not a runtime the suite runs on |
+| **the C clone** — `MATLAB_in_C/release/` | the oracle for cross-checks, not a runtime the suite runs on |
 
 `tests/env.sh` resolves it (`$MATLAB`, else the development runtime, else `matlab` on
-PATH) and refuses a runtime that cannot run the harness. The suite is green on all three.
+PATH) and refuses a runtime that cannot run the harness. The suite is green on all three as
+of the last authority run (see `docs/PROJECT_STATUS.md`); the assembler sections, added
+since, have run on the other two only.
 
 **Policy: a tag requires a real-MATLAB run.** Both tags so far were cut without one, and
 the two runs that did happen found the three defects no clone could show. A release that
@@ -210,7 +228,7 @@ has not been through R2024b is a claim, not a verification.
 Windows cmd:
 
 ```
-matlab.bat -batch "addpath('src'); cc_int('tests/programs/cc2_nested.c','cc2_nested.s')"
+%MATLAB% -batch "addpath('src'); cc_int('tests/programs/cc2_nested.c','cc2_nested.s')"
 gcc cc2_nested.s -o cc2_nested
 .\cc2_nested.exe
 echo %errorlevel%
@@ -243,11 +261,11 @@ one function — a `.s` string in, an image out — so the assembler can be judg
 comparing bytes and nothing else:
 
 ```
-matlab.bat -batch "addpath('src'); img = ma_asm(fileread('prog.s'));"
+%MATLAB% -batch "addpath('src'); img = ma_asm(fileread('prog.s'));"
 ```
 
-It covers what this compiler emits: 50-odd mnemonics, the directives, labels, branches
-and relocations, `.string`/`.quad` data, and rip-relative addresses. It does **not**
+It covers what this compiler emits: 61 mnemonics, the directives, labels, branches and
+relocations, `.string`/`.quad` data, and rip-relative addresses. It does **not**
 link, and it does not produce an object file — those need a format and a symbol table,
 and neither buys anything a byte comparison does not already check.
 
@@ -296,9 +314,9 @@ isolation.
 ### Interpreter track (xc.m)
 
 ```
-matlab.bat -batch "addpath('src'); xc('tests/programs/hello.c')"
-matlab.bat -batch "addpath('src'); xc('-s', 'tests/programs/hello.c')"   # source + instruction dump
-matlab.bat -batch "addpath('src'); xc('-d', 'tests/programs/hello.c')"   # execution trace
+%MATLAB% -batch "addpath('src'); xc('tests/programs/hello.c')"
+%MATLAB% -batch "addpath('src'); xc('-s', 'tests/programs/hello.c')"   # source + instruction dump
+%MATLAB% -batch "addpath('src'); xc('-d', 'tests/programs/hello.c')"   # execution trace
 ```
 
 `hello.c` prints the fibonacci table 0..10 and exits 0; the output is
@@ -329,7 +347,7 @@ otherwise bleed into each other). The dialect is feature-complete against its
 documented scope; remaining C features (structs, unions, `switch`,
 `for`/`do-while`, …) are outside both the port and the reference dialect.
 
-Tests (832 checks — probe gate, VM selftest, lexer selftest, the program
+Tests (the counts live in PROJECT_STATUS.md; probe gate, VM selftest, lexer selftest, the program
 corpus whose exit codes/outputs are cross-verified against the reference
 build, a gcc-gated group that compiles and runs the assembly-track
 programs, a cross-track parity group that runs the shared corpus through
@@ -338,7 +356,7 @@ instruction-count regression, a static globals audit, and the optimizer's
 per-rule unit fixtures):
 
 ```
-matlab.bat tests/run_tests.m
+"$MATLAB" tests/run_tests.m
 ```
 
 The whole verification — the suite plus the four MEX/double gates
@@ -364,7 +382,7 @@ engine defects found from this project and since fixed.
 Or in `-batch` mode:
 
 ```
-matlab.bat -batch "run('tests/run_tests.m');"
+%MATLAB% -batch "run('tests/run_tests.m');"
 ```
 
 ## Notes
