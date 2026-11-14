@@ -171,57 +171,19 @@ end
 function vals = parse_int_list(rest, ln)
 % parse_int_list - the comma-separated integers of a data directive.
 %
-% NOT sscanf('%d,'): that stops dead at the first value it cannot read, so `1, 0x10`
-% came back as `1` and the rest vanished into the image without a word. Hex is accepted
-% because an assembler has to accept what it may be handed, and a partial parse is the
-% one outcome worse than a refusal.
+% A thin loop over read_int, so this file really does have ONE integer reader - the sign,
+% the hex and the refusal all live there. Its predecessor scanned values itself and used
+% sscanf('%d,'), which stops at the first value it cannot read: `1, 0x10` came back as `1`
+% and the rest vanished into the image without a word.
 vals = [];
-k = 1;
-n = numel(rest);
-while k <= n
-    while k <= n && (rest(k) == ',' || rest(k) == ' ' || rest(k) == char(9))
-        k = k + 1;
+start = 1;
+for k = 1:numel(rest)
+    if rest(k) == ','
+        vals(end+1) = read_int(strtrim(rest(start:k-1)), ln);
+        start = k + 1;
     end
-    if k > n
-        break;
-    end
-    neg = 0;
-    if rest(k) == '-'
-        neg = 1; k = k + 1;
-    elseif rest(k) == '+'
-        k = k + 1;
-    end
-    v = 0;
-    got = 0;
-    if k + 1 <= n && rest(k) == '0' && (rest(k+1) == 'x' || rest(k+1) == 'X')
-        k = k + 2;
-        while k <= n
-            c = lower(rest(k));
-            if c >= '0' && c <= '9'
-                v = v * 16 + (double(c) - 48);
-            elseif c >= 'a' && c <= 'f'
-                v = v * 16 + (double(c) - 87);
-            else
-                break;
-            end
-            k = k + 1;
-            got = 1;
-        end
-    else
-        while k <= n && rest(k) >= '0' && rest(k) <= '9'
-            v = v * 10 + (double(rest(k)) - 48);
-            k = k + 1;
-            got = 1;
-        end
-    end
-    if ~got
-        fail(ln, sprintf('cannot read this initialiser: %s', strtrim(rest(k:end))));
-    end
-    if neg
-        v = -v;
-    end
-    vals(end+1) = v;
 end
+vals(end+1) = read_int(strtrim(rest(start:end)), ln);
 end
 
 function fail(ln, msg)
@@ -439,7 +401,7 @@ if ~isempty(open)
     end
     inside = txt(open+1:close-1);
     head = txt(1:open-1);
-    if txt(close+1:end) ~= ''   % hmm: trailing text after ')' is not a form cc_int emits
+    if ~isempty(txt(close+1:end))    % trailing text after ')' is no form cc_int emits
         fail(ln, sprintf('cannot decode operand %s', txt));
     end
     o.kind = 'mem';
@@ -525,7 +487,6 @@ end
 
 function tab = reg_table()
 % the registers cc_int actually uses (measured), with x86-64 encoding numbers
-tab = struct('name', {}, 'num', {}, 'width', {}, 'wide', {});
 add = @(nm, num, w, wide) struct('name', nm, 'num', num, 'width', w, 'wide', wide);
 tab = [ ...
     add('%rax', 0, 64, 1); add('%rcx', 1, 64, 1); add('%rdx', 2, 64, 1);
@@ -536,7 +497,8 @@ tab = [ ...
     add('%eax', 0, 32, 0); add('%ebx', 3, 32, 0); add('%edx', 2, 32, 0);
     add('%al', 0, 8, 0);   add('%cl', 1, 8, 0);   add('%dl', 2, 8, 0);
     add('%xmm0', 0, 128, 0); add('%xmm1', 1, 128, 0);
-    add('%rip', -2, 64, 0) ...
+    add('%rip', -2, 64, 0) ...   % -2: not a register, a marker the mem encoder
+                                 % recognises, because -1 already means 'no base'
 ];
 end
 
@@ -559,7 +521,6 @@ function tab = isa_table()
 %
 % kind values, once implemented: 'rm' (reg/mem forms), 'imm', 'jmp', 'call', 'setcc',
 % 'sse', 'none' (nothing yet).
-tab = struct('mnemonic', {}, 'kind', {});
 add = @(m, k) struct('mnemonic', m, 'kind', k);
 tab = [ ...
     add('movq', 'rm'); add('movl', 'rm'); add('movb', 'rm'); add('movabsq', 'imm');
