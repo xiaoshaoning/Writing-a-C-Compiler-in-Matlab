@@ -2,7 +2,8 @@
 
 ## Summary
 
-**Current state (2026-11-05).** `832 tests, 832 passed, 0 failed` on real MATLAB
+**Current state (2026-11-05): see the 835 line below for the authoritative counts.**
+`835 tests, 835 passed, 0 failed` on real MATLAB
 R2024b; every one of those checks also passes on the engine
 (`matlab_in_rust/dist/matlab-cli`, the runtime this project is developed on) and on the
 C clone used as an oracle. `instr` 22884 (a ceiling, not a target: it caught its own
@@ -10,12 +11,15 @@ update four times today), x86sim 336/336 exit codes, gcc stdout 333/333 byte-ide
 Two tracks, both complete for their dialect: `xc.m` the interpreter, `cc_int.m` the
 compiler. What is deliberately not done is listed at the end of the recent notes.
 
-**An assembler is under way (2026-11-05).** `docs/PLAN_assembler.md` describes it and
-`src/ma_asm.m` is at M0: it reads the text `cc_int` emits and hands back an image, with
-directives, labels and data done, and every instruction failing by name until its encoder
-exists. The harness that will judge it - `as` + `objcopy`, byte comparison - is in place
-first, because a verification loop built after the thing it verifies tends to agree with
-it. Current score: 0 of 338 programs byte-identical, which is the honest number for M0.
+**The assembler is complete on two runtimes (2026-11-05).** `src/ma_asm.m` reads the text
+`cc_int` emits and hands back an image; `docs/PLAN_assembler.md` is the record. **338 of 338
+corpus programs are byte-identical to `as`**, `.text` for `.text`, measured on the engine and
+on the C clone. Ten inputs it must refuse have their refusals asserted on the message, in
+`tests/asm_errors.m`, and `CC_SECTIONS=asm` runs the whole thing as one check.
+
+The caveat is the one this project applies to everything else, and it is not yet met: the
+assembler has **never run on real MATLAB**. Every number above comes from the engine, which
+is not the authority. That is what a tag is waiting for.
 
 **Green on real MATLAB at 835 (2026-11-05, final): 835 tests, 835 passed, 0 failed.**
 The run that measures everything since 832: `cc57`-`cc60` at exit 96, the two negative
