@@ -23,9 +23,10 @@ Gaps 2 and 3 are still open and are NOT ten-line changes, which is what the plan
   refused, and an ATTEMPT AT THEM WAS ABANDONED (2026-11-05), which is worth more than
   the estimate it replaces. Measured first: `double a[3] = {1.5, -2.25, 0.1}` emits
   `1, -2, 0` — the values are already integers where the emitter receives them. Two
-  defects were found and fixed on the way (the vector emitter printed `%d`, and the
-  struct image writer had no double case; both now use `cc_d2bits`), and the output was
-  still `1, -2, 0`, so a THIRD place collects initialiser values as integers. The
+  defects were found on the way and fixed in the attempt (the vector emitter printed
+  `%d` for every element, and the struct image writer had no double case at all - both
+  fixed with `cc_d2bits`, and both reverted with the rest), and the output was still
+  `1, -2, 0`, so a THIRD place collects initialiser values as integers. The
   candidates are `parse_arr_init`'s `vals` and `aggregate_values`, and which one was not
   proven. Everything was reverted rather than left half-wired: with the parser accepting
   floats and the values still truncated, the compiler would have accepted
@@ -40,7 +41,11 @@ Gaps 2 and 3 are still open and are NOT ten-line changes, which is what the plan
 - pointer compound literals (`(int*){…}`) are refused by depth in the compound-literal
   branch; `(int[]){…}` works. Unknown size until read.
 
-**The doubles fix is guarded (2026-11-05, review).** Reviewing it found the gap the
+**The doubles fix is guarded (2026-11-05, review).** The negative check asserts
+`that compound assignment needs an integer`, not the shorter `needs an integer type`:
+the bit-field error ends with those same three words, so the loose form would have
+passed on the wrong failure - the same substring-too-loose habit as asserting the word
+"error". Reviewing it found the gap the
 review exists for: `d /= 4.0` was fixed and the six refusals were fixed, and nothing in
 the suite would have noticed either regressing. Guard `cc59_double_compound.c` (exit 96)
 covers `/=`, `+=` with an int RHS, `-=` and `*=`; the negative check beside
