@@ -206,6 +206,27 @@ b = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') |
     c == '_' || c == '.' || c == '$';
 end
 
+function v = split_values(rest)
+% split_values - the comma-separated values of a directive, trimmed, in order. Every
+% directive with a list separates it the same way, so the separator lives here instead of
+% in each of them.
+v = {};
+start = 1;
+for k = 1:numel(rest)
+    if rest(k) == ','
+        one = strtrim(rest(start:k-1));
+        if ~isempty(one)
+            v{end+1} = one;
+        end
+        start = k + 1;
+    end
+end
+one = strtrim(rest(start:numel(rest)));
+if ~isempty(one)
+    v{end+1} = one;
+end
+end
+
 function vals = parse_int_list(rest, ln)
 % parse_int_list - the comma-separated integers of a data directive.
 %
@@ -214,14 +235,10 @@ function vals = parse_int_list(rest, ln)
 % sscanf('%d,'), which stops at the first value it cannot read: `1, 0x10` came back as `1`
 % and the rest vanished into the image without a word.
 vals = [];
-start = 1;
-for k = 1:numel(rest)
-    if rest(k) == ','
-        vals(end+1) = read_int(strtrim(rest(start:k-1)), ln);
-        start = k + 1;
-    end
+v = split_values(rest);
+for k = 1:numel(v)
+    vals(end+1) = read_int(v{k}, ln);
 end
-vals(end+1) = read_int(strtrim(rest(start:end)), ln);
 end
 
 function fail(ln, msg)
@@ -280,22 +297,15 @@ function img = add_comm(img, rest, ln)
 % .comm name,size,align - a zero-filled global. Scanned by hand: sscanf's first output
 % here is a STRING, so [parts, count] concatenated everything into one char array and the
 % count became a character.
-k = find(rest == ',', 1);
-if isempty(k)
+v = split_values(rest);
+if numel(v) < 2
     fail(ln, '.comm needs a name and a size');
 end
-nm = strtrim(rest(1:k-1));
-tail = rest(k+1:end);
-k2 = find(tail == ',', 1);
+nm = v{1};
+sz = read_int(v{2}, ln);
 align = 8;
-if isempty(k2)
-    sz = read_int(strtrim(tail), ln);
-else
-    sz = read_int(strtrim(tail(1:k2-1)), ln);
-    align = read_int(strtrim(tail(k2+1:end)), ln);
-end
-if isempty(nm)
-    fail(ln, '.comm needs a name and a size');
+if numel(v) >= 3
+    align = read_int(v{3}, ln);
 end
 img.bss{end+1} = struct('name', nm, 'size', sz, 'align', align);
 end
@@ -422,51 +432,33 @@ it.ops = ops;
 end
 
 function f = is_symbol_list(rest)
-% is_symbol_list - true when every comma-separated value starts like a symbol
+% is_symbol_list - true when every value of a data directive is a symbol, as in
+% `.quad .Lstr0, g`. Decided by looking at the values, so the symbol case and the number
+% case sit side by side in the caller instead of one hiding in an exception.
 f = 1;
-k = 1;
-n = numel(rest);
-seen = 0;
-while k <= n + 1
-    if k <= n && rest(k) == ','
-        k = k + 1;
-        continue;
-    end
-    while k <= n && rest(k) == ' '
-        k = k + 1;
-    end
-    if k > n
-        break;
-    end
-    c = rest(k);
-    if ~((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '.' || c == '_')
+v = split_values(rest);
+if isempty(v)
+    f = 0;
+    return;
+end
+for k = 1:numel(v)
+    c = v{k}(1);
+    if (c >= '0' && c <= '9') || c == '-' || c == '+' || c == '$'
         f = 0;
         return;
     end
-    seen = seen + 1;
-    while k <= n && rest(k) ~= ','
-        k = k + 1;
-    end
 end
-f = seen > 0;
 end
 
 function items = push_pointers(items, section, d, rest, ln)
 width = struct('.byte', 1, '.short', 2, '.long', 4, '.quad', 8);
 w = width.(d);
-k = 1;
-n = numel(rest);
-while k <= n
-    e = k;
-    while e <= n && rest(e) ~= ','
-        e = e + 1;
-    end
-    nm = strtrim(rest(k:e-1));
-    if isempty(nm)
-        fail(ln, sprintf('%s has an empty value', d));
-    end
-    items = push_item(items, section, item_ptr(nm, w, ln));
-    k = e + 1;
+v = split_values(rest);
+if isempty(v)
+    fail(ln, sprintf('%s has no values', d));
+end
+for k = 1:numel(v)
+    items = push_item(items, section, item_ptr(v{k}, w, ln));
 end
 end
 
@@ -590,15 +582,10 @@ for j = 1:numel(items)
             img.syms{sym} = e2;
         end
     elseif strcmp(it.kind, 'ptr')
-        % an address in data: the symbol's offset in its own section, plus a relocation
+        % an address in data: same value a REL32 against another section stores
         tgt = label_at(items, offs, it.target);
         if tgt < 0
-            si = sym_index(img, it.target);
-            if si > 0 && ~is_common(img, it.target)
-                tgt = img.syms{si}.offset;
-            else
-                tgt = 0;
-            end
+            tgt = symbol_addend(img, it.target);
         end
         bytes = [bytes le_bytes(tgt, it.width)];
     elseif strcmp(it.kind, 'rip')
@@ -614,24 +601,7 @@ for j = 1:numel(items)
         if tgt >= 0
             disp = tgt - (offs(j) + numel(it.b));
         else
-            % Which relocation as picks decides what the bytes hold, and the deciding
-            % property is whether the symbol has a section YET:
-            %   .comm (common)   its section is not fixed until link time, so it needs a
-            %                    SYMBOL relocation and the bytes hold 0
-            %   defined in .data a SECTION relocation, and the bytes hold the symbol's
-            %                    offset within .data (.Lstr0 at .data+0x18 stores 0x18,
-            %                    even though the instruction it appears in is at .text+0x275)
-            %   undefined        a SYMBOL relocation, bytes 0 (printf)
-            % Measured on the reference's own relocations, not inferred: `h` is .globl at
-            % .data+0x10 and stores 0x10, while `a` in cc49 is a .comm and stores 0.
-            si = sym_index(img, it.target);
-            if is_common(img, it.target)
-                disp = 0;
-            elseif si > 0
-                disp = img.syms{si}.offset;
-            else
-                disp = 0;
-            end
+            disp = symbol_addend(img, it.target);
         end
         ops2 = it.ops;
         for q = 1:numel(ops2)
@@ -673,6 +643,33 @@ for j = 1:numel(items)
     else
         bytes = [bytes it.b];
     end
+end
+end
+
+function v = symbol_addend(img, name)
+% symbol_addend - what a reference to `name` stores when the target is not in this section.
+%
+% Which relocation the reference assembler picks decides this, and the deciding property is
+% whether the symbol has a section YET:
+%   .comm (common)   its section is not fixed until link time, so it needs a SYMBOL
+%                    relocation and the bytes hold 0
+%   defined in .data a SECTION relocation, and the bytes hold the symbol's offset within
+%                    .data (.Lstr0 at .data+0x18 stores 0x18 from .text+0x275)
+%   undefined        a SYMBOL relocation, bytes 0 (printf)
+% Measured on the reference's relocations, not inferred: `h` is .globl at .data+0x10 and
+% stores 0x10, while `a` in cc49 is a .comm and stores 0.
+%
+% One function because a data pointer and a REL32 addend store the same value; writing it
+% twice is how one copy drifts from the other.
+if is_common(img, name)
+    v = 0;
+    return;
+end
+si = sym_index(img, name);
+if si > 0
+    v = img.syms{si}.offset;
+else
+    v = 0;
 end
 end
 
