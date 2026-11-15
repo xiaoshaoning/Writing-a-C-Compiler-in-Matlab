@@ -25,11 +25,17 @@ now checked statically (`tests/check_field_names.m`, self-tested) rather than by
 
 **The runtime comparison is automated, with a baseline (2026-11-05).** `CC_RUNTIMES="<a>;<b>"
 bash tests/run_all.sh` runs the suite once per runtime and diffs the FAILURE SETS, which is
-the comparison that found every defect here and used to be done by eye. First real runs, engine
-against the C clone: `none` agreed at 163/163 each, and `asm` agreed with `PASS asm: 338 of 338
-corpus programs byte-identical to as` on BOTH runtimes in one run - so the assembler's corpus
-result now rests on three runtimes rather than two, and the third comparison was made by the
-tool instead of by eye. The full 857-check comparison has not been run; the engine needs roughly 40 minutes of a
+the comparison that found every defect here and used to be done by eye. First real runs, engine against the C clone, section by section: `none` 163/163 each;
+`asm` 338 of 338 byte-identical on BOTH, so the assembler's corpus result now rests on three
+runtimes; `instr` 165/165 each with the same ceiling.
+
+`cctests` did NOT agree, and it is the most useful result of the exercise: 501 checks on the
+engine and 499 on the clone. The two missing ones are `cc18_printf05.c` and `cc18_printfX.c`,
+gcc-gated printf cases, and they skip because the clone's `system()` returns status 0 with an
+EMPTY capture. Neither is a wrong answer - both runtimes fail nothing - so a failure-set
+comparison called it agreement, which is why the mode now compares check COUNTS as well.
+`gccstdout` is not comparable at all for the same reason: the gcc-dependent group cannot run on
+the clone. The full 857-check comparison has not been run; the engine needs roughly 40 minutes of a
 quiet host for it, which is an estimate and not a measurement. The cheap comparison is the
 smoke test that proves the mechanism works.
 

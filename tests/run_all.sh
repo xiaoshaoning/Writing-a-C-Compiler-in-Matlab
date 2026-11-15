@@ -133,7 +133,10 @@ if [ -n "${CC_RUNTIMES:-}" ]; then
         cc_fset=${TMPDIR:-/tmp}/cc_diff_$cc_i.fail
         run_suite_once "$cc_rt" "$cc_flog"; cc_v=$?
         grep '^FAIL' "$cc_flog" | sort > "$cc_fset" 2>/dev/null || : > "$cc_fset"
-        echo "         $(wc -l < "$cc_fset" | tr -d ' ') failure(s)"
+        cc_fails=$(wc -l < "$cc_fset" | tr -d ' ')
+        cc_ran=$(grep -c '^PASS' "$cc_flog" 2>/dev/null)
+        cc_ran=$((cc_ran + cc_fails))
+        echo "         $cc_fails failure(s) of $cc_ran check(s)"
         if [ "$cc_v" -eq 2 ]; then
             echo "         CUT SHORT: excluded from the comparison"
             continue
@@ -141,10 +144,23 @@ if [ -n "${CC_RUNTIMES:-}" ]; then
         cc_usable=$((cc_usable + 1))
         if [ "$cc_usable" -eq 1 ]; then
             cp "$cc_fset" "$cc_base"
-        elif ! diff -q "$cc_base" "$cc_fset" >/dev/null 2>&1; then
-            echo "--- portability divergence against the first runtime:"
-            diff "$cc_base" "$cc_fset" | sed 's/^/         /'
-            cc_div=$((cc_div + 1))
+            cc_ran_base=$cc_ran
+        else
+            # The COUNT matters as much as the set. A runtime that skips checks - the C
+            # clone cannot run gcc-dependent ones, because its system() captures no output -
+            # has an empty failure set too, and comparing sets alone would call that
+            # agreement. Two runtimes are only comparable if they ran the same number of
+            # checks.
+            if [ "$cc_ran" -ne "$cc_ran_base" ]; then
+                echo "--- $cc_ran checks here against $cc_ran_base: NOT comparable"
+                echo "         (skipped checks have no failure to diff)"
+                cc_div=$((cc_div + 1))
+            fi
+            if ! diff -q "$cc_base" "$cc_fset" >/dev/null 2>&1; then
+                echo "--- portability divergence against the first runtime:"
+                diff "$cc_base" "$cc_fset" | sed 's/^/         /'
+                cc_div=$((cc_div + 1))
+            fi
         fi
     done
     if [ "$cc_usable" -lt 2 ]; then

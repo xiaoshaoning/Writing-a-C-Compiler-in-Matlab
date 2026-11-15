@@ -22,8 +22,11 @@ CC_RUNTIMES="$ENGINE;$CLONE" bash tests/run_all.sh          # diff the failure s
 CC_SECTIONS=none CC_RUNTIMES="$A;$B" bash tests/run_all.sh  # ...in a minute
 ```
 
-It compares the *failure sets*, not the counts: two runtimes can each fail one test, both
-report "1 failed", and be failing different tests.
+It compares the *failure sets* AND the number of checks each runtime ran. Sets alone are not
+enough in either direction: two runtimes can each fail one test, both report "1 failed", and be
+failing different tests - and a runtime that SKIPS checks has an empty failure set too, which
+would read as agreement. That second case is not hypothetical: it is how the clone was found
+running 499 checks against the engine's 501.
 
 ## Rules
 
@@ -39,6 +42,7 @@ report "1 failed", and be failing different tests.
 | 8 | hand an absolute path to `system()` | the engine rejects it ("can't create ...: Invalid argument") | relative paths in the working directory |
 | 9 | carry a 64-bit value in a double, or rely on `uint64` | a double holds 53 bits, so `$9223372036854775807` assembled to a different number at the right length; `uint64` conversions diverge between builds | `decimal_bytes`/`hexval` read digits, no numeric type |
 | 10 | compare two captured strings with `strcmp` | an empty capture is a different **type** on R2024b, so `strcmp('','')` is 1 on the clones and errors on MATLAB | `same_text()` compares through `char` |
+| 12 | trust `system()`'s captured output | the C clone returns `st=0` with an EMPTY capture, so every gcc-gated check silently skips there: `CC_SECTIONS=cctests` runs 499 checks on the clone against 501 on the engine. Equal failure sets hid it until the differential run started comparing check COUNTS | compare counts, not just failures |
 | 11 | treat data as code | indexing a char array whose value was `exit` or `quit` **terminated the interpreter**, silently. Found from `call exit` in a corpus program; fixed upstream at `b648ecb` | not guarded; keep runtime current (see below) |
 
 ## Keeping a runtime current
