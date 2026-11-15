@@ -103,6 +103,7 @@ tests/
     hello.c           fibonacci demo — xc.m acceptance program
 docs/
   PROJECT_STATUS.md                       current project status
+  PORTABILITY.md                          the runtime differences that cost real bugs
   PLAN_assembler.md                       the assembler's plan and its measured record
   2026-08-16-reference-cross-check.md     reference xc.c parity verification
   2026-08-16-compiler-optimization-plan.md optimizer phases A–F + results

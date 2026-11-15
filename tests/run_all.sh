@@ -39,6 +39,8 @@ step() { printf '\n=== %s\n' "$1"; }
 suite_verdict() {
     [ -r run_tests.verdict ] || return 2
     read -r cc_passed cc_failed < run_tests.verdict || return 2
+    cc_failed=${cc_failed%$'\r'}      # written in text mode: "163 0\r\n" otherwise
+    cc_passed=${cc_passed%$'\r'}
     case "$cc_failed" in
         ''|*[!0-9]*) return 2 ;;          # not two numbers: treat as unfinished
         0) return 0 ;;
@@ -46,31 +48,45 @@ suite_verdict() {
     esac
 }
 
+# run_suite_once <runtime> <log>
+# One runtime through the suite, with the retry-once-on-cut-short logic. Leaves
+# run_tests.verdict for the caller and returns the verdict: 0 pass, 1 fail, 2 cut short.
+run_suite_once() {
+    rs_rt=$1
+    rs_log=$2
+    rs_attempt=1
+    while : ; do
+        "$rs_rt" tests/run_tests.m 2>&1 | tee "$rs_log"
+        rs_rc=${PIPESTATUS[0]}
+        suite_verdict; rs_v=$?
+        [ "$rs_v" -ne 2 ] && return "$rs_v"
+        if [ -r run_tests.verdict ]; then
+            echo "           it was doing: $(cat run_tests.verdict)"
+        fi
+        if [ "$rs_attempt" -eq 1 ]; then
+            echo "run_tests: CUT SHORT - no summary line, so the process died (exit $rs_rc)."
+            echo "           retrying once: the death is random, always with 0 failures"
+            rs_attempt=2
+        else
+            return 2
+        fi
+    done
+}
+
+# runtime_line <runtime> - the runtime and its size/date. A log that does not say which
+# runtime produced it cannot be compared with another, which is the point of CC_RUNTIMES.
+runtime_line() {
+    echo "runtime: $1"
+    if [ -r "$1" ]; then
+        echo "         $(wc -c < "$1" | tr -d ' ') bytes, $(date -r "$1" '+%Y-%m-%d %H:%M' 2>/dev/null)"
+    fi
+}
+
+if [ -z "${CC_RUNTIMES:-}" ]; then
 step "main suite: tests/run_tests.m"
-# Name the runtime: this project's results are runtime-specific, and a log that does
-# not say which engine produced it cannot be compared with another.
-echo "runtime: $MATLAB"
-if [ -r "$MATLAB" ]; then
-    echo "         $(wc -c < "$MATLAB" | tr -d ' ') bytes, $(date -r "$MATLAB" '+%Y-%m-%d %H:%M' 2>/dev/null)"
-fi
+runtime_line "$MATLAB"
 cc_log=${TMPDIR:-/tmp}/cc_run_tests.log
-attempt=1
-while : ; do
-    "$MATLAB" tests/run_tests.m 2>&1 | tee "$cc_log"
-    rc=${PIPESTATUS[0]}
-    suite_verdict; verdict=$?
-    [ "$verdict" -ne 2 ] && break
-    if [ -r run_tests.verdict ]; then
-        echo "           it was doing: $(cat run_tests.verdict)"
-    fi
-    if [ "$attempt" -eq 1 ]; then
-        echo "run_tests: CUT SHORT - no summary line, so the process died (exit $rc)."
-        echo "           retrying once: the death is random, always with 0 failures"
-        attempt=2
-    else
-        break
-    fi
-done
+run_suite_once "$MATLAB" "$cc_log"; verdict=$?
 case "$verdict" in
     0) pass=$((pass + 1)) ;;
     1) echo "run_tests: FAILED (log: $cc_log)"; fail=$((fail + 1)) ;;
@@ -79,6 +95,67 @@ case "$verdict" in
        echo "           log: $cc_log"
        fail=$((fail + 1)) ;;
 esac
+
+fi   # end of the single-runtime branch
+
+# The differential run (2026-11-05). Every defect this project has found came from one
+# runtime disagreeing with another, and that comparison was always done by hand. Set
+# CC_RUNTIMES to two or more runtimes separated by ';' (a ';' because Windows paths contain
+# ':') and each gets the suite, after which the FAILURE SETS are compared.
+#
+# Failure sets, not counts: two runtimes can each fail one test, both report "1 failed", and
+# be failing different tests. On disagreement the differences are printed and the exit status
+# is 1. A cut-short runtime is excluded and said so, because a partial run disagrees for a
+# reason that is not portability.
+if [ -n "${CC_RUNTIMES:-}" ]; then
+    step "differential run: the suite on each runtime, then diff the failures"
+    IFS=';' read -r -a cc_rts <<< "$CC_RUNTIMES"
+    cc_n=${#cc_rts[@]}
+    if [ "$cc_n" -lt 2 ]; then
+        echo "CC_RUNTIMES needs at least two runtimes separated by ';'" >&2
+        echo "  e.g. CC_RUNTIMES='/a/matlab.exe;/b/matlab.exe'" >&2
+        exit 2
+    fi
+    cc_div=0
+    cc_cut=0
+    cc_usable=0
+    cc_i=0
+    cc_base=${TMPDIR:-/tmp}/cc_diff_base.fail
+    : > "$cc_base"
+    for cc_rt in "${cc_rts[@]}"; do
+        cc_i=$((cc_i + 1))
+        step "runtime $cc_i/$cc_n"
+        runtime_line "$cc_rt"
+        cc_flog=${TMPDIR:-/tmp}/cc_diff_$cc_i.log
+        cc_fset=${TMPDIR:-/tmp}/cc_diff_$cc_i.fail
+        run_suite_once "$cc_rt" "$cc_flog"; cc_v=$?
+        grep '^FAIL' "$cc_flog" | sort > "$cc_fset" 2>/dev/null || : > "$cc_fset"
+        echo "         $(wc -l < "$cc_fset" | tr -d ' ') failure(s)"
+        if [ "$cc_v" -eq 2 ]; then
+            cc_cut=$((cc_cut + 1))
+            echo "         CUT SHORT: excluded from the comparison"
+            continue
+        fi
+        cc_usable=$((cc_usable + 1))
+        if [ "$cc_usable" -eq 1 ]; then
+            cp "$cc_fset" "$cc_base"
+        elif ! diff -q "$cc_base" "$cc_fset" >/dev/null 2>&1; then
+            echo "--- portability divergence against the first runtime:"
+            diff "$cc_base" "$cc_fset" | sed 's/^/         /'
+            cc_div=$((cc_div + 1))
+        fi
+    done
+    if [ "$cc_usable" -lt 2 ]; then
+        echo "differential run: fewer than two runtimes completed; nothing was compared" >&2
+        exit 2
+    fi
+    if [ "$cc_div" -ne 0 ]; then
+        echo "differential run: DIVERGENCE - $cc_div runtime(s) disagree with the first"
+        fail=$((fail + cc_div))
+    else
+        echo "differential run: $cc_usable runtime(s) agree on the failure set"
+    fi
+fi
 
 for g in run_double_regression.sh run_mx_smoke.sh run_mex_run_smoke.sh run_mex_run_gcc.sh; do
     step "$g"
