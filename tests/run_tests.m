@@ -1675,7 +1675,9 @@ cctests = {
     fsf = 'tmp_fieldname_selftest.m';
     ff = fopen(fsf, 'w');
     fprintf(ff, 'function x = tmp_fieldname_selftest()\n');
-    fprintf(ff, 'x = struct(''1bad'', 1);\n');
+    % the SECOND field name, not the first: the checker's first version checked only the
+    % first and called this line clean, so the self-test covers what regressed.
+    fprintf(ff, 'y = struct(''good'', 1, ''2bad'', 2);\n');
     fprintf(ff, 'end\n');
     fclose(ff);
     try

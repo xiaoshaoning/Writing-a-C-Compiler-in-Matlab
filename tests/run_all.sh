@@ -34,6 +34,10 @@ pass=0
 fail=0
 step() { printf '\n=== %s\n' "$1"; }
 
+# CC_RUNTIMES=<a>;<b> runs the suite once per runtime and compares the FAILURE SETS - the
+# comparison that found every defect here, automated. See the differential block below.
+# $MATLAB is still the single runtime when CC_RUNTIMES is unset.
+
 # suite_verdict - report 0, 1 or 2 for the main suite from run_tests.verdict.
 # A missing or unreadable file is 2: the harness never got to write it.
 suite_verdict() {
@@ -117,7 +121,6 @@ if [ -n "${CC_RUNTIMES:-}" ]; then
         exit 2
     fi
     cc_div=0
-    cc_cut=0
     cc_usable=0
     cc_i=0
     cc_base=${TMPDIR:-/tmp}/cc_diff_base.fail
@@ -132,7 +135,6 @@ if [ -n "${CC_RUNTIMES:-}" ]; then
         grep '^FAIL' "$cc_flog" | sort > "$cc_fset" 2>/dev/null || : > "$cc_fset"
         echo "         $(wc -l < "$cc_fset" | tr -d ' ') failure(s)"
         if [ "$cc_v" -eq 2 ]; then
-            cc_cut=$((cc_cut + 1))
             echo "         CUT SHORT: excluded from the comparison"
             continue
         fi
