@@ -22,6 +22,13 @@ the first run that disagreed: it refused 30 corpus programs with 字段名称 ".
 is the fourth defect of that class in this project (`@anon3`, `__st1_n`, `.byte`), so it is
 now checked statically (`tests/check_field_names.m`, self-tested) rather than by running.
 
+**The runtime comparison is automated, with a baseline (2026-11-05).** `CC_RUNTIMES="<a>;<b>"
+bash tests/run_all.sh` runs the suite once per runtime and diffs the FAILURE SETS, which is
+the comparison that found every defect here and used to be done by eye. First real run, engine
+against the C clone, `CC_SECTIONS=none`: 163/163 on each and "2 runtime(s) agree on the failure
+set". The full 857-check comparison is ~40 minutes on the engine and has not been run yet; the
+cheap one is the smoke test that proves the mechanism works.
+
 **Green on real MATLAB at 857 (2026-11-05, final): 857 tests, 857 passed, 0 failed.**
 The run that measures everything since 832: `cc57`-`cc60` at exit 96, the two negative
 checks (`&x = 5` refused, an integer-only compound assignment on a double refused),
