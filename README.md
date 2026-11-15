@@ -189,7 +189,7 @@ tutorial feature, and `cc19_*.c`–`cc60_*.c` extend and guard them; `cc17_shim.
 and `cc18_*.c` covers pointer-returning fptrs, compound literals, and
 `unsigned`; `cc19_hex.c`–`cc20_litforms.c` cover the literal bases and
 `cc21_width.c` the narrow widths. The
-full suite (both tracks, cross-track parity,
+full suite (all three artefacts, cross-track parity,
 stdout parity, instruction-count regression, optimizer unit fixtures, and
 the static globals audit):
 

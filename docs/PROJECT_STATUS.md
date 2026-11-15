@@ -8,8 +8,9 @@ on) and on the C clone used as an oracle. `instr` 23149 (a ceiling, not a target
 **338/338** exit codes, gcc stdout **335/335** byte-identical, and the assembler **338/338**
 corpus programs byte-identical to `as`.
 Three artefacts, each complete for its dialect: `cc_int.m` the compiler, `xc.m` the
-interpreter, `ma_asm.m` the assembler. What is deliberately not done is listed at the end of
-the recent notes.
+interpreter, `ma_asm.m` the assembler. What is deliberately not done has its own section at
+the end of this file, with the reason for each item - including one the plan's own checklist
+now closes rather than leaves open.
 
 **The assembler is complete (2026-11-05).** `src/ma_asm.m` reads the text `cc_int` emits
 and hands back an image; `docs/PLAN_assembler.md` is the record. **338 of 338 corpus programs
@@ -26,8 +27,9 @@ now checked statically (`tests/check_field_names.m`, self-tested) rather than by
 bash tests/run_all.sh` runs the suite once per runtime and diffs the FAILURE SETS, which is
 the comparison that found every defect here and used to be done by eye. First real run, engine
 against the C clone, `CC_SECTIONS=none`: 163/163 on each and "2 runtime(s) agree on the failure
-set". The full 857-check comparison is ~40 minutes on the engine and has not been run yet; the
-cheap one is the smoke test that proves the mechanism works.
+set". The full 857-check comparison has not been run; the engine needs roughly 40 minutes of a
+quiet host for it, which is an estimate and not a measurement. The cheap comparison is the
+smoke test that proves the mechanism works.
 
 **Green on real MATLAB at 857 (2026-11-05, final): 857 tests, 857 passed, 0 failed.**
 The run that measures everything since 832: `cc57`-`cc60` at exit 96, the two negative
@@ -1725,10 +1727,22 @@ file — so the harness and probe now respect them.
 ## Running
 
 ```
-D:\...\matlab.bat tests/run_tests.m          # full suite (802 checks)
-D:\...\matlab.bat -batch "addpath('src'); xc('tests/programs/hello.c')"   # acceptance program
-D:\...\matlab.bat -batch "addpath('src'); xc('-s', 'tests/programs/hello.c')"  # compile dump
-D:\...\matlab.bat -batch "addpath('src'); xc('-d', 'tests/programs/hello.c')"  # trace
+%MATLAB% tests/run_tests.m                                       # the whole suite
+%MATLAB% -batch "addpath('src'); xc('tests/programs/hello.c')"   # acceptance program
+%MATLAB% -batch "addpath('src'); xc('-s', 'tests/programs/hello.c')"  # compile dump
+%MATLAB% -batch "addpath('src'); xc('-d', 'tests/programs/hello.c')"  # trace
 ```
 
-See `README.md` for both tracks and the layout.
+`%MATLAB%` is the runtime described under Requirements in `README.md`; there is no launcher
+script in this repository. `tests/run_all.sh` runs the suite and the MEX gates with one exit
+status, and `CC_RUNTIMES="<a>;<b>"` runs it on each and diffs the failure sets.
+
+See `README.md` for the three artefacts and the layout.
+
+## What is deliberately not done
+
+The assembler's plan keeps the list, with the reason for each item in
+[PLAN_assembler.md](PLAN_assembler.md): section layout and an executable image (a new
+project), multi-file relocations, and a linker - which needs objects first and would cost the
+text seam that makes this toolchain verifiable. A flat-binary loader for `x86sim` was
+considered and rejected with its reasoning, rather than left as an open invitation.
