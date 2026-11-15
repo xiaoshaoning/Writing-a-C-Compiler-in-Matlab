@@ -134,9 +134,9 @@ gcc prog.s -o prog.exe
 **Requirements:** a MATLAB-compatible runtime and MSYS2 gcc (the
 emitted assembly is COFF — it needs a Windows binutils). The suite runs on
 any MATLAB-compatible runtime: set `MATLAB=<path to matlab.exe>`, which
-`tests/env.sh` honours. If it is not set, `env.sh` falls back to the runtime
-this project is developed on, which may not be installed on your machine —
-export `MATLAB` rather than relying on the fallback. The `addpath('src')` is
+`tests/env.sh` REQUIRES: it falls back to `matlab` on PATH if there is one, and otherwise
+stops with a message naming the variable. It never guesses a path, because a guessed runtime
+is how a suite ends up measuring a binary the reader did not choose. The `addpath('src')` is
 required in `-batch` mode; in cmd the exit code is `%errorlevel%`.
 
 **What it compiles:** the full Norasandler series (parts 1–17) — expressions
@@ -215,8 +215,9 @@ project's results are runtime-specific:
 | **the development runtime** — any MATLAB-compatible CLI; pass it as `$MATLAB` | where this project is developed, and where every check passes |
 | **the C clone** — `MATLAB_in_C/release/` | the oracle for cross-checks, not a runtime the suite runs on |
 
-`tests/env.sh` resolves it (`$MATLAB`, else the development runtime, else `matlab` on
-PATH) and refuses a runtime that cannot run the harness. The suite is green on all three,
+`tests/env.sh` requires it (`$MATLAB`, else `matlab` on PATH) and stops, naming the variable,
+if neither exists. It never guesses a path: a guessed runtime is how a suite measures a binary
+the reader did not choose. The suite is green on all three,
 including the assembler sections, as of the 857-check authority run recorded in
 `docs/PROJECT_STATUS.md`.
 
@@ -370,7 +371,7 @@ The whole verification — the suite plus the four MEX/double gates
 bash tests/run_all.sh
 ```
 
-It resolves the runtime from `$MATLAB`, else the development runtime, else `matlab` on PATH,
+It resolves the runtime from `$MATLAB`, else `matlab` on PATH, and stops if neither exists,
 derives the repo path from its own location, and exits non-zero if any part fails —
 distinguishing "some checks failed" from "the run was cut short", because a host that
 kills the suite leaves no summary line and used to read as a failure.
@@ -378,7 +379,7 @@ kills the suite leaves no summary line and used to read as a failure.
 A MATLAB-compatible CLI runs this code far slower than the C clone does, so the suite is
 normally run in sections or program slices: `CC_SECTIONS` (including `asm`, the assembler
 gate), `CC_CORPUS`, `CC_OSTESTS`.
-`docs/2026-09-06-rust-engine-compat.md` records the compatibility work, including the
+`docs/2026-09-06-runtime-compat.md` records the compatibility work, including the
 engine defects found from this project and since fixed.
 
 Or in `-batch` mode:

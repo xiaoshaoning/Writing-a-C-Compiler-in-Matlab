@@ -155,7 +155,7 @@ runtimes.
   fine). The gcc cross-track gate also fails `mxsparse_get` and
   `matfile`/`matfile_del`. Earlier (Sep-14 build): batch mode reached 588
   then died, script mode died at 47, `xc(stress2.c)` ran >9 min at a flat
-  ~8 MB RSS. See docs/2026-09-06-rust-engine-compat.md.
+  ~8 MB RSS. See docs/2026-09-06-runtime-compat.md.
 - With item B re-baselined (a stale clone-lineage ceiling, not a fold
   gap — see the B section) and the static globals audit added, the
   v1.3.72 run is fully green: **775/775**. The only outstanding host

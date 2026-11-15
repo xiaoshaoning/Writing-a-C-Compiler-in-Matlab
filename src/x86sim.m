@@ -656,17 +656,10 @@ end
 ad = ad + a{6};
 end
 
-function sim_setflags_alu(r)
-global zf sf cf of
-r = double(r);
-zf = (r == 0);
-sf = (r < 0);
-cf = 0; of = 0;
-end
-
 function sim_setflags_test(r)
 % testb flags: ZF from zero, SF from bit 7 (the operand is a byte), CF/OF
-% clear. sim_setflags_alu would never set SF (0..255 is never negative).
+% clear. The general ALU flag setter is not used here: it derives SF from the
+% sign of r, and 0..255 is never negative, so it would always leave SF clear.
 global zf sf cf of
 zf = (r == 0);
 sf = (r >= 128);
@@ -3032,14 +3025,6 @@ elseif isnumeric(v) || islogical(v)
 else
     error('x86sim: mat2sim unsupported input type');
 end
-end
-
-function v = sim_load32(addr)
-% sim_load32 — exact little-endian 32-bit load from a raw address
-% (packed mwIndex data in sparse ir/jc blocks).
-global mem
-v = double(mem(addr + 1)) + 256 * double(mem(addr + 2)) + ...
-    65536 * double(mem(addr + 3)) + 16777216 * double(mem(addr + 4));
 end
 
 function f = sim_mx_findfield(h, nmc)

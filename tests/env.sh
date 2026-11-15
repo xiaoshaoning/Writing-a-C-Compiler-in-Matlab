@@ -36,18 +36,22 @@ case "$CC_ROOT" in
         ;;
 esac
 
-# The engine is the runtime this project is developed and verified against; named
-# here so the messages below can point at it even when MATLAB was exported.
+# The runtime is REQUIRED and never guessed (2026-11-05). It used to fall back to a
+# development runtime found by absolute path, which meant a machine without that path could
+# fail deep inside the harness, and a machine WITH it silently measured a binary the reader
+# had not chosen - once one that was two days older than the fix for a defect it found.
+# $CC_ENGINE is now only a HINT printed in the error message; it is never selected.
 : "${CC_ENGINE:=/d/Projects/codes/matlab_in_rust/dist/matlab-cli/matlab.exe}"
 
 if [ -z "${MATLAB:-}" ]; then
-    if [ -x "$CC_ENGINE" ]; then
-        MATLAB=$CC_ENGINE
-    elif command -v matlab >/dev/null 2>&1; then
+    if command -v matlab >/dev/null 2>&1; then
+        # a runtime on PATH is an explicit choice by the machine, not a guess by us
         MATLAB=matlab
     else
-        echo "env.sh: no runtime found; set MATLAB=/path/to/matlab(.exe)" >&2
-        echo "        (the engine is $CC_ENGINE)" >&2
+        echo "env.sh: MATLAB is not set, and there is no matlab on PATH." >&2
+        echo "        export MATLAB=/path/to/matlab(.exe)   (README.md, Requirements)" >&2
+        echo "        a development runtime, if you have it, is at:" >&2
+        echo "        $CC_ENGINE" >&2
         [ "${BASH_SOURCE[0]}" != "$0" ] && return 1
         exit 1
     fi

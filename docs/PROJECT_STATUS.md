@@ -803,9 +803,11 @@ fixed:
    has - which is also why it could never be reproduced on the clones: they return
    the same type either way.
 
-**The runtime is matlab_in_rust's engine (2026-11-05).** `tests/env.sh` resolves to
+**The runtime is whatever you export as `MATLAB` (2026-11-05).** `tests/env.sh` no longer
+guesses: it uses `$MATLAB`, else `matlab` on PATH, and otherwise stops naming the variable.
+The development binary this project is verified on is
 `matlab_in_rust/dist/matlab-cli/matlab.exe` - currently `cli-v21-5-g9dc5345`,
-21,165,023 bytes, 2026-11-14 22:43 - when `MATLAB` is not exported. The pin here is
+21,165,023 bytes, 2026-11-14 22:43 - and it is only used when you export it. The pin is
 the binary that is INSTALLED, and it is worth re-reading rather than assuming: it sat
 at `cli-v18` for two days while `cli-v19` and `cli-v20` were tagged, and assembling
 `call exit` was measured against a copy two days older than the fix for the defect it
