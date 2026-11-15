@@ -429,9 +429,22 @@ found by running the same code on both.
       engine defect.
 
 ### Later, deliberately out of v1
-- [ ] Section layout and an executable image (PE on Windows) — a new project
-- [ ] A flat-binary loader for `x86sim` — makes the binary *useful*, and depends on the
-      above
+- [ ] Section layout and an executable image (PE on Windows) — a new project. Note what the
+      assembler already does NOT need: `ma_asm` and `x86sim` both read text, so the toolchain
+      runs a program with no binutils at all. `as` and `objcopy` appear only in the verification
+      harness, to say what the bytes should have been
+- [x] ~~A flat-binary loader for `x86sim`~~ - **decided against, 2026-11-05, and the reason
+      is worth keeping.** `x86sim` does not execute bytes: it parses each `.s` line into a
+      mnemonic NUMBER (`sim_parse_insn`) and switches on that. Feeding it this assembler's
+      image would need a full x86-64 DECODER - the exact inverse of `ma_asm`, roughly the same
+      size, and a second copy of the encoding in a place nobody has verified. Two
+      representations of the same knowledge is the leak this file was written to avoid.
+      What it would buy is convenience, not confidence, because the composition is already
+      proven: `ma_asm` produces bytes identical to `as` on 338 corpus programs, and `x86sim`
+      executes those same `.s` files to the right exit codes on 338. The bytes that run are
+      therefore the bytes that were compared.
+      It would be worth building the day `x86sim` needs a decoder for some other reason -
+      then the loader is free. Not before.
 - [ ] Multi-file: relocations between objects, a symbol table across them
 - [ ] A linker — see the discussion in `PROJECT_STATUS.md`: it needs objects first, and
       it costs the text seam that makes this toolchain verifiable
