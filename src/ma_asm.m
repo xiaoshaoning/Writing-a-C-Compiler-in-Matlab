@@ -251,22 +251,6 @@ else
 end
 end
 
-function b = section_bytes(img, section)
-if strcmp(section, 'data')
-    b = img.data;
-else
-    b = img.text;
-end
-end
-
-function img = set_section_bytes(img, section, bytes)
-if strcmp(section, 'data')
-    img.data = [img.data bytes];
-else
-    img.text = [img.text bytes];
-end
-end
-
 function img = mark_global(img, name)
 % .globl marks a symbol global. The symbol may be defined later, so names are recorded
 % here and matched when the definition appears - defining one is M1's job.
